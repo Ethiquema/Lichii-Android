@@ -71,6 +71,27 @@ floored at 30 Hz and a stall watchdog logs stuck GPU ticks. See
 [docs/CORRECTIF_AYN_THOR.md](docs/CORRECTIF_AYN_THOR.md) for the full analysis, the
 recommended Turnip driver versions and the `env.txt` switches.
 
+## Optimized builds (AstralEmu flags)
+
+Every Android build now ships with AstralEmu-style native optimizations enabled
+by default, for **all** arm64-v8a devices (ARMv8.0-safe): `-O3` on every non-Debug
+config, `-march=armv8-a+crc+crypto`, `-mtune=cortex-a76` and ThinLTO. The CI/CD
+pipeline (`android.yml`) gets them with no extra flag:
+
+```bash
+./gradlew assembleMainlineRelease
+```
+
+An opt-in preset additionally targets ARMv8.2+ SoCs (AYN Thor, Snapdragon 845+)
+with `fp16`/`dotprod` — such an APK will crash on older ARMv8.0 cores:
+
+```bash
+./gradlew -PastralOptimize=true assembleMainlineRelease
+```
+
+Applicability matrix (jemalloc is not possible on Android — bionic only),
+escape hatches and expected gains in [docs/OPTIMISATIONS_BUILD.md](docs/OPTIMISATIONS_BUILD.md).
+
 ## Reporting problems
 
 [Open an issue](https://github.com/pavelgajdo/Lichii-Android/issues) with:

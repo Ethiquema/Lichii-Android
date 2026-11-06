@@ -365,12 +365,22 @@ if (CXX_GCC OR CXX_CLANG)
         endif()
     elseif(ARCHITECTURE_arm64)
         # See https://gcc.gnu.org/onlinedocs/gcc/AArch64-Options.html
-        set(YUZU_BUILD_PRESET "custom" CACHE STRING "Build preset to use. One of: custom, generic, optimized, armv9, native")
+        set(YUZU_BUILD_PRESET "custom" CACHE STRING "Build preset to use. One of: custom, generic, optimized, astral-modern, armv9, native")
         set(mtune generic)
         if (${YUZU_BUILD_PRESET} STREQUAL "generic")
             set(march armv8-a)
         elseif (${YUZU_BUILD_PRESET} STREQUAL "optimized")
             set(march armv8.2-a+lse+rcpc)
+        elseif (${YUZU_BUILD_PRESET} STREQUAL "astral-modern")
+            # Ported from the AstralEmu packages build_target "arm64-modern"
+            # (github.com/AstralEmu/astralemu-packages, devices.yml): the
+            # Cortex-A76/X2/X3 baseline covering Snapdragon 845+ (SM8550/AYN
+            # Thor included). -march=armv8.2-a implies LSE (v8.1 mandatory);
+            # crypto/fp16/rcpc/dotprod are the v8.2 optional extensions those
+            # cores implement. Requires an ARMv8.2+ device: an APK built with
+            # this preset will crash (SIGILL) on ARMv8.0/8.1 cores.
+            set(march armv8.2-a+crypto+fp16+rcpc+dotprod)
+            set(mtune cortex-a76)
         elseif (${YUZU_BUILD_PRESET} STREQUAL "armv9")
             set(march armv9-a)
         endif()
@@ -384,6 +394,41 @@ if (CXX_GCC OR CXX_CLANG)
     if (DEFINED march AND DEFINED mtune)
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=${march} -mtune=${mtune}")
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=${march} -mtune=${mtune}")
+    endif()
+
+    # AstralEmu convention: every non-Debug configuration is optimized at -O3.
+    # CMake's Release already is (-O3 -DNDEBUG), but AGP maps the Android
+    # "relWithDebInfo" build type to CMake RelWithDebInfo (-O2 -g): upgrade it
+    # to -O3 and drop the -g blob so the debuggable variant stays within a few
+    # percent of the Release one instead of eating ROM and frame time.
+    if (ANDROID)
+        foreach(lang C CXX)
+            set(CMAKE_${lang}_FLAGS_RELWITHDEBINFO "-O3 -DNDEBUG")
+            set(CMAKE_${lang}_FLAGS_MINSIZEREL "-O3 -DNDEBUG")
+        endforeach()
+    endif()
+
+    # Android default optimizations, enabled for EVERYONE and kept ARMv8.0-safe
+    # so every arm64-v8a device keeps working (skipped when a YUZU_BUILD_PRESET
+    # was chosen explicitly, since that preset then governs -march/-mtune):
+    #   -O3 everywhere            (block above)
+    #   -march=armv8-a+crc+crypto — crc + AES/SHA crypto extensions ship on
+    #                               every Android arm64 SoC (Cortex-A35/A53/A57
+    #                               and later), so this stays universal; it
+    #                               speeds up the software AES-XTS/SHA paths
+    #                               (content decryption, mbedtls) among others
+    #   -mtune=cortex-a76         — scheduling only, zero instruction change:
+    #                               biases the universal build toward the modern
+    #                               big cores emulators actually run on (harmless
+    #                               on A53/A57/A72, matches A76/X2/X3 well)
+    #   ThinLTO                   — UseLTO.cmake enables ENABLE_LTO by default
+    #                               on Android (clang+lld are the NDK's only
+    #                               toolchain)
+    # The opt-in "astral-modern" preset above stays available for ARMv8.2+
+    # devices (fp16/dotprod) and replaces these -march/-mtune flags when used.
+    if (ANDROID AND ARCHITECTURE_arm64 AND "${YUZU_BUILD_PRESET}" STREQUAL "custom")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=armv8-a+crc+crypto -mtune=cortex-a76")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a+crc+crypto -mtune=cortex-a76")
     endif()
 endif()
 

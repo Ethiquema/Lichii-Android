@@ -41,6 +41,17 @@ android {
     val isNightly =
         providers.gradleProperty("nightly").orNull?.toBooleanStrictOrNull() ?: false
 
+    // Opt-in extra for ARMv8.2+ devices (AYN Thor SM8550, Snapdragon 845+):
+    // AstralEmu "arm64-modern" -march/-mtune preset (fp16/dotprod/crypto).
+    // The universal optimizations (-O3, -march=armv8-a+crc+crypto,
+    // -mtune=cortex-a76, ThinLTO) are already ON by default for EVERY Android
+    // build — no property needed. Usage:
+    //   ./gradlew -PastralOptimize=true assembleMainlineRelease
+    // (ARMv8.2+ only: such an APK crashes on older ARMv8.0 cores.)
+    // Details in docs/OPTIMISATIONS_BUILD.md.
+    val astralOptimize =
+        providers.gradleProperty("astralOptimize").orNull?.toBooleanStrictOrNull() ?: false
+
     buildFeatures {
         viewBinding = true
     }
@@ -96,6 +107,12 @@ android {
                     arguments.addAll(listOf(
                         "-DENABLE_UPDATE_CHECKER=ON",
                         "-DNIGHTLY_BUILD=ON",
+                    ))
+                }
+
+                if (astralOptimize) {
+                    arguments.addAll(listOf(
+                        "-DYUZU_BUILD_PRESET=astral-modern",
                     ))
                 }
 
