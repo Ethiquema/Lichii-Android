@@ -1,4 +1,34 @@
-# Builds the Lichii Android app (arm64 APK) on every push and on demand.
+# Builds the Lichii Android app (arm64) on every push and on demand — one APK
+# per device profile, via a CI/CD matrix GENERATED from .ci/android/devices.yml
+# (two-level build_targets/devices model; devices sharing a build_target share
+# one deduplicated APK):
+#
+#   universal       -march=armv8-a+crc+crypto -mtune=cortex-a76   (ARMv8.0+, everyone)
+#   armv82-modern   -march=armv8.2-a+crypto+fp16+rcpc+dotprod     (ARMv8.2+, SD845+)
+#   armv9           -march=armv9-a+crypto -mtune=cortex-x3        (ARMv9, SD 8 Gen 1+)
+#
+# Every row also ships the default optimizations for everyone: -O3 on every
+# non-Debug config and ThinLTO (CMakeLists.txt "Android default optimizations"
+# + externals/cmake-modules/UseLTO.cmake).
+#
+# Caching strategy (cold/warm — no cache entry per build):
+#   - CPM source downloads: one shared cache (identical across all profiles).
+#   - Gradle (Kotlin/AGP/deps + build cache): cached via setup-java, shared.
+#   - ccache: one entry per profile, rotated WEEKLY (the key carries the ISO
+#     week, not the run id). The first run of a week saves the entry; every
+#     other run that week exact-hits it and saves nothing — runs never pile
+#     up one cache per build.
+#   - Cold start (no android-ccache-* entry anywhere): the matrix job probes
+#     the cache API (`gh cache list`); a preseed job builds ONLY the universal
+#     profile to fill the shared cache, then the matrix runs on top of it.
+#   - Warm start (any android-ccache-* entry exists): the preseed job is
+#     skipped entirely and the whole matrix runs in parallel right away.
+# Runners: GitHub x86_64 ubuntu-24.04. This is NOT emulation — the NDK
+# cross-compiles arm64 from an x86_64 host natively. Google publishes no NDK
+# for Linux aarch64 hosts (only linux.zip x86_64, checked r27d..r30), so an
+# ARM64 runner would have to emulate the x86_64 compiler and be far slower.
+# The `release` job gathers all profile APKs into a single GitHub release and
+# prunes stale assets of the rolling test release.
 name: android
 
 on:
@@ -11,16 +41,135 @@ concurrency:
 
 permissions:
   contents: write
+  actions: read # cold/warm ccache detection via `gh cache list`
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_COMPRESS: "true"
+  CCACHE_MAXSIZE: 3G
+  CPM_SOURCE_CACHE: ${{ github.workspace }}/.cache/cpm
 
 jobs:
-  build:
-    name: Android APK
+  matrix:
+    name: Generate device matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      targets: ${{ steps.gen.outputs.targets }}
+      ccache_week: ${{ steps.cache_state.outputs.week }}
+      cache_present: ${{ steps.cache_state.outputs.present }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Generate matrix from devices.yml
+        id: gen
+        run: |
+          # PyYAML is preinstalled on GitHub runners; only install it as a
+          # fallback (--break-system-packages: ubuntu-24.04 is PEP 668).
+          python3 -c "import yaml" 2>/dev/null || \
+            python3 -m pip install --quiet --break-system-packages pyyaml
+          python3 .ci/android/gen_matrix.py
+
+      - name: Probe ccache (cold/warm detection)
+        id: cache_state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # ISO week — ccache keys rotate weekly, not per run.
+          echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+          # Any android-ccache-* entry means a warm start. On API failure the
+          # probe defaults to cold: the preseed job then merely refreshes an
+          # existing cache (restore-keys pick it up; first saver wins).
+          if gh cache list --limit 100 --json key --jq '.[].key' 2>/dev/null \
+              | grep -q '^android-ccache-'; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "ccache found — warm start, preseed will be skipped"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "no ccache entry — cold start, preseed will build universal"
+          fi
+
+  # Only scheduled on a cold start (the matrix probe found no
+  # android-ccache-* entry). On a warm start this job is skipped and the
+  # matrix starts immediately.
+  preseed:
+    name: Preseed ccache (cold start only)
+    needs: matrix
+    if: needs.matrix.outputs.cache_present != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 340
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_COMPRESS: "true"
-      CCACHE_MAXSIZE: 3G
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk/2* /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Install NDK and CMake
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "ndk;28.2.13676358" "cmake;3.22.1" "platforms;android-36" "build-tools;36.0.0"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ccache glslang-tools ninja-build
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          # Safety net when the probe missed an existing entry; a truly cold
+          # run simply misses and builds from scratch.
+          key: android-ccache-${{ needs.matrix.outputs.ccache_week }}-universal
+          restore-keys: android-ccache-
+
+      - name: Restore CPM downloads
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.cache/cpm
+          key: android-cpm-${{ hashFiles('cpmfile.json', 'externals/cpmfile.json', 'src/**/cpmfile.json') }}
+          restore-keys: android-cpm-
+
+      # Must match a build_target id from .ci/android/devices.yml.
+      - name: Build universal profile (preseed)
+        env:
+          CCACHE: "true"
+        run: |
+          chmod +x .ci/android/build.sh
+          .ci/android/build.sh -t standard -b Release -DYUZU_BUILD_PRESET=universal
+
+      - name: ccache stats
+        run: ccache -s || true
+
+      - name: Save ccache
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          # Same key the matrix build job uses for universal: the first saver
+          # wins, so no duplicate entry is created.
+          key: android-ccache-${{ needs.matrix.outputs.ccache_week }}-universal
+
+  build:
+    name: Android APK · ${{ matrix.id }}
+    needs: [matrix, preseed]
+    if: ${{ !cancelled() && needs.matrix.result == 'success' && (needs.preseed.result == 'success' || needs.preseed.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.matrix.outputs.targets) }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -37,6 +186,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
 
       - name: Install NDK and CMake
         run: |
@@ -53,7 +203,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: android-ccache-${{ github.sha }}
+          # One entry per profile per ISO week — NOT per run: the first run of
+          # the week saves it, later runs exact-hit it and save nothing, so
+          # entries never pile up one per build. restore-keys fall back to any
+          # profile/week (this is how the universal preseed entry is picked up
+          # on a cold start). Cross-profile objects are not interchangeable
+          # (-march/-mtune hash into every compile command) — the fallback is
+          # only a safety net, the per-profile entry is the real cache.
+          key: android-ccache-${{ needs.matrix.outputs.ccache_week }}-${{ matrix.id }}
           restore-keys: android-ccache-
 
       - name: Restore CPM downloads
@@ -63,24 +220,79 @@ jobs:
           key: android-cpm-${{ hashFiles('cpmfile.json', 'externals/cpmfile.json', 'src/**/cpmfile.json') }}
           restore-keys: android-cpm-
 
-      - name: Build APK
+      - name: Build APK (profile ${{ matrix.id }})
         env:
           CCACHE: "true"
-          CPM_SOURCE_CACHE: ${{ github.workspace }}/.cache/cpm
         run: |
           chmod +x .ci/android/build.sh
-          .ci/android/build.sh -t standard -b Release
+          .ci/android/build.sh -t standard -b Release -DYUZU_BUILD_PRESET=${{ matrix.preset }}
 
       - name: ccache stats
         if: always()
         run: ccache -s || true
 
+      - name: Rename APK (profile + commit version)
+        run: |
+          VERSION="$(git describe --always --long --tags 2>/dev/null | sed 's/^v//' || true)"
+          [ -n "$VERSION" ] || VERSION="${GITHUB_SHA:0:7}"
+          cd artifacts
+          count=0
+          for f in *.apk; do
+            [ -e "$f" ] || continue
+            mv "$f" "Lichii-android-${{ matrix.id }}-${VERSION}.apk"
+            count=$((count+1))
+          done
+          [ "$count" -gt 0 ] || { echo "No APK produced" >&2; exit 1; }
+          ls -l
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: lichii-android-${{ github.sha }}
+          name: lichii-android-${{ matrix.id }}
           path: artifacts/*.apk
           if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: ${{ always() && needs.build.result == 'success' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download all profile APKs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: lichii-android-*
+          merge-multiple: true
+          path: apks
+
+      - name: Device → APK summary
+        run: |
+          python3 .ci/android/gen_matrix.py --markdown >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -l apks/ >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prune stale test-release assets
+        if: github.ref == 'refs/heads/nx2'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The rolling android-latest release keeps its old assets otherwise:
+          # users could keep downloading an outdated (e.g. pre-fix) APK under
+          # an old file name. Delete every existing asset; the current ones
+          # are uploaded right after.
+          RELEASE_ID="$(gh api "repos/${{ github.repository }}/releases/tags/android-latest" --jq '.id' 2>/dev/null || true)"
+          if [ -n "$RELEASE_ID" ]; then
+            gh api --paginate "repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" --jq '.[].id' \
+              | while read -r asset_id; do
+                  [ -n "$asset_id" ] || continue
+                  echo "Deleting stale asset $asset_id"
+                  gh api -X DELETE "repos/${{ github.repository }}/releases/assets/${asset_id}" || true
+                done
+          fi
 
       - name: Read release version
         if: startsWith(github.ref, 'refs/tags/android-') && github.ref != 'refs/tags/android-latest'
@@ -95,7 +307,7 @@ jobs:
           prerelease: false
           make_latest: true
           body_path: docs/android/RELEASE_NOTES.md
-          files: artifacts/*.apk
+          files: apks/*.apk
 
       - name: Publish test release for phone download
         if: github.ref == 'refs/heads/nx2'
@@ -105,5 +317,16 @@ jobs:
           name: Lichii Android test build
           prerelease: true
           make_latest: false
-          body: Automatic test build from ${{ github.sha }}. Experimental.
-          files: artifacts/*.apk
+          body: |
+            Automatic test build from commit ${{ github.sha }}. Experimental.
+
+            One APK per device profile — the file name carries the commit it
+            was built from (`Lichii-android-<profile>-<git-describe>.apk`);
+            the device → APK table is in the run summary. Profiles:
+            - `universal` — any Android arm64 (ARMv8.0+)
+            - `armv82-modern` — Snapdragon 845→888, RK3588, Dimensity 8100/9000
+            - `armv9` — Snapdragon 8 Gen 1/2/3, 8 Elite, Dimensity 9200+
+
+            If the commit in the file name does not match this run, the old
+            asset was cached by your browser — refresh the release page.
+          files: apks/*.apk

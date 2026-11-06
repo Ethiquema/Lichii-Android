@@ -41,16 +41,21 @@ android {
     val isNightly =
         providers.gradleProperty("nightly").orNull?.toBooleanStrictOrNull() ?: false
 
-    // Opt-in extra for ARMv8.2+ devices (AYN Thor SM8550, Snapdragon 845+):
-    // AstralEmu "arm64-modern" -march/-mtune preset (fp16/dotprod/crypto).
-    // The universal optimizations (-O3, -march=armv8-a+crc+crypto,
-    // -mtune=cortex-a76, ThinLTO) are already ON by default for EVERY Android
-    // build — no property needed. Usage:
-    //   ./gradlew -PastralOptimize=true assembleMainlineRelease
-    // (ARMv8.2+ only: such an APK crashes on older ARMv8.0 cores.)
-    // Details in docs/OPTIMISATIONS_BUILD.md.
-    val astralOptimize =
-        providers.gradleProperty("astralOptimize").orNull?.toBooleanStrictOrNull() ?: false
+    // Device profile for the per-device CI/CD matrix (.ci/android/devices.yml,
+    // two-level build_targets/devices model). Passes
+    // -DYUZU_BUILD_PRESET=<profile> to CMake. Valid values (CMake side):
+    //   universal      ARMv8.0-safe (same flags as the default, no property)
+    //   modern         ARMv8.2+ (fp16/dotprod/rcpc — SIGILL on ARMv8.0/8.1)
+    //   armv9          ARMv9 (Snapdragon 8 Gen 1+)
+    // The universal base (-O3 everywhere, -march=armv8-a+crc+crypto,
+    // -mtune=cortex-a76, ThinLTO) is already ON by default for EVERY Android
+    // build — this property only raises the -march floor. Local usage:
+    //   ./gradlew -PdeviceProfile=modern assembleMainlineRelease
+    // The CI instead forwards -DYUZU_BUILD_PRESET=... via YUZU_ANDROID_ARGS
+    // (see .ci/android/build.sh), one APK per profile. Details in
+    // docs/BUILD_OPTIMIZATIONS.md.
+    val deviceProfile =
+        providers.gradleProperty("deviceProfile").orNull
 
     buildFeatures {
         viewBinding = true
@@ -110,9 +115,9 @@ android {
                     ))
                 }
 
-                if (astralOptimize) {
+                if (deviceProfile != null) {
                     arguments.addAll(listOf(
-                        "-DYUZU_BUILD_PRESET=astral-modern",
+                        "-DYUZU_BUILD_PRESET=$deviceProfile",
                     ))
                 }
 

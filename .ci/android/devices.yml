@@ -1,0 +1,136 @@
+# Lichii-Android — Android arm64 build targets and devices
+#
+# Two-level structure:
+#   build_targets — unique compilation configurations (flags + preset)
+#   devices       — actual hardware units, each mapped to a build_target
+#
+# The CI/CD matrix (.github/workflows/android.yml) is GENERATED from this file
+# by .ci/android/gen_matrix.py. Builds are DEDUPLICATED per build_target:
+# devices sharing the same target share the same APK (no point recompiling for
+# an identical -mtune).
+#
+# Every target automatically inherits:
+#   -O3 on every non-Debug config, ThinLTO (-flto=thin), clang+lld (NDK),
+#   strip in release — see CMakeLists.txt "Android default optimizations" and
+#   externals/cmake-modules/UseLTO.cmake.
+# The march/mtune fields below are the only flags that vary.
+#
+# To add a device:
+#   1. Add an entry under devices: with an existing build_target
+#   2. If no existing build_target fits, add a new one under build_targets:
+#   3. Commit and push — CI builds and publishes the new APK automatically
+#
+# ⚠️ Compatibility: each target lists its ARMv8 floor. An APK built for a
+# target whose floor is above the hardware WILL crash (SIGILL). When in doubt,
+# install the "universal" target: it runs everywhere.
+
+# ============================================================================
+# build_targets — one compilation per unique (flags) combination
+# ============================================================================
+# Fields:
+#   id          — unique identifier (name of the published APK and CI artifact)
+#   preset      — YUZU_BUILD_PRESET value passed to CMake (must exist in
+#                 CMakeLists.txt, "Build/optimization presets" block)
+#   march/mtune — doc: flags emitted by the preset (informational)
+#   compat      — guaranteed hardware floor of the produced APK
+#   description — purpose of the target
+
+build_targets:
+  - id: universal
+    preset: universal
+    march: armv8-a+crc+crypto
+    mtune: cortex-a76
+    compat: "ARMv8.0+ — every arm64-v8a Android device (Cortex-A35/A53/A57 and later)"
+    description: >
+      Universal fallback: runs on absolutely every 64-bit Android device.
+      Also the default configuration of a local build without any property.
+
+  - id: armv82-modern
+    preset: modern
+    march: armv8.2-a+crypto+fp16+rcpc+dotprod
+    mtune: cortex-a76
+    compat: "ARMv8.2+ — Snapdragon 845/855/865/888, RK3588, Dimensity 8100/9000"
+    description: >
+      Modern baseline: enables fp16/dotprod/rcpc (SIGILL on ARMv8.0/8.1).
+      LSE (v8.1) is implied by armv8.2-a.
+
+  - id: armv9
+    preset: armv9
+    march: armv9-a+crypto
+    mtune: cortex-x3
+    compat: "ARMv9+ — Snapdragon 8 Gen 1/2/3, 8 Elite, Dimensity 9200+"
+    description: >
+      ARMv9 baseline (fp16/rcpc/dotprod/i8mm/bf16 implied by the armv9-a
+      floor) with Cortex-X3/X4-oriented scheduling.
+
+# ============================================================================
+# devices — one hardware unit per entry
+# ============================================================================
+# Fields:
+#   id           — short identifier (documented in the CI run summary)
+#   name         — human-readable name (SoC + cores)
+#   build_target — reference to a build_targets[].id (determines the APK to install)
+
+devices:
+  # --- armv9 target (Snapdragon 8 Gen 1 and later) ---------------------------
+  - id: ayn-thor
+    name: "AYN Thor (SM8550 / Snapdragon 8 Gen 2, Cortex-X3 + A715)"
+    build_target: armv9
+
+  - id: ayn-odin2
+    name: "AYN Odin 2 / Mini / Base / Pro / Max (Snapdragon 8 Gen 2)"
+    build_target: armv9
+
+  - id: sd8elite
+    name: "Snapdragon 8 Elite (Oryon)"
+    build_target: armv9
+
+  - id: sd8g3
+    name: "Snapdragon 8 Gen 3 / 8s Gen 3 (Cortex-X4 + A720)"
+    build_target: armv9
+
+  - id: sd8g1
+    name: "Snapdragon 8 Gen 1 / 8+ Gen 1 (Cortex-X2 + A710)"
+    build_target: armv9
+
+  - id: dimensity9200
+    name: "Dimensity 9200+ (Cortex-X3 + A715)"
+    build_target: armv9
+
+  - id: retroid-pocket-6
+    name: "Retroid Pocket 6 (SM8550 / Snapdragon 8 Gen 2)"
+    build_target: armv9
+
+  # --- armv82-modern target (Snapdragon 845 → 888 and equivalents) -----------
+  - id: sd845-888
+    name: "Snapdragon 845 / 855 / 865 / 888 (Cortex-A76/A77/X1)"
+    build_target: armv82-modern
+
+  - id: retroid-pocket-5
+    name: "Retroid Pocket 5 / 5 Pro (SM8250 / Snapdragon 865)"
+    build_target: armv82-modern
+
+  - id: dimensity8100
+    name: "Dimensity 8100 / 9000 (Cortex-A78)"
+    build_target: armv82-modern
+
+  - id: rk3588-android
+    name: "Rockchip RK3588 Android consoles (Cortex-A76 + A55)"
+    build_target: armv82-modern
+
+  # --- universal target (everything else — ARMv8.0 included) -----------------
+  - id: sd835-and-older
+    name: "Snapdragon 835 and older (Cortex-A73)"
+    build_target: universal
+
+  - id: helio-g-series
+    name: "MediaTek Helio G/P series (Cortex-A73/A75)"
+    build_target: universal
+
+  - id: sd-4xx-6xx-7xx
+    name: "Snapdragon 4xx / 6xx / 7xx (entry-level Cortex-A53/A55/A76)"
+    build_target: universal
+
+  - id: unlisted
+    name: "Any arm64 Android device not listed above"
+    build_target: universal

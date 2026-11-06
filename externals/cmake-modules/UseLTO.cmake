@@ -22,8 +22,7 @@ if (ENABLE_LTO)
     if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND ANDROID)
         # Android NDK: clang is the only compiler and lld the only linker, so
         # ThinLTO is always available and needs no IPO probe. Explicitly emit
-        # -flto=thin (same convention as the AstralEmu packages, which build
-        # every perf-critical library with clang + -flto=thin):
+        # -flto=thin:
         # CMAKE_INTERPROCEDURAL_OPTIMIZATION would emit full -flto here, which
         # links several times slower for an equivalent result.
         # Per-source opt-outs (e.g. -fno-lto on src/core kernel.cpp) still win,

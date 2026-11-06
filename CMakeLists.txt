@@ -365,24 +365,35 @@ if (CXX_GCC OR CXX_CLANG)
         endif()
     elseif(ARCHITECTURE_arm64)
         # See https://gcc.gnu.org/onlinedocs/gcc/AArch64-Options.html
-        set(YUZU_BUILD_PRESET "custom" CACHE STRING "Build preset to use. One of: custom, generic, optimized, astral-modern, armv9, native")
+        set(YUZU_BUILD_PRESET "custom" CACHE STRING "Build preset to use. One of: custom, generic, optimized, universal, modern, armv9, native")
         set(mtune generic)
         if (${YUZU_BUILD_PRESET} STREQUAL "generic")
             set(march armv8-a)
         elseif (${YUZU_BUILD_PRESET} STREQUAL "optimized")
             set(march armv8.2-a+lse+rcpc)
-        elseif (${YUZU_BUILD_PRESET} STREQUAL "astral-modern")
-            # Ported from the AstralEmu packages build_target "arm64-modern"
-            # (github.com/AstralEmu/astralemu-packages, devices.yml): the
-            # Cortex-A76/X2/X3 baseline covering Snapdragon 845+ (SM8550/AYN
-            # Thor included). -march=armv8.2-a implies LSE (v8.1 mandatory);
-            # crypto/fp16/rcpc/dotprod are the v8.2 optional extensions those
-            # cores implement. Requires an ARMv8.2+ device: an APK built with
-            # this preset will crash (SIGILL) on ARMv8.0/8.1 cores.
+        elseif (${YUZU_BUILD_PRESET} STREQUAL "universal")
+            # Named row for the per-device CI matrix (.ci/android/devices.yml):
+            # exact same flags as the "custom" default block below, kept
+            # ARMv8.0-safe so the "universal" APK runs on every arm64 device.
+            set(march armv8-a+crc+crypto)
+            set(mtune cortex-a76)
+        elseif (${YUZU_BUILD_PRESET} STREQUAL "modern")
+            # Modern baseline for ARMv8.2+ SoCs (Cortex-A76/X2/X3 — Snapdragon
+            # 845 and later included). -march=armv8.2-a implies LSE (v8.1
+            # mandatory); crypto/fp16/rcpc/dotprod are the v8.2 optional
+            # extensions those cores implement. Requires an ARMv8.2+ device:
+            # an APK built with this preset will crash (SIGILL) on ARMv8.0/8.1
+            # cores.
             set(march armv8.2-a+crypto+fp16+rcpc+dotprod)
             set(mtune cortex-a76)
         elseif (${YUZU_BUILD_PRESET} STREQUAL "armv9")
-            set(march armv9-a)
+            # ARMv9 baseline (Cortex-X2/X3/X4 + A710/715/720 — Snapdragon
+            # 8 Gen 1/2/3, 8 Elite, Dimensity 9200+): fp16/rcpc/dotprod/
+            # i8mm/bf16 are implied by the armv9-a floor; crypto (AES/SHA)
+            # is explicit like the other Android presets. Tuned for the
+            # X-series primes — scheduling only, no instruction change.
+            set(march armv9-a+crypto)
+            set(mtune cortex-x3)
         endif()
     endif()
 
@@ -396,7 +407,7 @@ if (CXX_GCC OR CXX_CLANG)
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=${march} -mtune=${mtune}")
     endif()
 
-    # AstralEmu convention: every non-Debug configuration is optimized at -O3.
+    # Every non-Debug configuration is optimized at -O3.
     # CMake's Release already is (-O3 -DNDEBUG), but AGP maps the Android
     # "relWithDebInfo" build type to CMake RelWithDebInfo (-O2 -g): upgrade it
     # to -O3 and drop the -g blob so the debuggable variant stays within a few
@@ -424,8 +435,9 @@ if (CXX_GCC OR CXX_CLANG)
     #   ThinLTO                   — UseLTO.cmake enables ENABLE_LTO by default
     #                               on Android (clang+lld are the NDK's only
     #                               toolchain)
-    # The opt-in "astral-modern" preset above stays available for ARMv8.2+
-    # devices (fp16/dotprod) and replaces these -march/-mtune flags when used.
+    # The per-device CI matrix (.ci/android/devices.yml) selects these flags
+    # explicitly via YUZU_BUILD_PRESET=universal, or a stronger floor
+    # (modern / armv9) which replaces them when used.
     if (ANDROID AND ARCHITECTURE_arm64 AND "${YUZU_BUILD_PRESET}" STREQUAL "custom")
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=armv8-a+crc+crypto -mtune=cortex-a76")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a+crc+crypto -mtune=cortex-a76")

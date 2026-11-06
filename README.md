@@ -68,29 +68,47 @@ CPU stayed mostly idle: the emulator's display frame-rate vote could lock the pa
 low refresh rate during shader compilation, and the proprietary Adreno driver does not
 support concurrent fence waits (present thread disabled for it). The display vote is now
 floored at 30 Hz and a stall watchdog logs stuck GPU ticks. See
-[docs/CORRECTIF_AYN_THOR.md](docs/CORRECTIF_AYN_THOR.md) for the full analysis, the
+[docs/AYN_THOR_GPU_FIX.md](docs/AYN_THOR_GPU_FIX.md) for the full analysis, the
 recommended Turnip driver versions and the `env.txt` switches.
 
-## Optimized builds (AstralEmu flags)
+## Optimized builds — one APK per device (CI/CD matrix)
 
-Every Android build now ships with AstralEmu-style native optimizations enabled
-by default, for **all** arm64-v8a devices (ARMv8.0-safe): `-O3` on every non-Debug
-config, `-march=armv8-a+crc+crypto`, `-mtune=cortex-a76` and ThinLTO. The CI/CD
-pipeline (`android.yml`) gets them with no extra flag:
+Every Android build ships with native optimizations enabled by default, for
+**all** arm64-v8a devices (ARMv8.0-safe): `-O3` on every non-Debug config,
+`-march=armv8-a+crc+crypto`, `-mtune=cortex-a76` and ThinLTO.
+
+On top of that, the CI/CD pipeline (`android.yml`) no longer builds a single
+generic APK: it builds **one APK per device profile**, via a matrix generated
+from [.ci/android/devices.yml](.ci/android/devices.yml) — a two-level
+`build_targets` / `devices` model (devices sharing a target share the same
+APK):
+
+| Release asset | Flags | Minimum hardware |
+|---|---|---|
+| `Lichii-android-universal-<commit>.apk` | `-march=armv8-a+crc+crypto -mtune=cortex-a76` | any arm64 Android (ARMv8.0+) |
+| `Lichii-android-armv82-modern-<commit>.apk` | `-march=armv8.2-a+crypto+fp16+rcpc+dotprod -mtune=cortex-a76` | Snapdragon 845→888, RK3588, Dimensity 8100/9000 |
+| `Lichii-android-armv9-<commit>.apk` | `-march=armv9-a+crypto -mtune=cortex-x3` | Snapdragon 8 Gen 1/2/3, 8 Elite, Dimensity 9200+ |
+
+`<commit>` is the exact commit the APK was built from (`git describe`), so a
+stale download is immediately visible. `versionCode` always increases (build
+time based).
+
+Each profile also gets `-O3` + ThinLTO. Pick the strongest profile your SoC
+allows — installing a profile above your hardware **will** crash (SIGILL), by
+design. To add a device or a whole SoC class, edit `devices.yml`; the matrix
+and the release are updated automatically on the next push.
+
+Locally, build one profile exactly like the CI does:
 
 ```bash
-./gradlew assembleMainlineRelease
-```
-
-An opt-in preset additionally targets ARMv8.2+ SoCs (AYN Thor, Snapdragon 845+)
-with `fp16`/`dotprod` — such an APK will crash on older ARMv8.0 cores:
-
-```bash
-./gradlew -PastralOptimize=true assembleMainlineRelease
+./gradlew -PdeviceProfile=universal assembleMainlineRelease
+./gradlew -PdeviceProfile=modern assembleMainlineRelease   # ARMv8.2+ only
+./gradlew -PdeviceProfile=armv9 assembleMainlineRelease    # ARMv9 only
 ```
 
 Applicability matrix (jemalloc is not possible on Android — bionic only),
-escape hatches and expected gains in [docs/OPTIMISATIONS_BUILD.md](docs/OPTIMISATIONS_BUILD.md).
+full device mapping, escape hatches and expected gains in
+[docs/BUILD_OPTIMIZATIONS.md](docs/BUILD_OPTIMIZATIONS.md).
 
 ## Reporting problems
 
