@@ -61,6 +61,16 @@ Only results tested on the phone above are listed here.
 - **CPU:** NCE backend.
 - **Graphics:** 1× resolution. Install a custom RADV driver if your phone has an Xclipse GPU.
 
+## AYN Thor / Snapdragon devices
+
+On the AYN Thor the game could run as a slideshow with the GPU reported at 0% while the
+CPU stayed mostly idle: the emulator's display frame-rate vote could lock the panel at a
+low refresh rate during shader compilation, and the proprietary Adreno driver does not
+support concurrent fence waits (present thread disabled for it). The display vote is now
+floored at 30 Hz and a stall watchdog logs stuck GPU ticks. See
+[docs/CORRECTIF_AYN_THOR.md](docs/CORRECTIF_AYN_THOR.md) for the full analysis, the
+recommended Turnip driver versions and the `env.txt` switches.
+
 ## Reporting problems
 
 [Open an issue](https://github.com/pavelgajdo/Lichii-Android/issues) with:

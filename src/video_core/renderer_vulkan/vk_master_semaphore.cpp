@@ -78,8 +78,19 @@ void MasterSemaphore::Refresh() {
 }
 
 bool MasterSemaphore::HangWatchEnabled() {
+#if defined(__ANDROID__)
+    // AYN Thor fix: on by default on Android so stalls (GPU tick not advancing) show up in
+    // the log every 3 seconds instead of hanging silently. Set EDEN_NX2_HANG_WATCH=0 in
+    // env.txt to turn it off.
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_HANG_WATCH");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled;
+#else
     static const bool enabled = std::getenv("EDEN_NX2_HANG_WATCH") != nullptr;
     return enabled;
+#endif
 }
 
 void MasterSemaphore::Wait(u64 tick) {

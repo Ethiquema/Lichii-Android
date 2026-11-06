@@ -4,6 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
+
+#include "common/logging.h"
 #include "common/settings.h"
 #include "common/thread.h"
 #include "core/frontend/emu_window.h"
@@ -27,6 +30,31 @@ constexpr u32 MAX_PRESENT_ATTEMPTS = 3;
 #ifdef HAS_LSFG
 static_assert(MAX_FRAMES_IN_FLIGHT <= LSFG_MAX_TARGETS);
 #endif
+
+// AYN Thor fix: Qualcomm's proprietary Adreno driver does not support concurrent fence
+// waits (see docs/DriverBugs.md). Presenting from the dedicated present thread means the
+// GPU thread waits on present_done fences while the present thread acquires images and
+// submits: the driver serializes the device around those waits and the GPU ends up idle
+// between frames. Presenting on the GPU thread keeps a single waiter. Set
+// EDEN_FORCE_ASYNC_PRESENT=1 (env.txt) to re-enable the present thread anyway.
+bool AllowAsyncPresent(const Device& device) {
+#ifdef __ANDROID__
+    static const bool forced = std::getenv("EDEN_FORCE_ASYNC_PRESENT") != nullptr;
+    if (forced) {
+        return true;
+    }
+    if (device.GetDriverID() == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
+        LOG_WARNING(Render_Vulkan,
+                    "Qualcomm Adreno: presenting on the GPU thread (the driver does not "
+                    "support concurrent fence waits); set EDEN_FORCE_ASYNC_PRESENT=1 to "
+                    "override");
+        return false;
+    }
+#else
+    (void)device;
+#endif
+    return true;
+}
 
 bool CanStoreToFrame(const vk::PhysicalDevice& physical_device, VkFormat format) {
 #ifdef HAS_LSFG
@@ -129,7 +157,8 @@ PresentManager::PresentManager(const vk::Instance& instance_,
     , surface{surface_}
     , blit_supported{CanBlitToSwapchain(device.GetPhysical(), swapchain.GetImageViewFormat())}
     , storage_supported{CanStoreToFrame(device.GetPhysical(), swapchain.GetImageFormat())}
-    , use_present_thread{Settings::values.async_presentation.GetValue()}
+    , use_present_thread{Settings::values.async_presentation.GetValue() &&
+                         AllowAsyncPresent(device_)}
 {
     SetImageCount();
 

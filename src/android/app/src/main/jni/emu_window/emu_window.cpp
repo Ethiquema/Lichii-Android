@@ -132,6 +132,24 @@ float EmuWindow_Android::GetPresentedFrameMultiplier() {
 }
 
 float EmuWindow_Android::GetFrameRateHint() const {
+    const float hint = GetRawFrameRateHint();
+    // AYN Thor fix: never vote the display refresh rate below 30 Hz.
+    //
+    // While shaders compile at boot the game presents at a few FPS; GetRawFrameRateHint()
+    // then votes that rate on the surface (ANativeWindow_setFrameRate). Panels that honor
+    // low votes (AYN Thor AMOLED) switch to a low refresh mode, FIFO presentation is then
+    // paced by the panel, which keeps the observed rate low, which keeps the vote low: the
+    // hint locks itself at a slideshow rate even once the game runs fast again. The GPU is
+    // left nearly idle (0% busy in KGSL) while everything waits on vblank.
+    // A 30 Hz floor keeps the panel in a normal mode; the pending-vote logic below still
+    // lets the hint rise to 60/120 Hz once the game sustains it.
+    if (hint > 0.0f && hint < 30.0f) {
+        return 30.0f;
+    }
+    return hint;
+}
+
+float EmuWindow_Android::GetRawFrameRateHint() const {
     const float presented_multiplier = GetPresentedFrameMultiplier();
     const float observed_rate =
         std::clamp(m_smoothed_present_rate * presented_multiplier, 0.0f, 240.0f);
@@ -246,6 +264,11 @@ void EmuWindow_Android::UpdateFrameRateHint() {
         LOG_DEBUG(Frontend, "Failed to update Android surface frame rate hint: {}", result);
         return;
     }
+
+    // AYN Thor fix: make display rate votes visible in the log. A drop like
+    // "60 -> 7.5 Hz" here is the smoking gun for the low-refresh lock-up.
+    LOG_INFO(Frontend, "Surface frame rate hint: {} -> {} Hz", m_last_frame_rate_hint,
+             frame_rate_hint);
 
     m_last_frame_rate_hint = frame_rate_hint;
     m_pending_frame_rate_hint = frame_rate_hint;
