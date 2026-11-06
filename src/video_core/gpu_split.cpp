@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <thread>
 
@@ -91,10 +92,23 @@ GpuSplit GpuSplit::instance;
 void GpuSplit::MaybeStart(Core::System& system_) {
     static const char mode = [] {
         const char* value = std::getenv("EDEN_NX2_SPLIT");
-        return value != nullptr ? value[0] : '2';
+        return value != nullptr ? value[0] : '0';
     }();
     const bool wanted = mode == '1' || mode == '2';
-    if (!wanted || !Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+    // Disabled by default: on device (AYN Thor, Adreno 740, PurpleVK) the split leaves the
+    // GPU back thread ~90% idle — Nx2Profile reports "split wait 908-927 ms" or "other
+    // 886-897 ms" per ~10 s window while draws get 4-10 ms/s, i.e. a GPU at 0% and a
+    // slideshow (see docs/AYN_THOR_GPU_FIX.md). Opt in with EDEN_NX2_SPLIT=1 (macros on
+    // the back) or 2 (macros on the front).
+    static std::atomic<bool> logged_disabled{false};
+    if (!wanted) {
+        if (!logged_disabled.exchange(true, std::memory_order_relaxed) &&
+            Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+            LOG_INFO(HW_GPU, "GPU thread split: disabled by default (EDEN_NX2_SPLIT=1 or 2 to enable)");
+        }
+        return;
+    }
+    if (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
         return;
     }
     // The front reads command lists straight from guest memory; a read that flushes the caches

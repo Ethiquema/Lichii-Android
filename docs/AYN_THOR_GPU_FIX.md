@@ -5,6 +5,102 @@ observed on the **AYN Thor** (Snapdragon, Adreno): the GPU is unused (0% in the
 KGSL monitor), the device stays cool, the CPU is far from saturated, RAM has
 headroom — yet the game advances like a slideshow.
 
+## Round 2 (2026-11-07): the GPU is starved by the experimental thread split
+
+Field evidence from an on-device session log (AYN Thor, Donkey Kong Bananza,
+APK `nx2-3af00df905` containing round 1) showed a *different* — and dominant —
+cause of the 0% GPU: the fork's experimental **GPU thread split**
+(`src/video_core/gpu_split.cpp`, `NX2_GPU_THREAD_SPLIT.md`) was enabled by
+default for Switch 2 titles and starved the GPU:
+
+```
+GPU back thread per second: | other 897.6 ms | draw 4.4 ms (9225/s) | ... | split wait 927.1 ms (629/s) | ...
+GPU back thread per second: | other 886.5 ms | draw 5.5 ms (10046/s) | ... | split wait 33.6 ms | ...
+```
+
+(10 s profile windows.) The back thread — the only one that touches the
+rasterizer — spent ~90% of its time waiting on the split queue or idle, actual
+drawing received 4-10 ms per second: the GPU sits at 0% because **no work
+reaches it**, while the host CPU is also mostly idle (71-204 ms/s busy) —
+everyone waits on everyone.
+
+Fix: the split is now **disabled by default** (`EDEN_NX2_SPLIT=0`); the proven
+single-thread GPU path (upstream behavior) runs instead. To experiment again:
+`EDEN_NX2_SPLIT=1` or `=2` in `env.txt`. The change is logged at boot:
+`GPU thread split: disabled by default (EDEN_NX2_SPLIT=1 or 2 to enable)`.
+
+No rebuild needed to test the disabled split: `env.txt` is read at startup
+(`/storage/emulated/0/Android/data/<applicationId>/files/env.txt`, one
+`KEY=VALUE` per line) — add `EDEN_NX2_SPLIT=0` and restart the app. When the
+edit seems to have no effect, see Round 3 below: the folder depends on the
+installed build's package, and the loader now prints that exact path in logcat.
+
+Note: round 1's presentation workaround only triggers on the Qualcomm
+**proprietary** driver (`VK_DRIVER_ID_QUALCOMM_PROPRIETARY`); sessions using a
+Turnip-based custom driver (e.g. PurpleVK) keep the async present thread, so
+the vote floor (30 Hz) and this split fix are the parts that apply there.
+
+## Round 3 (2026-11-07): when `EDEN_NX2_SPLIT=0` silently does not apply
+
+Field report: an APK that predates round 2 still shows a 0% GPU after adding
+`EDEN_NX2_SPLIT=0` to `env.txt`. The switch loader already existed in that APK
+(and logs every line it reads), so the mechanism works — the edit just never
+reaches the process. Three causes, all handled now:
+
+1. **Wrong folder.** The loader reads
+   `/storage/emulated/0/Android/data/<applicationId>/files/env.txt` where
+   `<applicationId>` is the *installed* build's package, not a constant:
+
+   | Installed build | applicationId | env.txt folder |
+   |---|---|---|
+   | CI release (`-b Release`, no nightly property) | `dev.lichii.android` | `Android/data/dev.lichii.android/files/` |
+   | Local default task (`relWithDebInfo`) | `dev.lichii.android.relWithDebInfo` | `Android/data/dev.lichii.android.relWithDebInfo/files/` |
+   | `debug` build | `dev.lichii.android.debug` | `Android/data/dev.lichii.android.debug/files/` |
+   | Nightly (`-Pnightly=true`) | `dev.lichii.android.nightly` | `Android/data/dev.lichii.android.nightly/files/` |
+
+   Android 13 blocks file managers from `Android/data`; push the file instead:
+   `adb push env.txt /storage/emulated/0/Android/data/<applicationId>/files/env.txt`.
+   The loader now logs the exact path it scans on every boot, found or not —
+   grep logcat for `env.txt:` and it tells you where the file must go.
+
+2. **UTF-8 BOM on the first line.** An `EF BB BF` prefix made the first key
+   unmatchable, so a switch placed at the top of the file was ignored while a
+   later line (e.g. a copied `nx2_switches.txt` template) re-set it. The BOM is
+   now stripped.
+
+3. **A duplicate assignment later in the file wins.** `env.txt` (and a copied
+   `nx2_switches.txt` template) used to ship an active `EDEN_NX2_SPLIT=2`; the
+   *last* assignment in the file takes effect. Duplicates are now reported in
+   logcat, and the shipped template no longer contains an active
+   `EDEN_NX2_SPLIT=2`.
+
+### What logcat should show
+
+- `env.txt: <KEY>=<VALUE>` per line read — or `env.txt: no switches file at
+  <path>` when absent; that line also prints the exact folder to use;
+- `env.txt: N switch(es) loaded from <path>` at the end of the scan, plus a
+  warning when the same key is assigned twice;
+- `GPU thread split: disabled by default (EDEN_NX2_SPLIT=1 or 2 to enable)`
+  once the game boots (round 2 APK or newer);
+- `Present thread: async presentation active on this driver` or the Qualcomm
+  GPU-thread line — which presentation path is active;
+- `Driver: ...` from the renderer — which Vulkan driver actually loaded
+  (PurpleVK/Turnip fork vs the Qualcomm proprietary one).
+
+If `env.txt: EDEN_NX2_SPLIT=0` *does* appear and the GPU is still at 0%, the
+split is genuinely off and the cause is different again: capture a fresh
+on-device profile with `EDEN_NX2_GPU_PROFILE=1` in `env.txt` (10 s window) and
+compare against the round 2 numbers.
+
+### Custom drivers (Turnip / PurpleVK)
+
+With a Turnip-class custom driver the split-off fix, the 30 Hz display-vote
+floor and HangWatch are the active changes; the round 1 present workaround
+does not trigger. With the Qualcomm proprietary driver this device additionally
+spent hours in pipeline compilation before some titles started (field report) —
+which is why the custom driver remains the practical choice on this device even
+before considering raw performance.
+
 ## Diagnosis
 
 ### What it is NOT
@@ -93,10 +189,13 @@ any residual driver-side stall.
 - **GPU driver**: install a **recent but not broken Turnip** driver through the
   app's driver manager (community feedback indicates some Turnip T29 builds
   are defective on this model; T28 and the newer fixed builds work). The
-  Qualcomm proprietary driver also works with this fix.
+  Qualcomm proprietary driver also runs the fix, but field reports on this
+  device show hours-long pipeline compilation before some titles start — the
+  custom driver is the practical choice regardless of raw performance.
 - **Resolution** 1×, **handheld mode**, on-disk shader cache enabled.
-- If a title stays stuck, try `EDEN_NX2_SPLIT=0` in `env.txt` (disables the
-  GPU thread split, an untested feature on Snapdragon).
+- The GPU thread split is **off by default**; re-enable it only for tests
+  (`EDEN_NX2_SPLIT=1` or `=2` in `env.txt`), and compare against a fresh
+  on-device `Nx2Profile` report.
 
 ## Files changed
 
@@ -106,5 +205,10 @@ any residual driver-side stall.
 | `src/android/app/src/main/jni/emu_window/emu_window.h` | `GetRawFrameRateHint()` declaration |
 | `src/video_core/renderer_vulkan/vk_present_manager.cpp` | Proprietary Adreno: present on the GPU thread (env-overridable) |
 | `src/video_core/renderer_vulkan/vk_master_semaphore.cpp` | HangWatch enabled by default on Android |
+| `src/video_core/gpu_split.cpp` | GPU thread split disabled by default (opt-in via `EDEN_NX2_SPLIT`) — round 2 |
+| `NX2_GPU_THREAD_SPLIT.md` | Split is now opt-in, with the on-device rationale |
+| `src/android/app/src/main/jni/android_env_file.cpp` | env.txt loader: logs the scanned path, strips the UTF-8 BOM, reports duplicate assignments — round 3 |
+| `dist/nx2_switches.txt` | Template no longer ships an active `EDEN_NX2_SPLIT=2` — round 3 |
+| `src/video_core/renderer_vulkan/vk_present_manager.cpp` | Async-present decision logged on custom drivers too — round 3 |
 | `docs/AYN_THOR_GPU_FIX.md` | This document |
 | `README.md` | "AYN Thor / Snapdragon devices" section |

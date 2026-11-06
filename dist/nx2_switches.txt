@@ -8,8 +8,11 @@
 # Restart the emulator after editing.
 
 # --- Performance tuning defaults for Switch 2 ---
-# Offload GPU method/macro execution to the back thread (SPLIT=2 delivers up to +54% FPS alone).
-EDEN_NX2_SPLIT=2
+# GPU thread split: disabled by default. The "+54% FPS" figure was a desktop benchmark; on device
+# (AYN Thor / Adreno 740) the split starved the GPU instead: GPU at 0%, slideshow gameplay. See
+# docs/AYN_THOR_GPU_FIX.md. Opt in for tests only: EDEN_NX2_SPLIT=1 (macros on the back thread)
+# or =2 (macros on the front thread).
+#EDEN_NX2_SPLIT=0
 
 # Batch GPU fence syncpoints to reduce host driver overhead and smooth frametimes.
 EDEN_NX2_FENCE_BATCH=1

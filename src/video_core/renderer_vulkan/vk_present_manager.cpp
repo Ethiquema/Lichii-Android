@@ -41,6 +41,8 @@ bool AllowAsyncPresent(const Device& device) {
 #ifdef __ANDROID__
     static const bool forced = std::getenv("EDEN_FORCE_ASYNC_PRESENT") != nullptr;
     if (forced) {
+        LOG_WARNING(Render_Vulkan,
+                    "Present thread: async presentation forced via EDEN_FORCE_ASYNC_PRESENT");
         return true;
     }
     if (device.GetDriverID() == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
@@ -50,6 +52,10 @@ bool AllowAsyncPresent(const Device& device) {
                     "override");
         return false;
     }
+    // Turnip-class custom drivers keep the upstream present thread. Log the decision once so a
+    // field logcat shows which presentation path is active (round 3, docs/AYN_THOR_GPU_FIX.md).
+    LOG_INFO(Render_Vulkan, "Present thread: async presentation active on this driver");
+    return true;
 #else
     (void)device;
 #endif

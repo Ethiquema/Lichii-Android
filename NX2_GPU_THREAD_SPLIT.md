@@ -1,5 +1,14 @@
 # Splitting the GPU thread
 
+> **Opt-in since 2026-11-07.** The split is now **disabled by default**
+> (`EDEN_NX2_SPLIT=0`); enable it with `EDEN_NX2_SPLIT=1` (macros on the back)
+> or `EDEN_NX2_SPLIT=2` (macros on the front). Reason: on device (AYN Thor /
+> Adreno 740) the split left the GPU back thread ~90% idle — `Nx2Profile`
+> reported `split wait 908-927 ms` or `other 886-897 ms` per ~10 s window
+> while draws received only 4-10 ms/s, i.e. a GPU at 0% and slideshow gameplay
+> (details in `docs/AYN_THOR_GPU_FIX.md`). The single-thread path below is the
+> proven default; re-evaluate the split only from fresh on-device profiles.
+
 Title 1 (Mario Kart World) is bound by one host thread, the GPU thread: ~100% busy while the
 host GPU is 20-40% busy and the game's own CPU thread mostly polls the counter. Per second of
 3D scenes (profiled, 2026-10-29): command processing and register writes ~335 ms, macros
