@@ -1,0 +1,8 @@
+Bundled GPU driver: Turnip (Mesa) T30 by Mr_Purple_666
+
+File:    turnip_mrpurple_T30-toasted.adpkg.zip
+Source:  https://github.com/MrPurple666/purple-turnip/releases/tag/vturnip_mrpurple_T30-toasted.adpkg
+SHA-256: f65b2d3353fd4aa7190bb5426b94468e99ffea7a58a830bc0c4651db89353227
+License: MIT (Mesa, https://docs.mesa3d.org/license.html)
+
+Installed and selected on first start on Adreno devices that have no driver chosen.

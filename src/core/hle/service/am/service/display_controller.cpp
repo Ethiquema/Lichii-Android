@@ -12,43 +12,42 @@
 
 namespace Service::AM {
 
+std::optional<ServiceFrameworkBase::FunctionInfoBase> IDisplayController::FindRequest(u32 key) {
+    static constexpr auto functions = CreateStaticMap(
+        FunctionInfo{0, nullptr, "GetLastForegroundCaptureImage"},
+        FunctionInfo{1, nullptr, "UpdateLastForegroundCaptureImage"},
+        FunctionInfo{2, nullptr, "GetLastApplicationCaptureImage"},
+        FunctionInfo{3, nullptr, "GetCallerAppletCaptureImage"},
+        FunctionInfo{4, nullptr, "UpdateCallerAppletCaptureImage"},
+        FunctionInfo{5, D<&IDisplayController::GetLastForegroundCaptureImageEx>, "GetLastForegroundCaptureImageEx"},
+        FunctionInfo{6, nullptr, "GetLastApplicationCaptureImageEx"},
+        FunctionInfo{7, D<&IDisplayController::GetCallerAppletCaptureImageEx>, "GetCallerAppletCaptureImageEx"},
+        FunctionInfo{8, D<&IDisplayController::TakeScreenShotOfOwnLayer>, "TakeScreenShotOfOwnLayer"},
+        FunctionInfo{9, nullptr, "CopyBetweenCaptureBuffers"},
+        FunctionInfo{10, nullptr, "AcquireLastApplicationCaptureBuffer"},
+        FunctionInfo{11, nullptr, "ReleaseLastApplicationCaptureBuffer"},
+        FunctionInfo{12, nullptr, "AcquireLastForegroundCaptureBuffer"},
+        FunctionInfo{13, nullptr, "ReleaseLastForegroundCaptureBuffer"},
+        FunctionInfo{14, nullptr, "AcquireCallerAppletCaptureBuffer"},
+        FunctionInfo{15, nullptr, "ReleaseCallerAppletCaptureBuffer"},
+        FunctionInfo{16, nullptr, "AcquireLastApplicationCaptureBufferEx"},
+        FunctionInfo{17, nullptr, "AcquireLastForegroundCaptureBufferEx"},
+        FunctionInfo{18, nullptr, "AcquireCallerAppletCaptureBufferEx"},
+        FunctionInfo{20, D<&IDisplayController::ClearCaptureBuffer>, "ClearCaptureBuffer"},
+        FunctionInfo{21, nullptr, "ClearAppletTransitionBuffer"},
+        FunctionInfo{22, D<&IDisplayController::AcquireLastApplicationCaptureSharedBuffer>, "AcquireLastApplicationCaptureSharedBuffer"},
+        FunctionInfo{23, D<&IDisplayController::ReleaseLastApplicationCaptureSharedBuffer>, "ReleaseLastApplicationCaptureSharedBuffer"},
+        FunctionInfo{24, D<&IDisplayController::AcquireLastForegroundCaptureSharedBuffer>, "AcquireLastForegroundCaptureSharedBuffer"},
+        FunctionInfo{25, D<&IDisplayController::ReleaseLastForegroundCaptureSharedBuffer>, "ReleaseLastForegroundCaptureSharedBuffer"},
+        FunctionInfo{26, D<&IDisplayController::AcquireCallerAppletCaptureSharedBuffer>, "AcquireCallerAppletCaptureSharedBuffer"},
+        FunctionInfo{27, D<&IDisplayController::ReleaseCallerAppletCaptureSharedBuffer>, "ReleaseCallerAppletCaptureSharedBuffer"},
+        FunctionInfo{28, nullptr, "TakeScreenShotOfOwnLayerEx"}
+    );
+    return HandlerTableGenerateWithFind(key, functions);
+}
+
 IDisplayController::IDisplayController(Core::System& system_, std::shared_ptr<Applet> applet_)
     : ServiceFramework{system_, "IDisplayController"}, applet(std::move(applet_)) {
-    // clang-format off
-    static const FunctionInfo functions[] = {
-        {0, &IDisplayController::StubReplyZeroed, "GetLastForegroundCaptureImage"},
-        {1, &IDisplayController::StubReplyZeroed, "UpdateLastForegroundCaptureImage"},
-        {2, &IDisplayController::StubReplyZeroed, "GetLastApplicationCaptureImage"},
-        {3, &IDisplayController::StubReplyZeroed, "GetCallerAppletCaptureImage"},
-        {4, &IDisplayController::StubReplyZeroed, "UpdateCallerAppletCaptureImage"},
-        {5, D<&IDisplayController::GetLastForegroundCaptureImageEx>, "GetLastForegroundCaptureImageEx"},
-        {6, &IDisplayController::StubReplyZeroed, "GetLastApplicationCaptureImageEx"},
-        {7, D<&IDisplayController::GetCallerAppletCaptureImageEx>, "GetCallerAppletCaptureImageEx"},
-        {8, D<&IDisplayController::TakeScreenShotOfOwnLayer>, "TakeScreenShotOfOwnLayer"},
-        {9, &IDisplayController::StubReplyZeroed, "CopyBetweenCaptureBuffers"},
-        {10, &IDisplayController::StubReplyEvent, "AcquireLastApplicationCaptureBuffer"},
-        {11, &IDisplayController::StubReplyZeroed, "ReleaseLastApplicationCaptureBuffer"},
-        {12, &IDisplayController::StubReplyEvent, "AcquireLastForegroundCaptureBuffer"},
-        {13, &IDisplayController::StubReplyZeroed, "ReleaseLastForegroundCaptureBuffer"},
-        {14, &IDisplayController::StubReplyEvent, "AcquireCallerAppletCaptureBuffer"},
-        {15, &IDisplayController::StubReplyZeroed, "ReleaseCallerAppletCaptureBuffer"},
-        {16, &IDisplayController::StubReplyEvent, "AcquireLastApplicationCaptureBufferEx"},
-        {17, &IDisplayController::StubReplyEvent, "AcquireLastForegroundCaptureBufferEx"},
-        {18, &IDisplayController::StubReplyEvent, "AcquireCallerAppletCaptureBufferEx"},
-        {19, &IDisplayController::StubReplyZeroed, "Unknown19"},
-        {20, D<&IDisplayController::ClearCaptureBuffer>, "ClearCaptureBuffer"},
-        {21, &IDisplayController::StubReplyZeroed, "ClearAppletTransitionBuffer"},
-        {22, D<&IDisplayController::AcquireLastApplicationCaptureSharedBuffer>, "AcquireLastApplicationCaptureSharedBuffer"},
-        {23, D<&IDisplayController::ReleaseLastApplicationCaptureSharedBuffer>, "ReleaseLastApplicationCaptureSharedBuffer"},
-        {24, D<&IDisplayController::AcquireLastForegroundCaptureSharedBuffer>, "AcquireLastForegroundCaptureSharedBuffer"},
-        {25, D<&IDisplayController::ReleaseLastForegroundCaptureSharedBuffer>, "ReleaseLastForegroundCaptureSharedBuffer"},
-        {26, D<&IDisplayController::AcquireCallerAppletCaptureSharedBuffer>, "AcquireCallerAppletCaptureSharedBuffer"},
-        {27, D<&IDisplayController::ReleaseCallerAppletCaptureSharedBuffer>, "ReleaseCallerAppletCaptureSharedBuffer"},
-        {28, &IDisplayController::StubReplyZeroed, "TakeScreenShotOfOwnLayerEx"},
-    };
-    // clang-format on
-
-    RegisterHandlers(functions);
 }
 
 IDisplayController::~IDisplayController() = default;

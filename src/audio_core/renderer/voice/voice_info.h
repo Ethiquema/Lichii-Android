@@ -126,8 +126,9 @@ public:
         /* 0x28 */ u64 context_size;
         /* 0x30 */ u32 loop_start;
         /* 0x34 */ u32 loop_end;
+        /* 0x38 */char unk38[0x2];
     };
-    static_assert(sizeof(WaveBufferInternal) == 0x38,
+    static_assert(sizeof(WaveBufferInternal) == 0x40,
                   "VoiceInfo::WaveBufferInternal has the wrong size!");
 
     struct BiquadFilterParameter {
@@ -178,9 +179,9 @@ public:
         /* 0x15C */ Flags flags;
         /* 0x15D */ char unk15D[0x1];
         /* 0x15E */ SrcQuality src_quality;
-        /* 0x15F */ char unk15F[0x11];
+        /* 0x15F */ char unk15F[0x9];
     };
-    static_assert(sizeof(InParameter) == 0x170, "VoiceInfo::InParameter has the wrong size!");
+    static_assert(sizeof(InParameter) == 0x188, "VoiceInfo::InParameter has the wrong size!");
 
     struct InParameter2 {
         /* 0x000 */ u32 id;

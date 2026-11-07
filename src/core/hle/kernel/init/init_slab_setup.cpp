@@ -86,7 +86,8 @@ constexpr size_t SlabCountKDeviceAddressSpace = 300;
 constexpr size_t SlabCountKSession = 1133;
 constexpr size_t SlabCountKLightSession = 100;
 constexpr size_t SlabCountKObjectName = 7;
-constexpr size_t SlabCountKResourceLimit = 5;
+// TODO(lizzie): divergence that allows ulauncher to work
+constexpr size_t SlabCountKResourceLimit = 5 + 1;
 constexpr size_t SlabCountKDebug = Core::Hardware::NUM_CPU_CORES;
 constexpr size_t SlabCountKIoPool = 1;
 constexpr size_t SlabCountKIoRegion = 6;

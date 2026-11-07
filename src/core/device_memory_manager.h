@@ -14,12 +14,16 @@
 #include <mutex>
 #include <vector>
 #include <span>
+#include <utility>
 
 #include "common/common_types.h"
 #include "common/range_mutex.h"
 #include "common/scratch_buffer.h"
-#include "common/thread_worker.h"
-#include "common/sparse_large_vector.h"
+#include "common/virtual_buffer.h"
+
+namespace Common {
+class HostMemory;
+}
 
 namespace Core {
 
@@ -46,6 +50,74 @@ class DeviceMemoryManager {
     using DeviceMethods = typename Traits::DeviceMethods;
 
 public:
+    class MirrorMapping {
+    public:
+        MirrorMapping() = default;
+        MirrorMapping(u8* mapped_base_, size_t mapped_size_, size_t data_offset_)
+            : mapped_base{mapped_base_}, mapped_size{mapped_size_}, data_offset{data_offset_} {}
+
+        MirrorMapping(const MirrorMapping&) = delete;
+        MirrorMapping& operator=(const MirrorMapping&) = delete;
+
+        MirrorMapping(MirrorMapping&& other) noexcept {
+            MoveFrom(other);
+        }
+
+        MirrorMapping& operator=(MirrorMapping&& other) noexcept {
+            if (this != &other) {
+                Release();
+                MoveFrom(other);
+            }
+            return *this;
+        }
+
+        ~MirrorMapping() {
+            Release();
+        }
+
+        [[nodiscard]] bool IsValid() const noexcept {
+            return mapped_base != nullptr;
+        }
+
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return IsValid();
+        }
+
+        [[nodiscard]] u8* Data() noexcept {
+            return mapped_base ? mapped_base + data_offset : nullptr;
+        }
+
+        [[nodiscard]] const u8* Data() const noexcept {
+            return mapped_base ? mapped_base + data_offset : nullptr;
+        }
+
+        [[nodiscard]] size_t Size() const noexcept {
+            return mapped_size >= data_offset ? mapped_size - data_offset : 0;
+        }
+
+    private:
+        void MoveFrom(MirrorMapping& other) noexcept {
+            mapped_base = std::exchange(other.mapped_base, nullptr);
+            mapped_size = std::exchange(other.mapped_size, 0);
+            data_offset = std::exchange(other.data_offset, 0);
+        }
+
+        void Release() noexcept {
+#if defined(__linux__)
+            if (mapped_base) {
+                munmap(mapped_base, mapped_size);
+            }
+#endif
+            mapped_base = nullptr;
+            mapped_size = 0;
+            data_offset = 0;
+        }
+
+        u8* mapped_base{};
+        size_t mapped_size{};
+        size_t data_offset{};
+    };
+
     DeviceMemoryManager(const DeviceMemory& device_memory);
     ~DeviceMemoryManager();
 
@@ -105,6 +177,34 @@ public:
         ApplyOpOnPAddr(address, buffer, operation);
     }
 
+    u8* GetPhysicalBase() noexcept {
+        return reinterpret_cast<u8*>(physical_base);
+    }
+
+    const u8* GetPhysicalBase() const noexcept {
+        return reinterpret_cast<const u8*>(physical_base);
+    }
+
+    size_t GetPhysicalSize() const noexcept {
+        return physical_size;
+    }
+
+    std::span<AHardwareBuffer* const> GetBackingHardwareBuffers() const noexcept {
+        return ahb_windows;
+    }
+
+    size_t GetBackingHardwareBufferWindowSize() const noexcept {
+        return ahb_window_size;
+    }
+
+    size_t GetBackingHardwareBufferBase() const noexcept {
+        return ahb_base;
+    }
+
+    bool IsBackingShared() const noexcept {
+        return backing_is_shared;
+    }
+
     PAddr GetPhysicalRawAddressFromDAddr(DAddr address) const {
         PAddr subbits = PAddr(address & page_mask);
         auto paddr = tracked_entries[(address >> page_bits)].compressed_physical_ptr;
@@ -128,6 +228,11 @@ public:
     void WriteBlock(DAddr address, const void* src_pointer, size_t size);
     void WriteBlockUnsafe(DAddr address, const void* src_pointer, size_t size);
 
+    [[nodiscard]] MirrorMapping CreateMirrorMapping(DAddr address, size_t size) const;
+    [[nodiscard]] u64 GetMappingVersion() const noexcept {
+        return mapping_version.load(std::memory_order_acquire);
+    }
+
     Asid RegisterProcess(Memory::Memory* memory);
     void UnregisterProcess(Asid id);
 
@@ -136,8 +241,18 @@ public:
     // New batch API to update multiple ranges with a single lock acquisition.
     void UpdatePagesCachedBatch(std::span<const std::pair<DAddr, size_t>> ranges, s32 delta);
 
-    /// Traps the next guest CPU read of these pages, to learn which GPU writes the CPU reads.
-    void ArmReadTraps(DAddr addr, size_t size);
+    const Common::HostMemory& GetHostMemory() const noexcept {
+        return host_memory;
+    }
+
+    /// Makes guest threads drop their cached read areas, after a GPU write to one of them.
+    void InvalidateReadAreas() {
+        read_area_generation.fetch_add(1, std::memory_order_release);
+    }
+
+    u64 ReadAreaGeneration() const {
+        return read_area_generation.load(std::memory_order_acquire);
+    }
 
 private:
     struct TranslationEntry {
@@ -207,7 +322,7 @@ private:
     std::unique_ptr<DeviceMemoryManagerAllocator<Traits>> impl;
 
     const uintptr_t physical_base;
-    const DeviceMemory* device_memory_ptr;
+    const Common::HostMemory& host_memory;
     DeviceInterface* device_inter;
     std::unique_ptr<Common::ThreadWorker> cold_hint_worker;
 
@@ -216,13 +331,14 @@ private:
         u32 continuity_tracker;
         u32 compressed_physical_ptr;
     };
-    Common::SparseLargeVector<u32> compressed_device_addr;
-    Common::SparseLargeVector<TrackedEntry> tracked_entries;
+    Common::VirtualBuffer<u32> compressed_device_addr;
+    Common::VirtualBuffer<TrackedEntry> tracked_entries;
 
     // Process memory interfaces
 
     std::deque<size_t> id_pool;
     std::deque<Memory::Memory*> registered_processes;
+    std::atomic<u64> read_area_generation{};
 
     // Memory protection management
 
@@ -238,8 +354,8 @@ private:
         return std::make_pair(asid, address);
     }
 
-    constexpr void InsertCPUBacking(size_t page_index, VAddr address, Asid asid) {
-        tracked_entries.GetUnchecked(page_index).cpu_backing_address = address | (asid.id << asid_start_bit);
+    void InsertCPUBacking(size_t page_index, VAddr address, Asid asid) {
+        tracked_entries[page_index].cpu_backing_address = address | (asid.id << asid_start_bit);
     }
 
     std::atomic<u64> translation_generation{1}; ///< Bumped by Map and Unmap
@@ -271,8 +387,10 @@ private:
         (1ULL << (device_virtual_bits - page_bits)) / subentries;
     using CachedPages = std::array<CounterEntry, num_counter_entries>;
     std::unique_ptr<CachedPages> cached_pages;
+    std::unique_ptr<CachedPages> texture_cached_pages;
     Common::RangeMutex counter_guard;
     std::mutex mapping_guard;
+    std::atomic<u64> mapping_version{1};
 
 
 };

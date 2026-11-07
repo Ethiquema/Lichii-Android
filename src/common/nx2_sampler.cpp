@@ -21,8 +21,9 @@
 #include <fmt/format.h>
 
 #include <windows.h>
-#include <tlhelp32.h>
+// windows.h first: the other two use its types.
 #include <dbghelp.h>
+#include <tlhelp32.h>
 
 namespace Nx2Sampler {
 namespace {
@@ -78,7 +79,7 @@ bool Matches(const std::string& thread_name, const std::vector<std::string>& pat
 std::vector<Target> FindThreads(const std::vector<std::string>& patterns) {
     using GetThreadDescriptionFn = HRESULT(WINAPI*)(HANDLE, PWSTR*);
     const auto get_description = reinterpret_cast<GetThreadDescriptionFn>(
-        GetProcAddress(GetModuleHandleA("KernelBase.dll"), "GetThreadDescription"));
+        reinterpret_cast<void*>(GetProcAddress(GetModuleHandleA("KernelBase.dll"), "GetThreadDescription")));
     std::vector<Target> targets;
     if (get_description == nullptr) {
         return targets;
@@ -104,8 +105,7 @@ std::vector<Target> FindThreads(const std::vector<std::string>& patterns) {
         std::string name;
         if (SUCCEEDED(get_description(handle, &wide)) && wide != nullptr) {
             char buffer[256]{};
-            WideCharToMultiByte(CP_UTF8, 0, wide, -1, buffer, sizeof(buffer) - 1, nullptr,
-                                nullptr);
+            WideCharToMultiByte(CP_UTF8, 0, wide, -1, buffer, sizeof(buffer) - 1, nullptr, nullptr);
             name = buffer;
             LocalFree(wide);
         }
@@ -126,7 +126,8 @@ unsigned Walk(CONTEXT context, std::array<DWORD64, MaxDepth>& frames) {
     while (depth < MaxDepth && context.Rip != 0) {
         frames[depth++] = context.Rip;
         DWORD64 image_base{};
-        const PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
+        const PRUNTIME_FUNCTION function =
+            RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
         if (function == nullptr) {
             // A leaf function (no unwind data): its return address is on top of the stack. JIT
             // code has none either; past the first frame, stop there.
@@ -156,10 +157,10 @@ struct Symbolizer {
             return;
         }
         const auto set_options =
-            reinterpret_cast<SymSetOptionsFn>(GetProcAddress(dbghelp, "SymSetOptions"));
+            reinterpret_cast<SymSetOptionsFn>(reinterpret_cast<void*>(GetProcAddress(dbghelp, "SymSetOptions")));
         const auto initialize =
-            reinterpret_cast<SymInitializeFn>(GetProcAddress(dbghelp, "SymInitialize"));
-        from_address = reinterpret_cast<SymFromAddrFn>(GetProcAddress(dbghelp, "SymFromAddr"));
+            reinterpret_cast<SymInitializeFn>(reinterpret_cast<void*>(GetProcAddress(dbghelp, "SymInitialize")));
+        from_address = reinterpret_cast<SymFromAddrFn>(reinterpret_cast<void*>(GetProcAddress(dbghelp, "SymFromAddr")));
         if (set_options == nullptr || initialize == nullptr || from_address == nullptr) {
             from_address = nullptr;
             return;
@@ -241,8 +242,8 @@ std::string Report(const std::vector<Target>& targets, const std::vector<Sample>
             text += fmt::format("-- {}\n", title);
             for (size_t i = 0; i < (std::min)(limit, sorted.size()); ++i) {
                 text += fmt::format("{:6} {:5.1f}% {}\n", sorted[i].first,
-                             100.0 * sorted[i].first / (std::max)(total, 1U),
-                             sorted[i].second.c_str());
+                                    100.0 * sorted[i].first / (std::max)(total, 1U),
+                                    sorted[i].second.c_str());
             }
         };
         text += fmt::format("=== thread \"{}\": {} samples\n", targets[thread].name, total);
@@ -273,8 +274,9 @@ std::string Report(const std::vector<Target>& targets, const std::vector<Sample>
                 offset = address - reinterpret_cast<DWORD64>(module);
             }
             const char* base = std::strrchr(module_path, '\\');
-            text += fmt::format("{:6} {}+{:#x} {}\n", hot[i].first, base != nullptr ? base + 1 : module_path,
-                                offset, symbolizer.Name(address));
+            text += fmt::format("{:6} {}+{:#x} {}\n", hot[i].first,
+                                base != nullptr ? base + 1 : module_path, offset,
+                                symbolizer.Name(address));
         }
         print("self <- caller", self_caller, 50);
         print("inclusive (on the stack)", inclusive, 90);

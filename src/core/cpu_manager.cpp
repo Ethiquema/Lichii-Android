@@ -169,11 +169,7 @@ void CpuManager::ShutdownThread(Kernel::KernelCore& kernel) {
     UNREACHABLE();
 }
 
-void CpuManager::RunThread(std::stop_token token, std::size_t core) {
-    static_assert(Hardware::NUM_CPU_CORES == Common::DkbCpuTrace::GuestCoreCount);
-    const Common::DkbCpuTrace::Registration cpu_trace{
-        is_multicore ? static_cast<Common::DkbCpuTrace::Role>(core)
-                     : Common::DkbCpuTrace::Role::GuestSingleCore};
+void CpuManager::RunThread(std::stop_token stop_token, std::size_t core) {
     /// Initialization
     system.RegisterCoreThread(core);
     std::string name = is_multicore ? ("CPUCore_" + std::to_string(core)) : std::string{"CPUThread"};
@@ -183,26 +179,19 @@ void CpuManager::RunThread(std::stop_token token, std::size_t core) {
     auto& data = core_data[core];
     data.host_context = Common::Fiber::ThreadToFiber();
 
-    // Cleanup
-    SCOPE_EXIT {
-        data.host_context->Exit();
-    };
-
     // Running
-    if (!gpu_barrier->Sync(token)) {
-        return;
+    gpu_barrier->arrive_and_wait();
+    if (!stop_token.stop_requested()) {
+        if (!is_async_gpu && !is_multicore) {
+            system.GPU().ObtainContext();
+        }
+        auto& kernel = system.Kernel();
+        auto& scheduler = *kernel.CurrentScheduler();
+        auto* thread = scheduler.GetSchedulerCurrentThread();
+        Kernel::SetCurrentThread(kernel, thread);
+        Common::Fiber::YieldTo(data.host_context, *thread->GetHostContext());
     }
-
-    if (!is_async_gpu && !is_multicore) {
-        system.GPU().ObtainContext();
-    }
-
-    auto& kernel = system.Kernel();
-    auto& scheduler = *kernel.CurrentScheduler();
-    auto* thread = scheduler.GetSchedulerCurrentThread();
-    Kernel::SetCurrentThread(kernel, thread);
-
-    Common::Fiber::YieldTo(data.host_context, *thread->GetHostContext());
+    data.host_context->Exit();
 }
 
 } // namespace Core

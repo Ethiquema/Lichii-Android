@@ -35,8 +35,6 @@ These options control dependencies.
 
 - `ENABLE_WEB_SERVICE` (ON) Enable multiplayer service
 - `ENABLE_WIFI_SCAN` (OFF) Enable WiFi scanning (requires iw on Linux) - experimental
-- `ENABLE_CUBEB` (ON) Enables the cubeb audio backend
-  - This option is subject for removal.
 - `YUZU_TESTS` (ON) Compile tests - requires Catch2
 - `ENABLE_LTO` (OFF) Enable link-time optimization
   - Not recommended on Windows
@@ -80,6 +78,9 @@ The following options are desktop only.
 - `ENABLE_OPENGL` (ON) Enable the OpenGL graphics backend
   - Unavailable on Windows/ARM64 and on Android
   - You probably shouldn't turn this off.
+- `ENABLE_SCARLETNX` (OFF) Enable the ScarletNX recompiler
+  - Requires Clang and LLVM's development files
+  - Needs multicore and fastmem
 
 ### Qt
 

@@ -45,16 +45,8 @@ public:
             if (placement != ThreadPlacement::Default) {
                 Common::SetCurrentThreadPriority(ThreadPriority::Low);
             }
-            switch (placement) {
-            case ThreadPlacement::Efficiency:
+            if (placement == ThreadPlacement::Efficiency) {
                 Common::SetCurrentThreadToEfficiencyCores();
-                break;
-            case ThreadPlacement::Background:
-                Common::SetCurrentThreadToBackgroundWork();
-                break;
-            default:
-                Common::SetCurrentThreadToAllCores();
-                break;
             }
             {
                 [[maybe_unused]] std::conditional_t<with_state, StateType, int> state{func()};
@@ -81,7 +73,10 @@ public:
                     ++work_done;
                 }
             }
-            ++workers_stopped;
+            {
+                std::scoped_lock lock{queue_mutex};
+                ++workers_stopped;
+            }
             wait_condition.notify_all();
         };
         threads.reserve(num_workers);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
@@ -13,11 +13,11 @@
 #include <bit>
 #include <numeric>
 #include <boost/intrusive/list.hpp>
+#include <boost/container/stable_vector.hpp>
 
 #include "common/common_types.h"
 #include "shader_recompiler/frontend/ir/condition.h"
 #include "shader_recompiler/frontend/ir/value.h"
-#include "shader_recompiler/object_pool.h"
 
 namespace Shader::IR {
 
@@ -30,7 +30,7 @@ public:
     using reverse_iterator = InstructionList::reverse_iterator;
     using const_reverse_iterator = InstructionList::const_reverse_iterator;
 
-    explicit Block(ObjectPool<Inst>& inst_pool_);
+    explicit Block(boost::container::stable_vector<Inst>& inst_pool_);
     ~Block();
 
     Block(const Block&) = delete;
@@ -87,6 +87,17 @@ public:
     }
     const Value& SsaRegValue(IR::Reg reg) const noexcept {
         return ssa_reg_values[RegIndex(reg)];
+    }
+
+    /// Number of other fixed-count variables the SSA pass stores in blocks
+    /// (predicates, the four condition flags and the indirect branch variable).
+    static constexpr size_t NUM_SSA_VALUES = NUM_USER_PREDS + 5;
+
+    void SetSsaValue(size_t index, const Value& value) noexcept {
+        ssa_values[index] = value;
+    }
+    const Value& SsaValue(size_t index) const noexcept {
+        return ssa_values[index];
     }
 
     void SsaSeal() noexcept {
@@ -170,7 +181,7 @@ public:
 
 private:
     /// Memory pool for instruction list
-    ObjectPool<Inst>* inst_pool;
+    boost::container::stable_vector<Inst>* inst_pool;
 
     /// List of instructions in this block
     InstructionList instructions;
@@ -182,6 +193,8 @@ private:
 
     /// Intrusively store the value of a register in the block.
     std::array<Value, NUM_REGS> ssa_reg_values;
+    /// Intrusively store the value of the other fixed-count SSA variables in the block.
+    std::array<Value, NUM_SSA_VALUES> ssa_values;
     /// Intrusively store if the block is sealed in the SSA pass.
     bool is_ssa_sealed{false};
 

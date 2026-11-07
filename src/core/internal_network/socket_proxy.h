@@ -25,73 +25,25 @@ public:
     bool AcceptsProxyPacket(const ProxyPacket& packet) override;
 
     void HandleProxyPacket(const ProxyPacket& packet) override;
-
-    std::optional<PollEvents> EmulatedPoll(PollEvents events) override;
-
     Errno Initialize(Domain domain, Type type, Protocol socket_protocol) override;
-
     Errno Close() override;
-
     std::pair<AcceptResult, Errno> Accept() override;
-
-    Errno Connect(SockAddrIn addr_in) override;
-
-    std::pair<SockAddrIn, Errno> GetPeerName() override;
-
-    std::pair<SockAddrIn, Errno> GetSockName() override;
-
-    Errno Bind(SockAddrIn addr) override;
-
+    Errno Connect(Network::SockAddrIn addr_in) override;
+    std::pair<Network::SockAddrIn, Errno> GetPeerName() override;
+    std::pair<Network::SockAddrIn, Errno> GetSockName() override;
+    Errno Bind(Network::SockAddrIn addr) override;
     Errno Listen(s32 backlog) override;
-
     Errno Shutdown(ShutdownHow how) override;
-
     std::pair<s32, Errno> Recv(int flags, std::span<u8> message) override;
-
-    std::pair<s32, Errno> RecvFrom(int flags, std::span<u8> message, SockAddrIn* addr) override;
-
-    std::pair<s32, Errno> RecvMsg(int flags, std::span<u8> message, SockAddrIn* addr,
-                                  u32& msg_flags) override;
-
-    std::pair<s32, Errno> ReceivePacket(int flags, std::span<u8> message, SockAddrIn* addr,
-                                        std::size_t max_length, u32& msg_flags);
-
+    std::pair<s32, Errno> RecvFrom(int flags, std::span<u8> message, Network::SockAddrIn* addr) override;
+    std::pair<s32, Errno> ReceivePacket(int flags, std::span<u8> message, Network::SockAddrIn* addr, std::size_t max_length);
     std::pair<s32, Errno> Send(std::span<const u8> message, int flags) override;
-
     void SendPacket(ProxyPacket& packet);
-
-    std::pair<s32, Errno> SendTo(u32 flags, std::span<const u8> message,
-                                 const SockAddrIn* addr) override;
-
-    Errno SetLinger(bool enable, u32 linger) override;
-
-    Errno SetReuseAddr(bool enable) override;
-
-    Errno SetBroadcast(bool enable) override;
-
-    Errno SetKeepAlive(bool enable) override;
-
-    Errno SetSndBuf(u32 value) override;
-
-    Errno SetRcvBuf(u32 value) override;
-
-    Errno SetSndTimeo(u32 value) override;
-
-    Errno SetRcvTimeo(u32 value) override;
-
-    Errno SetNoDelay(bool enable) override;
-
+    std::pair<s32, Errno> SendTo(u32 flags, std::span<const u8> message, const Network::SockAddrIn* addr) override;
+    bool GetNonBlock() override;
     Errno SetNonBlock(bool enable) override;
-
-    template <typename T>
-    Errno SetSockOpt(SOCKET fd, int option, T value);
-
+    Errno SetSockOpt(Network::SocketLevel level, Network::OptName option, std::span<const u8> value) override;
     std::pair<Errno, Errno> GetPendingError() override;
-
-    std::pair<bool, Errno> GetReuseAddr() override;
-
-    std::pair<bool, Errno> GetNoDelay() override;
-
     bool IsOpened() const override;
 
 private:
@@ -110,7 +62,7 @@ private:
     u32 send_timeout = 0;
     u32 receive_timeout = 0;
     bool is_bound = false;
-    SockAddrIn local_endpoint{};
+    Network::SockAddrIn local_endpoint{};
     bool blocking = true;
     std::queue<ProxyPacket> received_packets;
     std::size_t front_read_offset = 0; ///< Bytes of the front TCP packet that were already read

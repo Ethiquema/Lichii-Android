@@ -4,7 +4,12 @@
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <optional>
+
+#include <fmt/format.h>
+
+#include "common/logging.h"
 
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
@@ -61,6 +66,12 @@ void ResourcePool::Grow() {
     const size_t old_capacity = ticks.size();
     ticks.resize(old_capacity + grow_step);
     Allocate(old_capacity, old_capacity + grow_step);
+    if (static const bool trace = std::getenv("EDEN_NX2_TICK_TRACE") != nullptr; trace &&
+        (ticks.size() / grow_step) % 64 == 0) {
+        LOG_INFO(Render_Vulkan, "Tick trace: pool {} grew to {} (current {} gpu {})",
+                 fmt::ptr(this), ticks.size(), master_semaphore->CurrentTick(),
+                 master_semaphore->KnownGpuTick());
+    }
 }
 
 } // namespace Vulkan

@@ -48,7 +48,7 @@ static DescriptorBankInfo MakeBankInfo(std::span<const Shader::Info> infos) {
     DescriptorBankInfo bank;
     for (const Shader::Info& info : infos) {
         bank.uniform_buffers += Accumulate(info.constant_buffer_descriptors);
-        bank.storage_buffers += Accumulate(info.storage_buffers_descriptors);
+        bank.storage_buffers += Accumulate(info.storage_buffers_descriptors) + static_cast<u32>(Shader::UsesStorageBufferMappings(info));
         bank.texture_buffers += Accumulate(info.texture_buffer_descriptors);
         bank.image_buffers += Accumulate(info.image_buffer_descriptors);
         bank.textures += Accumulate(info.texture_descriptors);
@@ -99,9 +99,30 @@ VkDescriptorSet DescriptorAllocator::Commit() {
     const size_t index = CommitResource();
     return sets[index / SETS_GROW_RATE][index % SETS_GROW_RATE];
 }
-
+VkDescriptorSet DescriptorAllocator::CommitWithTracking(u64 current_frame, const void* descriptor_data) {
+     const size_t index = CommitResource();
+     const size_t group = index / SETS_GROW_RATE;
+     const size_t slot  = index % SETS_GROW_RATE;
+     set_states[group][slot].set               = sets[group][slot];
+     set_states[group][slot].last_update_frame = current_frame;
+     set_states[group][slot].last_data_ptr     = descriptor_data;
+     return set_states[group][slot].set;
+     }
+bool DescriptorAllocator::NeedsUpdate(VkDescriptorSet set, u64 current_frame, const void* descriptor_data) const {
+        for (const auto& group : set_states) {
+            for (const auto& st : group) {
+                if (st.set == set) {
+                    // Update if pointer changed or the set hasn't been updated this frame
+                    return st.last_data_ptr != descriptor_data || st.last_update_frame != current_frame;
+                }
+            }
+        }
+        return true;
+ }
 void DescriptorAllocator::Allocate(size_t begin, size_t end) {
-    sets.push_back(AllocateDescriptors(end - begin));
+    const size_t count = end - begin;
+    sets.push_back(AllocateDescriptors(count));
+    set_states.emplace_back(count); // create parallel state storage
 }
 
 vk::DescriptorSets DescriptorAllocator::AllocateDescriptors(size_t count) {
@@ -128,7 +149,7 @@ vk::DescriptorSets DescriptorAllocator::AllocateDescriptors(size_t count) {
     throw vk::Exception(VK_ERROR_OUT_OF_POOL_MEMORY);
 }
 
-DescriptorPool::DescriptorPool(const Device& device_, Scheduler& scheduler) {}
+DescriptorPool::DescriptorPool() = default;
 DescriptorPool::~DescriptorPool() = default;
 
 DescriptorAllocator DescriptorPool::Allocator(const Device& device, Scheduler& scheduler, VkDescriptorSetLayout layout, std::span<const Shader::Info> infos) {

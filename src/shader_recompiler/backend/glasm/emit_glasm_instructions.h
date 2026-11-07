@@ -29,6 +29,7 @@ void EmitReference(EmitContext&, const IR::Value& value);
 void EmitPhiMove(EmitContext& ctx, const IR::Value& phi, const IR::Value& value);
 void EmitJoin(EmitContext& ctx);
 void EmitDemoteToHelperInvocation(EmitContext& ctx);
+void EmitSubgroupBarrier(EmitContext& ctx);
 void EmitBarrier(EmitContext& ctx);
 void EmitWorkgroupMemoryBarrier(EmitContext& ctx);
 void EmitDeviceMemoryBarrier(EmitContext& ctx);
@@ -62,6 +63,8 @@ void EmitIsbeRead(EmitContext& ctx);
 void EmitIsbeWriteAttribute(EmitContext& ctx);
 void EmitIsbeWriteMapU8(EmitContext& ctx);
 void EmitIsbeWriteMapU32(EmitContext& ctx);
+void EmitTensorMulAdd(EmitContext& ctx, IR::Inst& inst, const IR::Value& a, const IR::Value& b,
+                      const IR::Value& c);
 void EmitSetFragColor(EmitContext& ctx, u32 index, u32 component, ScalarF32 value);
 void EmitSetSampleMask(EmitContext& ctx, ScalarS32 value);
 void EmitSetFragDepth(EmitContext& ctx, ScalarF32 value);

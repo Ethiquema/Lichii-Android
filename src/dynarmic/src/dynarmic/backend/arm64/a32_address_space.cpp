@@ -201,7 +201,7 @@ A32AddressSpace::A32AddressSpace(const A32::UserConfig& conf)
 
 void A32AddressSpace::GenerateIR(IR::Block& ir_block, IR::LocationDescriptor descriptor) const {
     ir_block.Reset(descriptor);
-    A32::Translate(ir_block, A32::LocationDescriptor{descriptor}, conf.callbacks, {conf.arch_version, conf.define_unpredictable_behaviour, conf.hook_hint_instructions});
+    A32::Translate(ir_block, A32::LocationDescriptor{descriptor}, conf);
     Optimization::Optimize(ir_block, conf, {});
 }
 
@@ -407,10 +407,8 @@ EmitConfig A32AddressSpace::GetEmitConfig() {
 
         .page_table_pointer = std::bit_cast<u64>(conf.page_table),
         .page_table_address_space_bits = 32,
-        .page_table_pointer_mask = conf.page_table_pointer_mask,
+        .page_table_pointer_mask_bits = conf.page_table_pointer_mask_bits,
         .page_table_log2_stride = conf.page_table_log2_stride,
-        .page_table_marked_bit = conf.page_table_marked_bit,
-        .page_table_sign_extension = conf.page_table_sign_extension,
         .silently_mirror_page_table = true,
         .absolute_offset_page_table = conf.absolute_offset_page_table,
         .detect_misaligned_access_via_page_table = conf.detect_misaligned_access_via_page_table,

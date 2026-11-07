@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: 2017 Citra Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -60,7 +63,11 @@ private:
     std::size_t current_index{0};
     /// Stores an hour of historical frametime data useful for processing and tracking performance
     /// regressions with code changes.
+#ifdef __OPENORBIS__
+    std::array<double, 60> perf_history{};
+#else
     std::array<double, 216000> perf_history{};
+#endif
 
     /// Point when the cumulative counters were reset
     Clock::time_point reset_point = Clock::now();

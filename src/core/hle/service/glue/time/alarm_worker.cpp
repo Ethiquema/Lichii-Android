@@ -25,16 +25,11 @@ AlarmWorker::~AlarmWorker() {
 
 void AlarmWorker::Initialize(std::shared_ptr<Service::PSC::Time::ServiceManager> time_m) {
     m_time_m = std::move(time_m);
-
     m_timer_event = m_ctx.CreateEvent("Glue:AlarmWorker:TimerEvent");
-    m_timer_timing_event = Core::Timing::CreateEvent(
-        "Glue:AlarmWorker::AlarmTimer",
-        [this](s64 time,
-               std::chrono::nanoseconds ns_late) -> std::optional<std::chrono::nanoseconds> {
-            m_timer_event->Signal(m_system.Kernel());
-            return std::nullopt;
-        });
-
+    m_timer_timing_event = m_system.CreateTimingEvent("Glue:AlarmWorker::AlarmTimer", [this](s64 time, std::chrono::nanoseconds ns_late) -> std::optional<std::chrono::nanoseconds> {
+        m_timer_event->Signal(m_system.Kernel());
+        return std::nullopt;
+    });
     AttachToClosestAlarmEvent();
 }
 

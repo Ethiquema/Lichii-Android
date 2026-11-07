@@ -10,9 +10,7 @@
 #include <condition_variable>
 #include <functional>
 #include <mutex>
-#include <span>
-
-#include <boost/container/small_vector.hpp>
+#include <shared_mutex>
 
 #include "common/common_types.h"
 #include "common/thread_worker.h"
@@ -38,6 +36,7 @@ class Scheduler;
 class ComputePipeline {
 public:
     explicit ComputePipeline(const Device& device, Scheduler& scheduler, vk::PipelineCache& pipeline_cache,
+                             std::shared_mutex& pipeline_cache_mutex,
                              DescriptorPool& descriptor_pool,
                              GuestDescriptorQueue& guest_descriptor_queue,
                              DescriptorBufferRing& descriptor_buffer_ring,
@@ -66,7 +65,13 @@ public:
         return shader_hash;
     }
 
-    /// Storage images written by the last configured dispatch
+    /// Native constant buffer pointer slots taken as storage buffers, and the ones left out
+    /// because they held null when this pipeline was built (rebuilt once one is filled).
+    std::vector<u64> pointer_slots;
+    std::vector<u64> null_pointer_slots;
+    u32 pointer_rebuilds{};
+
+    /// Storage images written by the last configured dispatch, kept while a frame dump runs.
     [[nodiscard]] std::span<const VideoCommon::ImageViewId> WrittenImages() const noexcept {
         return written_images;
     }
@@ -91,6 +96,7 @@ private:
 
     const Device& device;
     vk::PipelineCache& pipeline_cache;
+    std::shared_mutex& pipeline_cache_mutex;
     GuestDescriptorQueue& guest_descriptor_queue;
     DescriptorBufferRing& descriptor_buffer_ring;
     Shader::Info info;

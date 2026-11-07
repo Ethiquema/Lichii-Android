@@ -27,7 +27,20 @@ namespace Service::AM {
 
 namespace {
 
+// Switch 2 titles ask for the Switch 1 applets by new ids.
+AppletId FromNx2AppletId(AppletId applet_id) {
+    switch (applet_id) {
+    case AppletId::SoftwareKeyboardNx2:
+        return AppletId::SoftwareKeyboard;
+    case AppletId::ControllerNx2:
+        return AppletId::Controller;
+    default:
+        return applet_id;
+    }
+}
+
 bool ShouldCreateGuestApplet(AppletId applet_id) {
+    applet_id = GetFrontendAppletId(applet_id);
 #define X(Name, name)                                                                              \
     if (applet_id == AppletId::Name &&                                                             \
         Settings::values.name##_applet_mode.GetValue() != Settings::AppletMode::LLE) {             \
@@ -60,6 +73,7 @@ AppletProgramId AppletIdToProgramId(AppletId applet_id) {
     case AppletId::OverlayDisplay:
         return AppletProgramId::OverlayDisplay;
     case AppletId::QLaunch:
+    case AppletId::UlauncherUmenu: //reuses same id as Qlaunch
         return AppletProgramId::QLaunch;
     case AppletId::Starter:
         return AppletProgramId::Starter;
@@ -176,7 +190,12 @@ std::shared_ptr<ILibraryAppletAccessor> CreateFrontendApplet(Core::System& syste
                                                              std::shared_ptr<Applet> caller_applet,
                                                              AppletId applet_id,
                                                              LibraryAppletMode mode) {
-    const auto program_id = static_cast<u64>(AppletIdToProgramId(applet_id));
+    const auto frontend_id = GetFrontendAppletId(applet_id);
+    const auto program_id = static_cast<u64>(AppletIdToProgramId(frontend_id));
+    if (frontend_id != applet_id) {
+        LOG_INFO(Service_AM, "Using frontend applet {:08X} for applet_id={:08X}",
+                 static_cast<u32>(frontend_id), static_cast<u32>(applet_id));
+    }
 
     auto process = std::make_unique<Process>(system);
     auto applet = std::make_shared<Applet>(system, std::move(process), false);
@@ -188,7 +207,7 @@ std::shared_ptr<ILibraryAppletAccessor> CreateFrontendApplet(Core::System& syste
     auto storage = std::make_shared<AppletDataBroker>(system);
     applet->caller_applet = caller_applet;
     applet->caller_applet_broker = storage;
-    applet->frontend = system.GetFrontendAppletHolder().GetApplet(applet, applet_id, mode);
+    applet->frontend = system.GetFrontendAppletHolder().GetApplet(applet, frontend_id, mode);
     {
         std::scoped_lock lk{caller_applet->lock};
         caller_applet->child_applets.push_back(applet);
@@ -221,6 +240,9 @@ Result ILibraryAppletCreator::CreateLibraryApplet(
     LibraryAppletMode library_applet_mode) {
     LOG_DEBUG(Service_AM, "called with applet_id={} applet_mode={}", applet_id,
               library_applet_mode);
+    applet_id = FromNx2AppletId(applet_id);
+
+    applet_id = NormalizeAppletId(applet_id);
 
     applet_id = NormalizeAppletId(applet_id);
 
@@ -249,6 +271,9 @@ Result ILibraryAppletCreator::CreateLibraryAppletEx(
     LibraryAppletMode library_applet_mode, u64 thread_id) {
     LOG_DEBUG(Service_AM, "called with applet_id={} applet_mode={} thread_id={}", applet_id,
               library_applet_mode, thread_id);
+    applet_id = FromNx2AppletId(applet_id);
+
+    applet_id = NormalizeAppletId(applet_id);
 
     applet_id = NormalizeAppletId(applet_id);
 

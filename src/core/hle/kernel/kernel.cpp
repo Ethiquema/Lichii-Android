@@ -81,7 +81,10 @@ struct KernelCore::Impl {
     // so it will be statically given a TLS slot anyways.
     static thread_local ThreadLocalData tls_data;
 
-    explicit Impl(Core::System& system_, KernelCore& kernel_) : system{system_} {
+    explicit Impl(Core::System& system_, KernelCore& kernel_)
+        : worker_task_manager{kernel_}
+        , system{system_}
+    {
         tls_data.lock = true;
     }
 
@@ -121,13 +124,13 @@ struct KernelCore::Impl {
     }
 
     void TerminateAllProcesses() {
-        std::scoped_lock lk{process_list_lock};
-        for (auto& process : process_list) {
-            process->Terminate(system.Kernel());
-            process->Close(system.Kernel());
-            process = nullptr;
+        auto& kernel = system.Kernel();
+        // Applet cleanup can remove processes while termination waits for its threads.
+        auto processes = kernel.GetProcessList();
+        for (auto& process : processes) {
+            process->Terminate(kernel);
+            kernel.RemoveProcess(process.GetPointerUnsafe());
         }
-        process_list.clear();
     }
 
     void Shutdown(KernelCore& kernel) {
@@ -270,7 +273,7 @@ struct KernelCore::Impl {
     }
 
     void InitializePreemption(KernelCore& kernel) {
-        preemption_event = Core::Timing::CreateEvent("PreemptionCallback", [this, &kernel](s64 time, std::chrono::nanoseconds) -> std::optional<std::chrono::nanoseconds> {
+        preemption_event = system.CreateTimingEvent("PreemptionCallback", [this, &kernel](s64 time, std::chrono::nanoseconds) -> std::optional<std::chrono::nanoseconds> {
             {
                 KScopedSchedulerLock lock(kernel);
                 global_scheduler_context->PreemptThreads(kernel);
@@ -983,12 +986,16 @@ Kernel::KHardwareTimer& KernelCore::HardwareTimer() {
     return *impl->hardware_timer;
 }
 
-KAutoObjectWithListContainer& KernelCore::ObjectListContainer() {
-    return *impl->global_object_list_container;
+KAutoObjectWithListContainer* KernelCore::ObjectListContainer() {
+    if (!impl->global_object_list_container)
+        return nullptr;
+    return std::addressof(*impl->global_object_list_container);
 }
 
-const KAutoObjectWithListContainer& KernelCore::ObjectListContainer() const {
-    return *impl->global_object_list_container;
+const KAutoObjectWithListContainer* KernelCore::ObjectListContainer() const {
+    if (!impl->global_object_list_container)
+        return nullptr;
+    return std::addressof(*impl->global_object_list_container);
 }
 
 void KernelCore::PrepareReschedule(std::size_t id) {
@@ -1017,16 +1024,10 @@ void KernelCore::UnregisterInUseObject(KAutoObject* object) {
 
 void KernelCore::RunServer(std::unique_ptr<Service::ServerManager>&& server_manager) {
     auto* manager = server_manager.get();
-
-    {
+    if (!impl->is_shutting_down) {
         std::scoped_lock lk{impl->server_lock};
-        if (impl->is_shutting_down) {
-            return;
-        }
-
         impl->server_managers.emplace_back(std::move(server_manager));
     }
-
     manager->LoopProcess();
 }
 
@@ -1271,6 +1272,10 @@ void KernelCore::SuspendEmulation(bool suspended) {
 }
 
 void KernelCore::ShutdownCores() {
+    // Notify shutdown (pre-emptively)
+    for (auto& sm : impl->server_managers) {
+        sm->NotifyShutdown();
+    }
     impl->TerminateAllProcesses();
     KScopedSchedulerLock lk{*this};
     for (auto* thread : impl->shutdown_threads)

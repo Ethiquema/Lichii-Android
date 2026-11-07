@@ -34,26 +34,19 @@ void AudioRenderer::Start() {
 
     mailbox.Send(Direction::DSP, Message::InitializeOK);
     if (mailbox.Receive(Direction::Host) != Message::InitializeOK) {
-        LOG_ERROR(Service_Audio, "Host Audio Renderer -- Failed to receive shutdown "
-                                 "message response from ADSP!");
-        return;
+        LOG_ERROR(Service_Audio, "Host Audio Renderer -- Failed to receive shutdown message response from ADSP!");
     }
-    running = true;
 }
 
 void AudioRenderer::Stop() {
-    if (!running) {
-        return;
+    if (main_thread.joinable()) {
+        main_thread.request_stop();
+        mailbox.Send(Direction::DSP, Message::Shutdown);
+        if (mailbox.Receive(Direction::Host, main_thread.get_stop_token()) != Message::Shutdown) {
+            LOG_ERROR(Service_Audio, "Host Audio Renderer -- Failed to receive shutdown message response from ADSP!");
+        }
+        main_thread.join();
     }
-
-    mailbox.Send(Direction::DSP, Message::Shutdown);
-    if (mailbox.Receive(Direction::Host) != Message::Shutdown) {
-        LOG_ERROR(Service_Audio, "Host Audio Renderer -- Failed to receive shutdown "
-                                 "message response from ADSP!");
-    }
-    main_thread.request_stop();
-    main_thread.join();
-
     for (auto& stream : streams) {
         if (stream) {
             stream->Stop();
@@ -61,7 +54,6 @@ void AudioRenderer::Stop() {
             stream = nullptr;
         }
     }
-    running = false;
 }
 
 void AudioRenderer::Signal() {
@@ -69,13 +61,12 @@ void AudioRenderer::Signal() {
     Send(Direction::DSP, Message::Render);
 }
 
-void AudioRenderer::Wait() {
-    auto msg = Receive(Direction::Host);
+void AudioRenderer::Wait(std::stop_token stop_token) {
+    auto msg = mailbox.Receive(Direction::Host, stop_token);
     if (msg != Message::RenderResponse) {
         LOG_ERROR(Service_Audio,
-                  "Did not receive the expected render response from the AudioRenderer! Expected "
-                  "{}, got {}",
-                  Message::RenderResponse, msg);
+            "Did not receive the expected render response from the AudioRenderer! Expected "
+            "{}, got {}", Message::RenderResponse, msg);
     }
     PostDSPClearCommandBuffer();
 }
@@ -147,7 +138,9 @@ void AudioRenderer::Main(std::stop_token stop_token) {
     constexpr u64 max_process_time{2'304'000ULL};
 
     while (!stop_token.stop_requested()) {
-        auto msg{mailbox.Receive(Direction::DSP)};
+        auto msg = mailbox.Receive(Direction::DSP, stop_token);
+        if (stop_token.stop_requested())
+            break;
         switch (msg) {
         case Message::Shutdown:
             mailbox.Send(Direction::Host, Message::Shutdown);

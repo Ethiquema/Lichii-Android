@@ -13,9 +13,11 @@
 
 namespace Vulkan {
 
-std::shared_ptr<Common::DynamicLibrary> OpenLibrary(
-    [[maybe_unused]] Core::Frontend::GraphicsContext* context) {
+std::shared_ptr<Common::DynamicLibrary> OpenLibrary([[maybe_unused]] Core::Frontend::GraphicsContext* context) {
     LOG_DEBUG(Render_Vulkan, "Looking for a Vulkan library");
+#if defined(__OPENORBIS__)
+    return std::make_shared<Common::DynamicLibrary>();
+#else
 #if defined(__ANDROID__) && defined(ARCHITECTURE_arm64)
     // Android manages its Vulkan driver from the frontend.
     return context->GetDriverLibrary();
@@ -24,10 +26,7 @@ std::shared_ptr<Common::DynamicLibrary> OpenLibrary(
 #ifdef __APPLE__
     const auto libvulkan_filename =
         Common::FS::GetBundleDirectory() / "Contents/Frameworks/libvulkan.1.dylib";
-    const auto libmoltenvk_filename =
-        Common::FS::GetBundleDirectory() / "Contents/Frameworks/libMoltenVK.dylib";
-    const char* library_paths[] = {std::getenv("LIBVULKAN_PATH"), libvulkan_filename.c_str(),
-                                   libmoltenvk_filename.c_str()};
+    const char* library_paths[] = {std::getenv("LIBVULKAN_PATH"), libvulkan_filename.c_str()};
     // Check if a path to a specific Vulkan library has been specified.
     for (const auto& library_path : library_paths) {
         if (library_path && library->Open(library_path)) {
@@ -45,6 +44,7 @@ std::shared_ptr<Common::DynamicLibrary> OpenLibrary(
     }
 #endif
     return library;
+#endif
 #endif
 }
 

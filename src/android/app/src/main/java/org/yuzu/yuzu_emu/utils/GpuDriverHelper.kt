@@ -10,10 +10,12 @@ import android.graphics.SurfaceTexture
 import android.net.Uri
 import android.os.Build
 import android.view.Surface
+import androidx.preference.PreferenceManager
 import java.io.File
 import java.io.IOException
 import org.yuzu.yuzu_emu.NativeLibrary
 import org.yuzu.yuzu_emu.YuzuApplication
+import org.yuzu.yuzu_emu.features.settings.model.Settings
 import org.yuzu.yuzu_emu.features.settings.model.StringSetting
 import java.io.FileNotFoundException
 import java.util.zip.ZipException
@@ -21,6 +23,7 @@ import java.util.zip.ZipFile
 
 object GpuDriverHelper {
     private const val META_JSON_FILENAME = "meta.json"
+    private const val BUNDLED_DRIVER_ASSET = "turnip_mrpurple_T30-toasted.adpkg.zip"
     private var fileRedirectionPath: String? = null
     var driverInstallationPath: String? = null
     internal var hookLibPath: String? = null
@@ -57,6 +60,50 @@ object GpuDriverHelper {
             installedCustomDriverData.libraryName,
             fileRedirectionPath
         )
+    }
+
+    /**
+     * Copies the driver shipped in the APK assets into driver storage once per bundled version
+     * and selects it when no driver has been chosen yet.
+     */
+    fun installBundledDriver() {
+        val preferences = PreferenceManager.getDefaultSharedPreferences(YuzuApplication.appContext)
+        val previous = preferences.getString(Settings.PREF_BUNDLED_DRIVER, null)
+        if (previous == BUNDLED_DRIVER_ASSET || !isAdrenoGpu()) {
+            return
+        }
+
+        initializeDirectories()
+        val driverFile = File(driverStoragePath + BUNDLED_DRIVER_ASSET)
+        try {
+            val assets = YuzuApplication.appContext.assets
+            assets.open("gpu_drivers/$BUNDLED_DRIVER_ASSET").use { input ->
+                driverFile.outputStream().use { input.copyTo(it) }
+            }
+        } catch (e: IOException) {
+            Log.error("[GpuDriverHelper] Failed to copy bundled driver: ${e.message}")
+            driverFile.delete()
+            return
+        }
+
+        val metadata = getMetadataFromZip(driverFile)
+        if (metadata.name == null || metadata.minApi > Build.VERSION.SDK_INT) {
+            driverFile.delete()
+        } else {
+            val currentPath = StringSetting.DRIVER_PATH.getString(needsGlobal = true)
+            // Only take over from the system driver the first time; afterwards, only replace
+            // an older bundled driver that is still selected.
+            val shouldSelect = if (previous == null) {
+                currentPath.isEmpty()
+            } else {
+                currentPath == driverStoragePath + previous
+            }
+            if (shouldSelect) {
+                StringSetting.DRIVER_PATH.setString(driverFile.path)
+                NativeConfig.saveGlobalConfig()
+            }
+        }
+        preferences.edit().putString(Settings.PREF_BUNDLED_DRIVER, BUNDLED_DRIVER_ASSET).apply()
     }
 
     fun getDrivers(): MutableList<Pair<String, GpuDriverMetadata>> {

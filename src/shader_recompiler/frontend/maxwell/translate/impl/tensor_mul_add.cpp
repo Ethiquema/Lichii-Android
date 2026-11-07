@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include <cstdlib>
-
 #include "shader_recompiler/frontend/maxwell/translate/impl/impl.h"
 
 namespace Shader::Maxwell {
 
+// Not a Maxwell instruction: the Ampere lowering emits it for HMMA.1688/.16816.F16 when the
+// compact software form is asked for (bit 48). Bit 49 selects K = 8 instead of K = 16.
 void TranslatorVisitor::TENSOR_MUL_ADD(u64 insn) {
     union {
         u64 raw;

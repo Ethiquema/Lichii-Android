@@ -11,6 +11,7 @@
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "common/common_types.h"
@@ -105,8 +106,10 @@ struct EmittedBlockInfo {
     CodePtr entry_point;
     std::size_t size;
     std::vector<Relocation> relocations;
-    ::Common::unordered_map<IR::LocationDescriptor, std::vector<BlockRelocation>> block_relocations;
-    ::Common::unordered_map<std::ptrdiff_t, FastmemPatchInfo> fastmem_patch_info;
+    // Plain vectors: a block has only a few of each, and a hash map's smallest table costs
+    // more than the emitted code itself.
+    std::vector<std::pair<IR::LocationDescriptor, std::vector<BlockRelocation>>> block_relocations;
+    std::vector<std::pair<std::ptrdiff_t, FastmemPatchInfo>> fastmem_patch_info;
 };
 
 struct EmitConfig {
@@ -128,10 +131,8 @@ struct EmitConfig {
     // Page table
     u64 page_table_pointer;
     std::size_t page_table_address_space_bits;
-    u64 page_table_pointer_mask;
+    int page_table_pointer_mask_bits;
     std::size_t page_table_log2_stride;
-    std::optional<std::uint8_t> page_table_marked_bit;
-    std::optional<std::uint8_t> page_table_sign_extension;
     bool silently_mirror_page_table;
     bool absolute_offset_page_table;
     u8 detect_misaligned_access_via_page_table;

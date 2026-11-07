@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -215,6 +218,22 @@ void EmitGetAttribute(EmitContext& ctx, IR::Inst& inst, IR::Attribute attr,
         const bool is_array{IsInputArray(ctx.stage)};
         const auto input_decorator{is_array ? fmt::format("gl_in[{}].", vertex) : ""};
         ctx.AddF32("{}={}{}.{};", inst, input_decorator, ctx.position_name, swizzle);
+        break;
+    }
+    case IR::Attribute::ClipDistance0:
+    case IR::Attribute::ClipDistance1:
+    case IR::Attribute::ClipDistance2:
+    case IR::Attribute::ClipDistance3:
+    case IR::Attribute::ClipDistance4:
+    case IR::Attribute::ClipDistance5:
+    case IR::Attribute::ClipDistance6:
+    case IR::Attribute::ClipDistance7: {
+        const u32 index{static_cast<u32>(attr) - static_cast<u32>(IR::Attribute::ClipDistance0)};
+        if (IsInputArray(ctx.stage)) {
+            ctx.AddF32("{}=gl_in[{}].gl_ClipDistance[{}];", inst, vertex, index);
+        } else {
+            ctx.AddF32("{}=gl_ClipDistance[{}];", inst, index);
+        }
         break;
     }
     case IR::Attribute::PointSpriteS:

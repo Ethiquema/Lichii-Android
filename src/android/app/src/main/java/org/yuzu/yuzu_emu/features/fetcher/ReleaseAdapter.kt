@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package org.yuzu.yuzu_emu.features.fetcher
@@ -171,7 +171,7 @@ class ReleaseAdapter(
                     iconTint = ColorStateList.valueOf(
                         MaterialColors.getColor(
                             this,
-                            com.google.android.material.R.attr.colorPrimary
+                            androidx.appcompat.R.attr.colorPrimary
                         )
                     )
 

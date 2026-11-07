@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "common/logging.h"
+#include "common/settings.h"
 #include "core/internal_network/emu_net_state.h"
 #include "core/internal_network/network.h"
 #include "core/internal_network/network_interface.h"
+#include "network/network.h"
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -14,7 +16,6 @@
 #pragma comment(lib, "wlanapi.lib")
 #endif
 #endif
-#include <common/settings.h>
 
 #include <mutex>
 
@@ -53,7 +54,7 @@ void RefreshFromHost() {
         return;
     }
 
-    st.wifi_enabled = !Settings::values.airplane_mode.GetValue();
+    st.wifi_enabled = (!Settings::values.airplane_mode.GetValue() || Network::IsConnectedToAnyRoom());
     st.ethernet_enabled = sel->kind == HostAdapterKind::Ethernet;
 
     st.connected = true;

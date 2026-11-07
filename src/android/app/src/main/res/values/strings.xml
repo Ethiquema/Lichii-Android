@@ -105,6 +105,8 @@
     <string name="use_sync_core_description">Synchronize the core tick speed to the maximum speed percentage to improve performance without altering the game\'s actual speed.</string>
     <string name="cpuopt_unsafe_host_mmu">Enable Host MMU Emulation</string>
     <string name="cpuopt_unsafe_host_mmu_description">This optimization speeds up memory accesses by the guest program. Enabling it causes guest memory reads/writes to be done directly into memory and make use of Host\'s MMU. Disabling this forces all memory accesses to use Software MMU Emulation.</string>
+    <string name="relocate_36bit_address_space">Run 36-bit games natively</string>
+    <string name="relocate_36bit_address_space_description">Gives games built for the 36-bit address space the 39-bit layout so they can run with NCE instead of the JIT. Experimental: a game that relies on 36-bit addresses can crash.</string>
     <string name="debug_knobs">Debug knobs</string>
     <string name="debug_knobs_description">For development use only.</string>
     <string name="debug_knobs_hint">0 to 65535</string>
@@ -244,6 +246,10 @@
     <string name="update_install_failed">Failed to install update: %1$s</string>
     <string name="home_search">Search</string>
     <string name="home_settings">Settings</string>
+    <string name="home_sort">Sort</string>
+    <string name="home_layout">Layout</string>
+    <string name="home_start">Start</string>
+    <string name="home_clear">Clear</string>
     <string name="empty_gamelist">No files were found or no game directory has been selected yet.</string>
     <string name="manage_game_folders">Manage game folders</string>
     <string name="select_games_folder_description">Allows Eden to populate the games list</string>
@@ -346,7 +352,7 @@
     <string name="frame_gen_flow_scale_auto">Match motion estimation to the game</string>
     <string name="frame_gen_flow_scale_auto_description">Estimate motion at the resolution the game actually renders instead of the upscaled output. Costs nothing in accuracy, since upscaling adds no motion detail.</string>
     <string name="frame_gen_flow_scale">Motion estimation resolution</string>
-    <string name="frame_gen_flow_scale_description">Resolution of the optical flow pass, as a fraction of the output. Lowering it is the cheapest way to reclaim performance.</string>
+    <string name="frame_gen_flow_scale_description">Resolution of the optical flow pass, as a fraction of the game\'s render resolution. Lowering it is the cheapest way to reclaim performance.</string>
     <string name="frame_gen_unsupported">Frame generation unavailable</string>
     <string name="frame_gen_unsupported_description">This GPU driver lacks the Vulkan memory model or half precision (float16) support that the Lossless Scaling shaders require.</string>
     <string name="lossless_scaling_setup_description">Optional. Provide your own Lossless.dll to enable frame generation later</string>
@@ -405,7 +411,7 @@
     <string name="firmware_installed_failure_description">Make sure the firmware nca files are at the root of the zip and try again.</string>
     <string name="firmware_uninstalled_failure">Firmware uninstallation failed</string>
     <string name="share_log">Share debug logs</string>
-    <string name="share_log_description">Share Eden\'s log file to debug issues</string>
+    <string name="share_log_description">Share a report with your phone details and the logs</string>
     <string name="share_log_missing">No log file found</string>
     <string name="share_gpu_log">Share GPU logs</string>
     <string name="share_gpu_log_description">Share Eden\'s GPU log file to debug graphics issues</string>
@@ -457,6 +463,89 @@
     <string name="error_keys_copy_failed">One or more keys failed to copy.</string>
     <string name="error_keys_invalid_filename">Verify your keys file has a .keys extension and try again.</string>
     <string name="error_keys_failed_init">Keys failed to initialize. Check that your dumping tools are up to date and re-dump keys.</string>
+
+    <!-- Loose ExeFS (Switch 2) launch strings -->
+    <string name="launch_exefs_folder">Launch ExeFS game folder</string>
+    <string name="exefs_folder_no_main">No exefs/main found in the selected folder or its subfolders</string>
+    <string name="exefs_folder_choose">Choose which ExeFS to launch</string>
+    <string name="exefs_folder_bad_path">Could not resolve the selected folder to a storage path</string>
+    <string name="exefs_folder_needs_permission">Grant all files access, then select the folder again</string>
+
+    <!-- Switch 2 readiness check strings -->
+    <string name="switch2_readiness">Switch 2 readiness check</string>
+    <string name="switch2_readiness_description">Checks this device and your settings for running Switch 2 games</string>
+    <string name="readiness_run_again">Run again</string>
+    <string name="readiness_running">Running checks…</string>
+    <string name="readiness_summary">%1$d passed, %2$d warnings, %3$d failed</string>
+    <string name="readiness_status_pass">Pass</string>
+    <string name="readiness_status_warning">Warning</string>
+    <string name="readiness_status_fail">Fail</string>
+    <string name="readiness_status_info">Info</string>
+    <string name="readiness_open_driver_manager">Open driver manager</string>
+    <string name="readiness_open_settings">Open settings</string>
+    <string name="readiness_open_game_folders">Open game folders</string>
+    <string name="readiness_grant_access">Grant access</string>
+    <string name="readiness_open_app_settings">Open app settings</string>
+    <string name="readiness_device">Device</string>
+    <string name="readiness_device_ok">64-bit ARM, Android %1$s</string>
+    <string name="readiness_device_not_arm64">Switch 2 games need a 64-bit ARM (arm64-v8a) device</string>
+    <string name="readiness_device_old_android">Switch 2 games need Android 13 or newer; this device runs Android %1$s</string>
+    <string name="readiness_ram">Memory</string>
+    <string name="readiness_ram_ok">%1$s of RAM</string>
+    <string name="readiness_ram_low">%1$s of RAM; may work for lighter games, 16 GB is recommended</string>
+    <string name="readiness_ram_too_low">%1$s of RAM; Switch 2 games need at least 12 GB</string>
+    <string name="readiness_gpu">GPU</string>
+    <string name="readiness_gpu_adreno">Qualcomm Adreno</string>
+    <string name="readiness_gpu_untested">Not an Adreno GPU; Switch 2 games are untested on this GPU</string>
+    <string name="readiness_driver">GPU driver</string>
+    <string name="readiness_driver_ok">Using %1$s</string>
+    <string name="readiness_driver_stock">Using the stock Qualcomm driver; some Switch 2 draws are missing on it. Select the bundled Turnip driver.</string>
+    <string name="readiness_driver_other">Using %1$s; Switch 2 games are tested with the bundled Turnip driver</string>
+    <string name="readiness_driver_not_adreno">Custom drivers are only available on Adreno GPUs</string>
+    <string name="readiness_cpu_backend_ok">Dynarmic</string>
+    <string name="readiness_cpu_backend_bad">Switch 2 games need the Dynarmic CPU backend (Debug settings)</string>
+    <string name="readiness_async_shaders">Asynchronous shaders</string>
+    <string name="readiness_async_shaders_ok">On</string>
+    <string name="readiness_async_shaders_bad">Turn on asynchronous shaders to reduce stutter (Graphics settings)</string>
+    <string name="readiness_async_presentation">Asynchronous presentation</string>
+    <string name="readiness_async_presentation_ok">Off</string>
+    <string name="readiness_async_presentation_bad">Asynchronous presentation is on; Switch 2 games are tested with it off</string>
+    <string name="readiness_resolution">Resolution</string>
+    <string name="readiness_resolution_ok">1x or lower</string>
+    <string name="readiness_resolution_bad">Resolution is above 1x, which slows Switch 2 games down (Graphics settings)</string>
+    <string name="readiness_memory_layout">Memory layout</string>
+    <string name="readiness_memory_layout_info">Switch 2 games switch to the 12 GB layout automatically</string>
+    <string name="readiness_files_access">All files access</string>
+    <string name="readiness_files_access_ok">Granted</string>
+    <string name="readiness_files_access_missing">Loose Switch 2 dumps boot by file path and need all files access</string>
+    <string name="readiness_games">Switch 2 games</string>
+    <string name="readiness_games_found">Found in your game folders: %1$s</string>
+    <string name="readiness_games_none">No Switch 2 game (a folder with exefs/main) found; add your game folder</string>
+    <string name="readiness_games_no_access">Grant all files access so Switch 2 games in your game folders can be found</string>
+    <string name="readiness_debug_switches">Debugging switches</string>
+    <string name="readiness_debug_switches_none">None active</string>
+    <string name="readiness_debug_switches_active">%1$s active in %2$s; debugging switches can slow games down</string>
+    <string name="readiness_storage">Free storage</string>
+    <string name="readiness_storage_ok">%1$s free</string>
+    <string name="readiness_storage_low">%1$s free; shader caches and logs grow, keep at least 10 GB free</string>
+    <string name="readiness_battery">Battery usage</string>
+    <string name="readiness_battery_ok">Unrestricted</string>
+    <string name="readiness_battery_restricted">Set battery usage to Unrestricted so Android doesn\'t close the game</string>
+    <string name="readiness_battery_background_restricted">Battery usage is set to Restricted. Android stops the app as soon as it leaves the screen. Set it to Unrestricted</string>
+    <string name="readiness_battery_standby_restricted">Android put the app in its most restricted standby group. Open it more often, or set battery usage to Unrestricted</string>
+    <string name="readiness_share_report">Share report</string>
+    <string name="readiness_share_report_failed">Could not write the report</string>
+    <string name="readiness_last_exit">Last exit</string>
+    <string name="readiness_last_exit_none">No earlier exit recorded</string>
+    <string name="readiness_last_exit_normal">Closed normally (%1$s)</string>
+    <string name="readiness_last_exit_memory">Android closed the app to free memory (%1$s). Close other apps before playing</string>
+    <string name="readiness_last_exit_crash">The app crashed (%1$s). Tap Share report and send the file with your bug report</string>
+    <string name="readiness_last_exit_anr">The app stopped responding and Android closed it (%1$s). Tap Share report and send the file with your bug report</string>
+    <string name="readiness_last_exit_other">Ended by the system: %1$s (%2$s)</string>
+    <string name="readiness_memory_killer">Memory killer</string>
+    <string name="readiness_memory_killer_ok">Android has not closed the app for lack of memory recently</string>
+    <string name="readiness_memory_killer_kills">Android closed the app %1$d times in the last 7 days to free memory (last: %2$s). Close other apps before playing, and turn off app freezing or memory saving for this app if your phone has it</string>
+    <string name="readiness_memory_killer_low_now">The phone is low on memory right now (%1$s free). Close other apps before playing</string>
 
     <!-- Applet launcher strings -->
     <string name="qlaunch_applet">Qlaunch</string>
@@ -517,6 +606,8 @@
 
     <string name="program_args">Homebrew Args</string>
     <string name="program_args_description">Command-line arguments passed to homebrew at launch (e.g. -noglsl).</string>
+    <string name="nxlink_server_mode">nxlink Server</string>
+    <string name="nxlink_server_mode_description">Starts a local nxlink server for homebrew stdout/stderr streams.</string>
 
     <!-- System settings strings -->
     <string name="device_name">Device name</string>
@@ -573,6 +664,8 @@
     <string name="accelerate_astc_description">Pick how ASTC-compressed textures are decoded for rendering: CPU (slow, safe), GPU (fast, recommended), or CPU Async (no stutters, may cause issues)</string>
 
     <string name="sync_memory_operations">Sync Memory Operations</string>
+    <string name="stall_on_gpu_fence_wait">Pause CPU on GPU fence timeouts</string>
+    <string name="stall_on_gpu_fence_wait_description">When a game keeps timing out while waiting for the GPU, pauses every CPU thread until the GPU catches up. Disabling it keeps the other threads running, which can reduce stutter but may break games that rely on it.</string>
     <string name="sync_memory_operations_description">Ensures data consistency between compute and memory operations. This option should fix issues in some games, but may also reduce performance in some cases. Unreal Engine 4 games often see the most significant changes thereof.</string>
     <string name="use_disk_shader_cache">Disk shader cache</string>
     <string name="use_disk_shader_cache_description">Reduces stuttering by locally storing and loading generated shaders.</string>
@@ -582,6 +675,8 @@
     <string name="renderer_asynchronous_gpu_emulation_description">This hack can increase performance by running GPU emulation asynchronously at the cost of graphical issues and increased crash rates by timing-related operations.</string>
     <string name="renderer_reactive_flushing">Use reactive flushing</string>
     <string name="renderer_reactive_flushing_description">Improves rendering accuracy in some games at the cost of performance.</string>
+    <string name="renderer_barrier_feedback_loops">Barrier feedback loops</string>
+    <string name="renderer_barrier_feedback_loops_description">Improves rendering of transparency effects in specific games at the cost of performance.</string>
     <string name="enable_buffer_history">Enable buffer history</string>
     <string name="enable_buffer_history_description">Enables access to previous buffer states. This option may improve rendering quality and performance consistency in some games.</string>
     <string name="use_optimized_vertex_buffers">Optimized Vertex Buffers</string>
@@ -594,17 +689,12 @@
     <string name="skip_cpu_inner_invalidation">Skip CPU Inner Invalidation</string>
     <string name="skip_cpu_inner_invalidation_description">Skips certain CPU-side cache invalidations during memory updates, reducing CPU usage and improving it\'s performance. This may cause glitches or crashes on some games.</string>
     <string name="fix_bloom_effects">Fix Bloom Effects</string>
-    <string name="fix_bloom_effects_description">Reduces bloom blur in LA/EOW (Adreno A6XX - A7XX/ Turnip), removes bloom in Burnout. Warning: may cause graphical artifacts in other games.</string>
+    <string name="fix_bloom_effects_description">Removes bloom in Burnout.</string>
     <string name="emulate_bgr565">Emulate BGR565</string>
     <string name="emulate_bgr565_description">Fixes problems with inverted colors in games or strange artifacts or strange shadows.</string>
-    <string name="rescale_hack">Enable Legacy Rescale Pass</string>
-    <string name="rescale_hack_description">Enables a legacy handling for the rescale configuration pass for games by using a quick rescale path</string>
     <string name="renderer_asynchronous_shaders">Use asynchronous shaders</string>
     <string name="renderer_asynchronous_shaders_description">Compiles shaders asynchronously. This may reduce stutters but may also introduce glitches.</string>
-    <string name="gpu_unswizzle_settings">GPU Unswizzle Settings</string>
-    <string name="gpu_unswizzle_settings_description">Configure GPU-based texture unswizzling parameters or disable it entirely. Adjust these settings to balance performance and texture loading quality.</string>
     <string name="gpu_unswizzle_enable">Enable GPU Unswizzle</string>
-    <string name="gpu_unswizzle_disabled">Disabled</string>
     <string name="gpu_unswizzle_texture_size">GPU Unswizzle Max Texture Size</string>
     <string name="gpu_unswizzle_texture_size_description">Sets the maximum size (MB) for GPU-based texture unswizzling. While the GPU is faster for medium and large textures, the CPU may be more efficient for very small ones. Adjust this to find the balance between GPU acceleration and CPU overhead.</string>
     <string name="gpu_unswizzle_stream_size">GPU Unswizzle Stream Size</string>
@@ -621,6 +711,10 @@
     <string name="disabled">Disabled</string>
     <string name="vertex_input_dynamic_state">Vertex Input Dynamic State</string>
     <string name="vertex_input_dynamic_state_description">Enabling this feature allows for more flexible vertex input handling, potentially reducing pipeline compilation time in vertex/buffer.</string>
+    <string name="dynamic_rendering">Dynamic Rendering</string>
+    <string name="dynamic_rendering_description">Render without render pass and framebuffer objects. Results vary by driver: some gain performance, others lose it.</string>
+    <string name="workgroup_memory_explicit_layout">Workgroup Memory Explicit Layout</string>
+    <string name="workgroup_memory_explicit_layout_description">Let shaders declare explicit layouts for workgroup memory. Disabled by default: some Qualcomm drivers are unstable with it.</string>
     <string name="sample_shading_fraction">Sample Shading</string>
     <string name="sample_shading_fraction_description">Allows the fragment shader to execute per sample in a multi-sampled fragment instead once per fragment. Improves graphics quality at the cost of some performance.</string>
 
@@ -676,6 +770,9 @@
     <string name="gpu_log_ring_buffer_size">Ring Buffer Size</string>
     <string name="gpu_log_ring_buffer_size_description">Number of recent Vulkan calls to track (default: 512)</string>
     <string name="gpu_log_ring_buffer_size_hint">64 to 4096 entries</string>
+
+    <string name="product_model">Product model</string>
+    <string name="product_model_description">Reported product model by HLE firmware</string>
 
     <string name="general">General</string>
 
@@ -840,6 +937,12 @@
     <string name="preferences_graphics">Graphics</string>
     <string name="preferences_graphics_description">Accuracy level, resolution, shader cache</string>
     <string name="quick_settings">Quick Settings</string>
+    <string name="cheats">Cheats</string>
+    <string name="enable_all_cheats">Enable All Cheats</string>
+    <string name="disable_all_cheats">Disable All Cheats</string>
+    <string name="unnamed_cheat">Unnamed Cheat</string>
+    <string name="enable_cheats_by_default">Enable cheats by default</string>
+    <string name="enable_cheats_by_default_description">Enable regular cheats when a game starts</string>
     <string name="enable_quick_settings">Enable Quick Settings</string>
     <string name="enable_quick_settings_description">Allow access to quick settings menu via swipe and menu button</string>
     <string name="preferences_audio">Audio</string>
@@ -870,6 +973,11 @@
     <string name="custom_sdmc_directory_description">Set a custom path for virtual SD card storage</string>
     <string name="path_set">Path set successfully</string>
     <string name="skip_migration">Skip</string>
+
+    <!-- Footer actions -->
+    <string name="footer_open">Open</string>
+    <string name="footer_game_info">Game Info</string>
+    <string name="footer_back">Back</string>
 
     <!-- Game properties -->
     <string name="info">Info</string>
@@ -1049,6 +1157,8 @@
     <string name="memory_4gb">4GB (Recommended)</string>
     <string name="memory_6gb">6GB (Unsafe)</string>
     <string name="memory_8gb">8GB (Unsafe)</string>
+    <string name="memory_10gb">10GB (Unsafe)</string>
+    <string name="memory_12gb">12GB (Switch 2, Unsafe)</string>
 
     <!-- CPU clock levels -->
     <string name="clock_normal">Normal</string>
@@ -1061,25 +1171,10 @@
     <string name="fast_gpu_high">Overclock</string>
 
     <!-- GPU swizzle texture size -->
-    <string name="gpu_texturesizeswizzle_verysmall">Very Small (16 MB)</string>
-    <string name="gpu_texturesizeswizzle_small">Small (32 MB)</string>
-    <string name="gpu_texturesizeswizzle_normal">Normal (128 MB)</string>
-    <string name="gpu_texturesizeswizzle_large">Large (256 MB)</string>
-    <string name="gpu_texturesizeswizzle_verylarge">Very Large (512 MB)</string>
 
     <!-- GPU swizzle streams -->
-    <string name="gpu_swizzle_verylow">Very Low (4 MB)</string>
-    <string name="gpu_swizzle_low">Low (8 MB)</string>
-    <string name="gpu_swizzle_normal">Normal (16 MB)</string>
-    <string name="gpu_swizzle_medium">Medium (32 MB)</string>
-    <string name="gpu_swizzle_high">High (64 MB)</string>
 
     <!-- GPU swizzle chunks -->
-    <string name="gpu_swizzlechunk_verylow">Very Low (32)</string>
-    <string name="gpu_swizzlechunk_low">Low (64)</string>
-    <string name="gpu_swizzlechunk_normal">Normal (128)</string>
-    <string name="gpu_swizzlechunk_medium">Medium (256)</string>
-    <string name="gpu_swizzlechunk_high">High (512)</string>
 
     <!-- Temperature Units -->
     <string name="temperature_celsius">Celsius</string>
@@ -1183,6 +1278,7 @@
     <string name="anti_aliasing_none">None</string>
     <string name="anti_aliasing_fxaa" translatable="false">FXAA</string>
     <string name="anti_aliasing_smaa" translatable="false">SMAA</string>
+    <string name="anti_aliasing_smaa" translatable="false">SSAA</string>
 
     <!-- Screen Layouts -->
     <string name="screen_layout_auto">Auto</string>
@@ -1259,7 +1355,6 @@
 
     <!-- Audio output engines -->
     <string name="sdl3" translatable="false">SDL3</string>
-    <string name="cubeb" translatable="false">cubeb</string>
 
     <!-- Anisotropic filtering options -->
     <string name="multiplier_x2" translatable="false">x2</string>
@@ -1276,36 +1371,6 @@
     <string name="enable_folder_button_description">Show the button to add game folders</string>
     <string name="enable_qlaunch_button">QLaunch</string>
     <string name="enable_qlaunch_button_description">Show the button to launch QLaunch</string>
-
-    <!-- App Language -->
-    <string name="app_language">App Language</string>
-    <string name="app_language_description">Change the language of the app interface</string>
-    <string name="app_language_system">Follow System</string>
-    <string name="app_language_english" translatable="false">English</string>
-    <string name="app_language_spanish" translatable="false">Español</string>
-    <string name="app_language_french" translatable="false">Français</string>
-    <string name="app_language_german" translatable="false">Deutsch</string>
-    <string name="app_language_italian" translatable="false">Italiano</string>
-    <string name="app_language_portuguese" translatable="false">Português</string>
-    <string name="app_language_brazilian_portuguese" translatable="false">Português do Brasil</string>
-    <string name="app_language_russian" translatable="false">Русский</string>
-    <string name="app_language_japanese" translatable="false">日本語</string>
-    <string name="app_language_korean" translatable="false">한국어</string>
-    <string name="app_language_simplified_chinese" translatable="false">简体中文</string>
-    <string name="app_language_traditional_chinese" translatable="false">繁體中文</string>
-    <string name="app_language_polish" translatable="false">Polski</string>
-    <string name="app_language_czech" translatable="false">Čeština</string>
-    <string name="app_language_norwegian" translatable="false">Norsk bokmål</string>
-    <string name="app_language_hungarian" translatable="false">Magyar</string>
-    <string name="app_language_ukrainian" translatable="false">Українська</string>
-    <string name="app_language_vietnamese" translatable="false">Tiếng Việt</string>
-    <string name="app_language_indonesian" translatable="false">Bahasa Indonesia</string>
-    <string name="app_language_arabic" translatable="false">العربية</string>
-    <string name="app_language_central_kurdish" translatable="false">کوردیی ناوەندی</string>
-    <string name="app_language_persian" translatable="false">فارسی</string>
-    <string name="app_language_hebrew" translatable="false">עברית</string>
-    <string name="app_language_serbian" translatable="false">Српски</string>
-    <string name="app_language_thai" translatable="false">แบบไทย</string>
 
     <!-- Static Themes -->
     <string name="static_theme_color">Theme Color</string>
@@ -1399,23 +1464,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-    </string>
-    <string name="license_cubeb" translatable="false">cubeb</string>
-    <string name="license_cubeb_description" translatable="false">Cross platform audio library</string>
-    <string name="license_cubeb_link" translatable="false">https://github.com/mozilla/cubeb</string>
-    <string name="license_cubeb_copyright" translatable="false">Copyright © 2011 Mozilla Foundation</string>
-    <string name="license_cubeb_text" translatable="false">
-Permission to use, copy, modify, and distribute this software for any
-purpose with or without fee is hereby granted, provided that the above
-copyright notice and this permission notice appear in all copies.\n\n
-
-THE SOFTWARE IS PROVIDED \"AS IS\" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
-WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
-ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
-ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
-OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
     </string>
     <string name="license_dynarmic" translatable="false">Dynarmic</string>
     <string name="license_dynarmic_description" translatable="false">An ARM dynamic recompiler</string>
@@ -1780,51 +1828,6 @@ RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU OR THIRD PARTIES OR A
 FAILURE OF THE LIBRARY TO OPERATE WITH ANY OTHER SOFTWARE), EVEN IF
 SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH
 DAMAGES.
-    </string>
-    <string name="license_opus" translatable="false">Opus</string>
-    <string name="license_opus_description" translatable="false">Modern audio compression for the internet</string>
-    <string name="license_opus_link" translatable="false">https://github.com/xiph/opus</string>
-    <string name="license_opus_copyright" translatable="false">Copyright 2001–2011 Xiph.Org, Skype Limited, Octasic, Jean-Marc Valin, Timothy B. Terriberry, CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo</string>
-    <string name="license_opus_text" translatable="false">
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:\n\n
-
-- Redistributions of source code must retain the above copyright
-notice, this list of conditions and the following disclaimer.\n\n
-
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.\n\n
-
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.\n\n
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-``AS IS\'\' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
-OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
-LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
-NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n\n
-
-Opus is subject to the royalty-free patent licenses which are
-specified at:\n\n
-
-Xiph.Org Foundation:
-https://datatracker.ietf.org/ipr/1524/ \n\n
-
-Microsoft Corporation:
-https://datatracker.ietf.org/ipr/1914/ \n\n
-
-Broadcom Corporation:
-https://datatracker.ietf.org/ipr/1526/
     </string>
     <string name="license_sirit" translatable="false">Sirit</string>
     <string name="license_sirit_description" translatable="false">A runtime SPIR-V assembler</string>

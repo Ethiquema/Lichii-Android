@@ -15,6 +15,7 @@
 #include "video_core/engines/maxwell_dma.h"
 #include "video_core/guest_memory.h"
 #include "video_core/memory_manager.h"
+#include "video_core/native_query_trace.h"
 #include "video_core/renderer_base.h"
 #include "video_core/textures/decoders.h"
 
@@ -22,10 +23,9 @@ namespace Tegra::Engines {
 
 using namespace Texture;
 
-MaxwellDMA::MaxwellDMA(MemoryManager& memory_manager_)
-    : memory_manager{memory_manager_}
-{
-    execution_mask.reset();
+MaxwellDMA::MaxwellDMA(Core::System& system_, MemoryManager& memory_manager_)
+    : system{system_}, memory_manager{memory_manager_} {
+    execution_mask.fill(0);
     execution_mask[offsetof(Regs, launch_dma) / sizeof(u32)] = true;
 }
 
@@ -63,6 +63,12 @@ void MaxwellDMA::CallMultiMethod(Core::System& system, u32 method, const u32* ba
 }
 
 void MaxwellDMA::Launch() {
+    if (memory_manager.UsesNativeTiling()) {
+        const GPUVAddr destination = regs.offset_out;
+        VideoCommon::TraceNativeQuery(10, memory_manager.GetID(), destination,
+            memory_manager.GpuToCpuAddress(destination).value_or(0),
+            regs.line_count, static_cast<GPUVAddr>(regs.offset_in), regs.line_length_in);
+    }
     LOG_TRACE(Render_OpenGL, "DMA copy {:#x} -> {:#x}", static_cast<GPUVAddr>(regs.offset_in), GPUVAddr(regs.offset_out));
     // EDEN_NX2_TRACE_DST=<hex>: also log copies writing within 32 MiB above that GPU address.
     static const u64 trace_destination = [] {
@@ -185,7 +191,7 @@ void MaxwellDMA::Launch() {
 }
 
 void MaxwellDMA::CopyBlockLinearToPitch() {
-   
+
 
     u32 bytes_per_pixel = 1;
     DMA::ImageOperand src_operand;

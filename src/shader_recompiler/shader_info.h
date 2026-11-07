@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <optional>
 #include <span>
@@ -40,6 +41,10 @@ enum class TextureType : u32 {
     Color2DRect,
 };
 constexpr u32 NUM_TEXTURE_TYPES = 9;
+
+/// Constant buffer index marking a texture handle that the shader receives as a vertex attribute
+/// instead of reading it from a constant buffer. The host supplies the handle of each draw run.
+constexpr u32 ATTRIBUTE_HANDLE_CBUF_INDEX = 0xFFFF;
 
 enum class TexturePixelFormat {
     A8B8G8R8_UNORM,
@@ -175,9 +180,7 @@ struct StorageBufferDescriptor {
     u32 cbuf_offset;
     u32 count;
     bool is_written;
-    /// When set, the buffer pointer is read from memory at this offset from the constant buffer
-    /// pointer, which is bound as its own descriptor.
-    u32 indirect_offset{~0U};
+    bool is_global_fallback{};
 
     auto operator<=>(const StorageBufferDescriptor&) const = default;
 };
@@ -192,9 +195,8 @@ struct TextureBufferDescriptor {
     u32 secondary_shift_left;
     u32 count;
     u32 size_shift;
-    /// Index in Info::handle_programs when the handle is computed at draw time (read from a
-    /// storage buffer), ~0 when it is the constant buffer word.
-    u32 handle_program{~0U};
+    u32 mask = 0xffffffff;
+    u32 secondary_mask = 0xffffffff;
 
     auto operator<=>(const TextureBufferDescriptor&) const = default;
 };
@@ -217,6 +219,16 @@ struct ImageBufferDescriptor {
 };
 using ImageBufferDescriptors = boost::container::small_vector<ImageBufferDescriptor, 2>;
 
+struct BufferTextureSource {
+    u32 offset{};
+    u32 stride{};
+    u32 size{};
+    bool enabled{};
+    bool width_query{};
+
+    auto operator<=>(const BufferTextureSource&) const = default;
+};
+
 struct TextureDescriptor {
     TextureType type;
     bool is_depth;
@@ -231,9 +243,15 @@ struct TextureDescriptor {
     u32 secondary_shift_left;
     u32 count;
     u32 size_shift;
-    /// Index in Info::handle_programs when the handle is computed at draw time (read from a
-    /// storage buffer), ~0 when it is the constant buffer word above.
-    u32 handle_program{~0U};
+    /// The handle offset is moved by a constant buffer value read when drawing
+    bool has_index_cbuf;
+    u32 index_cbuf_index;
+    u32 index_cbuf_offset;
+    u32 index_shift;
+    u32 mask = 0xffffffff;
+    u32 secondary_mask = 0xffffffff;
+
+    BufferTextureSource buffer_source{};
 
     auto operator<=>(const TextureDescriptor&) const = default;
 };
@@ -266,14 +284,19 @@ struct MeshInfo {
     u32 payload_words{}; ///< Task output region / mesh input region, in 32-bit words
     u32 max_vertices{};
     u32 max_primitives{};
-    u32 topology{}; ///< SET_MESH_SHADER_A output topology (4 = triangles)
+    u32 topology{}; ///< SET_MESH_SHADER_A output topology (0 = points, 1 = lines, 4 = triangles)
     boost::container::static_vector<u32, 136> vertex_lines;
     boost::container::static_vector<u32, 136> primitive_lines;
+
+    /// Vertex indices per primitive, which is also its byte count in the map region.
+    [[nodiscard]] u32 PrimitiveVertices() const noexcept {
+        return topology == 0 ? 1 : topology == 1 ? 2 : 3;
+    }
 };
 
 struct Info {
     static constexpr size_t MAX_INDIRECT_CBUFS{14};
-    static constexpr size_t MAX_CBUFS{18};
+    static constexpr size_t MAX_CBUFS{32};
     static constexpr size_t MAX_SSBOS{32};
 
     bool is_task{}; ///< Switch 2 task program (Stage::Task)
@@ -345,11 +368,6 @@ struct Info {
     bool uses_atomic_s32_max{};
     bool uses_int64_bit_atomics{};
     bool uses_global_memory{};
-    bool requires_coherent_global_memory{};
-    bool requires_coherent_image_memory{};
-    /// Native global accesses whose pointer is chosen at run time: every storage buffer descriptor
-    /// is a candidate and its bound length (not an NVN size word) limits the range.
-    bool native_global_bounds{};
     bool uses_atomic_image_u32{};
     bool uses_shadow_lod{};
     bool uses_rescaling_uniform{};
@@ -381,6 +399,10 @@ struct Info {
     std::vector<std::vector<u32>> handle_programs;
     ImageDescriptors image_descriptors;
 };
+
+[[nodiscard]] inline bool UsesStorageBufferMappings(const Info& info) noexcept {
+    return std::ranges::any_of(info.storage_buffers_descriptors, [](const auto& desc) { return desc.count > 1; });
+}
 
 template <typename Descriptors>
 u32 NumDescriptors(const Descriptors& descriptors) {

@@ -67,6 +67,7 @@ extern "C" {
 #include "core/file_sys/submission_package.h"
 #include "core/file_sys/vfs/vfs.h"
 #include "core/file_sys/vfs/vfs_real.h"
+#include "core/memory/dmnt_cheat_types.h"
 #include "core/frontend/applets/cabinet.h"
 #include "core/frontend/applets/controller.h"
 #include "core/frontend/applets/error.h"
@@ -738,6 +739,35 @@ const char* fallback_cpu_detection() {
     return s_result.c_str();
 }
 
+#ifdef ARCHITECTURE_arm64
+struct SystemDriverInfo {
+    VkPhysicalDeviceProperties properties{};
+    VkPhysicalDeviceDriverProperties driver{};
+};
+
+SystemDriverInfo QuerySystemDriverInfo(JNIEnv* env, jstring j_hook_lib_dir) {
+    const std::string hook_lib_dir = Common::Android::GetJString(env, j_hook_lib_dir);
+    const Common::DynamicLibrary library{adrenotools_open_libvulkan(
+        RTLD_NOW, 0, nullptr, hook_lib_dir.c_str(), nullptr, nullptr, nullptr, nullptr)};
+    Vulkan::vk::InstanceDispatch dld;
+    const Vulkan::vk::Instance instance = Vulkan::CreateInstance(library, dld, VK_API_VERSION_1_1);
+    const std::vector<VkPhysicalDevice> devices = instance.EnumeratePhysicalDevices();
+    if (devices.empty()) {
+        throw Vulkan::vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
+    }
+    SystemDriverInfo info{};
+    info.driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+    VkPhysicalDeviceProperties2 properties2{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+        .pNext = &info.driver,
+        .properties = {},
+    };
+    Vulkan::vk::PhysicalDevice(devices[0], dld).GetProperties2(properties2);
+    info.properties = properties2.properties;
+    return info;
+}
+#endif
+
 } // namespace
 
 extern "C" {
@@ -768,7 +798,29 @@ void Java_org_yuzu_yuzu_1emu_NativeLibrary_surfaceDestroyed(JNIEnv* env, jobject
 
 void Java_org_yuzu_yuzu_1emu_NativeLibrary_setAppDirectory(JNIEnv* env, jobject instance,
                                                            [[maybe_unused]] jstring j_directory) {
-    Common::FS::SetAppDirectory(Common::Android::GetJString(env, j_directory));
+    const std::string directory = Common::Android::GetJString(env, j_directory);
+    Common::FS::SetAppDirectory(directory);
+
+#ifndef EDEN_NX2_NO_ENV_FILE
+    // The EDEN_NX2_* diagnostics switches are environment variables, which Android apps can't be
+    // given. Read KEY=VALUE lines from nx2_env.txt in the app directory instead (adb can push it).
+    // Release builds leave this out: they ship with the tested defaults only.
+    if (FILE* file = std::fopen((directory + "/nx2_env.txt").c_str(), "r")) {
+        char line[512];
+        while (std::fgets(line, sizeof(line), file) != nullptr) {
+            std::string entry{line};
+            while (!entry.empty() && (entry.back() == '\n' || entry.back() == '\r')) {
+                entry.pop_back();
+            }
+            const size_t equals = entry.find('=');
+            if (entry.empty() || entry[0] == '#' || equals == std::string::npos) {
+                continue;
+            }
+            setenv(entry.substr(0, equals).c_str(), entry.substr(equals + 1).c_str(), 1);
+        }
+        std::fclose(file);
+    }
+#endif
 }
 
 int Java_org_yuzu_yuzu_1emu_NativeLibrary_installFileToNand(JNIEnv* env, jobject instance,
@@ -864,34 +916,18 @@ jboolean JNICALL Java_org_yuzu_yuzu_1emu_utils_GpuDriverHelper_supportsCustomDri
 
 jobjectArray Java_org_yuzu_yuzu_1emu_utils_GpuDriverHelper_getSystemDriverInfo(
     JNIEnv* env, jobject j_obj, jobject j_surf, jstring j_hook_lib_dir) {
+    std::string version_string{"1.1.0"};
+    std::string driver_name{"generic"};
 #ifdef ARCHITECTURE_arm64
-    const char* file_redirect_dir_{};
-    int featureFlags{};
-    std::string hook_lib_dir = Common::Android::GetJString(env, j_hook_lib_dir);
-    auto handle = adrenotools_open_libvulkan(RTLD_NOW, featureFlags, nullptr, hook_lib_dir.c_str(),
-                                             nullptr, nullptr, file_redirect_dir_, nullptr);
-    auto driver_library = std::make_shared<Common::DynamicLibrary>(handle);
-    InputCommon::InputSubsystem input_subsystem;
-    auto window =
-        std::make_unique<EmuWindow_Android>(ANativeWindow_fromSurface(env, j_surf), driver_library);
-
-    Vulkan::vk::InstanceDispatch dld;
-    Vulkan::vk::Instance vk_instance = Vulkan::CreateInstance(
-        *driver_library, dld, VK_API_VERSION_1_1, Core::Frontend::WindowSystemType::Android);
-
-    auto surface = Vulkan::CreateSurface(vk_instance, window->GetWindowInfo());
-
-    auto device = Vulkan::CreateDevice(vk_instance, dld, *surface);
-
-    auto driver_version = device.GetDriverVersion();
-    auto version_string =
-        fmt::format("{}.{}.{}", VK_API_VERSION_MAJOR(driver_version),
-                    VK_API_VERSION_MINOR(driver_version), VK_API_VERSION_PATCH(driver_version));
-    auto driver_name = device.GetDriverName();
-#else
-    auto driver_version = "1.0.0";
-    auto version_string = "1.1.0"; //Assume lowest Vulkan level
-    auto driver_name = "generic";
+    try {
+        const SystemDriverInfo info = QuerySystemDriverInfo(env, j_hook_lib_dir);
+        const u32 driver_version = info.properties.driverVersion;
+        version_string =
+            fmt::format("{}.{}.{}", VK_API_VERSION_MAJOR(driver_version),
+                        VK_API_VERSION_MINOR(driver_version), VK_API_VERSION_PATCH(driver_version));
+        driver_name = Vulkan::vk::GetDriverName(info.driver);
+    } catch (...) {
+    }
 #endif
     jobjectArray j_driver_info = env->NewObjectArray(2, Common::Android::GetStringClass(), Common::Android::ToJString(env, version_string));
     env->SetObjectArrayElement(j_driver_info, 1, Common::Android::ToJString(env, driver_name));
@@ -900,32 +936,12 @@ jobjectArray Java_org_yuzu_yuzu_1emu_utils_GpuDriverHelper_getSystemDriverInfo(
 
 jstring Java_org_yuzu_yuzu_1emu_utils_GpuDriverHelper_getGpuModel(JNIEnv *env, jobject j_obj, jobject j_surf, jstring j_hook_lib_dir) {
 #ifdef ARCHITECTURE_arm64
-    const char* file_redirect_dir_{};
-    int featureFlags{};
-    std::string hook_lib_dir = Common::Android::GetJString(env, j_hook_lib_dir);
-    auto handle = adrenotools_open_libvulkan(RTLD_NOW, featureFlags, nullptr, hook_lib_dir.c_str(),
-                                             nullptr, nullptr, file_redirect_dir_, nullptr);
-    auto driver_library = std::make_shared<Common::DynamicLibrary>(handle);
-    InputCommon::InputSubsystem input_subsystem;
-    auto window =
-            std::make_unique<EmuWindow_Android>(ANativeWindow_fromSurface(env, j_surf), driver_library);
-
-    Vulkan::vk::InstanceDispatch dld;
-    Vulkan::vk::Instance vk_instance = Vulkan::CreateInstance(
-            *driver_library, dld, VK_API_VERSION_1_1, Core::Frontend::WindowSystemType::Android);
-
-    auto surface = Vulkan::CreateSurface(vk_instance, window->GetWindowInfo());
-
-    auto device = Vulkan::CreateDevice(vk_instance, dld, *surface);
-
-    const std::string model_name{device.GetModelName()};
-
-    window.release();
-
-    return Common::Android::ToJString(env, model_name);
-#else
-    return Common::Android::ToJString(env, "no-info");
+    try {
+        return Common::Android::ToJString(env, QuerySystemDriverInfo(env, j_hook_lib_dir).properties.deviceName);
+    } catch (...) {
+    }
 #endif
+    return Common::Android::ToJString(env, "no-info");
 }
 
 jboolean Java_org_yuzu_yuzu_1emu_NativeLibrary_reloadKeys(JNIEnv* env, jclass clazz) {
@@ -951,6 +967,31 @@ jboolean Java_org_yuzu_yuzu_1emu_NativeLibrary_isRunning(JNIEnv* env, jclass cla
 
 jboolean Java_org_yuzu_yuzu_1emu_NativeLibrary_isPaused(JNIEnv* env, jclass clazz) {
     return static_cast<jboolean>(EmulationSession::GetInstance().IsPaused());
+}
+
+jobjectArray Java_org_yuzu_yuzu_1emu_NativeLibrary_getRuntimeCheats(JNIEnv* env, jclass clazz) {
+    const auto cheats = EmulationSession::GetInstance().System().GetRuntimeCheats();
+    const auto runtime_cheat_class = env->FindClass("org/yuzu/yuzu_emu/NativeLibrary$RuntimeCheat");
+    const auto constructor = env->GetMethodID(runtime_cheat_class, "<init>", "(ILjava/lang/String;ZZ)V");
+    auto result = env->NewObjectArray(static_cast<jsize>(cheats.size()), runtime_cheat_class, nullptr);
+    for (jsize i = 0; i < static_cast<jsize>(cheats.size()); ++i) {
+        const auto& cheat = cheats[i];
+        const auto name = Common::Android::ToJString(env, cheat.name);
+        const auto item = env->NewObject(runtime_cheat_class, constructor, static_cast<jint>(cheat.id), name,
+                                         static_cast<jboolean>(cheat.enabled),
+                                         static_cast<jboolean>(cheat.is_master));
+        env->SetObjectArrayElement(result, i, item);
+        env->DeleteLocalRef(name);
+        env->DeleteLocalRef(item);
+    }
+    env->DeleteLocalRef(runtime_cheat_class);
+    return result;
+}
+
+jboolean Java_org_yuzu_yuzu_1emu_NativeLibrary_setRuntimeCheatEnabled(JNIEnv* env, jclass clazz,
+                                                                      jint id, jboolean enabled) {
+    return static_cast<jboolean>(EmulationSession::GetInstance().System().SetCheatEnabled(
+        static_cast<u32>(id), static_cast<bool>(enabled)));
 }
 
 jbyteArray Java_org_yuzu_yuzu_1emu_NativeLibrary_getAppletCaptureBuffer(JNIEnv* env, jclass clazz) {
@@ -1175,7 +1216,7 @@ VkPhysicalDeviceProperties GetVulkanDeviceProperties() {
     return physical_device.GetProperties();
 }
 
-bool GetFrameGenerationSupport() {
+bool GetVulkanMemoryModelSupport() {
     Common::DynamicLibrary library;
     if (!library.Open("libvulkan.so")) {
         return false;
@@ -1190,13 +1231,9 @@ bool GetFrameGenerationSupport() {
 
     const Vulkan::vk::PhysicalDevice physical_device(physical_devices[0], dld);
 
-    VkPhysicalDeviceShaderFloat16Int8Features float16_int8{
-        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES,
-        .pNext = nullptr,
-    };
     VkPhysicalDeviceVulkanMemoryModelFeatures memory_model{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES,
-        .pNext = &float16_int8,
+        .pNext = nullptr,
     };
     VkPhysicalDeviceFeatures2 features{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
@@ -1204,7 +1241,7 @@ bool GetFrameGenerationSupport() {
     };
     physical_device.GetFeatures2(features);
 
-    return memory_model.vulkanMemoryModel == VK_TRUE && float16_int8.shaderFloat16 == VK_TRUE;
+    return memory_model.vulkanMemoryModel == VK_TRUE;
 }
 } // namespace
 
@@ -1283,7 +1320,7 @@ jstring Java_org_yuzu_yuzu_1emu_NativeLibrary_getVulkanApiVersion(JNIEnv* env, j
 
 jboolean Java_org_yuzu_yuzu_1emu_NativeLibrary_supportsFrameGeneration(JNIEnv* env, jobject jobj) {
     try {
-        return static_cast<jboolean>(GetFrameGenerationSupport());
+        return static_cast<jboolean>(GetVulkanMemoryModelSupport());
     } catch (...) {
         return static_cast<jboolean>(false);
     }
@@ -1311,8 +1348,8 @@ void Java_org_yuzu_yuzu_1emu_NativeLibrary_refreshThreadPolicies(JNIEnv* env, jo
     Common::RefreshThreadPolicies();
 }
 
-jboolean Java_org_yuzu_yuzu_1emu_NativeLibrary_GetDebugKnobAt(JNIEnv* env, jobject jobj, jint index) {
-    return static_cast<jboolean>(Settings::GetDebugKnobAt(static_cast<u8>(index)));
+jboolean Java_org_yuzu_yuzu_1emu_NativeLibrary_getDebugKnobAt(JNIEnv* env, jobject jobj, jint index) {
+    return static_cast<jboolean>(Settings::getDebugKnobAt(static_cast<u8>(index)));
 }
 
 void Java_org_yuzu_yuzu_1emu_NativeLibrary_setTurboSpeedLimit(JNIEnv *env, jobject jobj, jboolean enabled) {
@@ -1515,36 +1552,20 @@ jint Java_org_yuzu_yuzu_1emu_NativeLibrary_installKeys(JNIEnv* env, jclass clazz
 }
 
 jstring Java_org_yuzu_yuzu_1emu_NativeLibrary_getLosslessDllPath(JNIEnv* env, jclass clazz) {
-#ifdef HAS_LSFG
     const auto path = VideoCore::FrameGen::GetLosslessDllPath();
     return Common::Android::ToJString(env, Common::FS::PathToUTF8String(path));
-#else
-    return Common::Android::ToJString(env, "");
-#endif
 }
 
 jint Java_org_yuzu_yuzu_1emu_NativeLibrary_validateLosslessDll(JNIEnv* env, jclass clazz) {
-#ifdef HAS_LSFG
     return static_cast<jint>(VideoCore::FrameGen::GetInstalledLosslessStatus());
-#else
-    return static_cast<jint>(VideoCore::FrameGen::LosslessStatus::NotInstalled);
-#endif
 }
 
 jint Java_org_yuzu_yuzu_1emu_NativeLibrary_prepareLosslessDll(JNIEnv* env, jclass clazz) {
-#ifdef HAS_LSFG
     return static_cast<jint>(VideoCore::FrameGen::BuildShaderCache());
-#else
-    return static_cast<jint>(VideoCore::FrameGen::LosslessStatus::NotInstalled);
-#endif
 }
 
 jboolean Java_org_yuzu_yuzu_1emu_NativeLibrary_removeLosslessDll(JNIEnv* env, jclass clazz) {
-#ifdef HAS_LSFG
     return static_cast<jboolean>(VideoCore::FrameGen::RemoveInstalledLosslessDll());
-#else
-    return static_cast<jboolean>(false);
-#endif
 }
 
 jobjectArray Java_org_yuzu_yuzu_1emu_NativeLibrary_getPatchesForFile(JNIEnv* env, jobject jobj,
@@ -1577,7 +1598,9 @@ jobjectArray Java_org_yuzu_yuzu_1emu_NativeLibrary_getPatchesForFile(JNIEnv* env
             Common::Android::ToJString(env, patch.version), static_cast<jint>(patch.type),
             Common::Android::ToJString(env, std::to_string(patch.program_id)),
             Common::Android::ToJString(env, std::to_string(patch.title_id)),
-            static_cast<jlong>(patch.numeric_version), static_cast<jint>(patch.source));
+            static_cast<jlong>(patch.numeric_version), static_cast<jint>(patch.source),
+            Common::Android::ToJString(env, patch.parent_name),
+            static_cast<jint>(patch.cheat_compat));
         env->SetObjectArrayElement(jpatchArray, i, jpatch);
         ++i;
     }

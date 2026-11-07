@@ -7,10 +7,20 @@
 #include <random>
 #include "common/scope_exit.h"
 #include "common/settings.h"
+
+#include "core/arm/exclusive_monitor.h"
+#ifndef __EMSCRIPTEN__
 #include "core/arm/dynarmic/arm_dynarmic.h"
 #include "core/arm/dynarmic/dynarmic_exclusive_monitor.h"
+#include "core/arm/dynarmic/arm_dynarmic_32.h"
+#include "core/arm/dynarmic/arm_dynarmic_64.h"
+#endif
 #include "core/core.h"
 #include "core/hle/kernel/k_process.h"
+#ifdef HAS_HYPERVISOR
+#include "core/arm/hypervisor/arm_hypervisor.h"
+#include "core/arm/hypervisor/hv_vm.h"
+#endif
 #include "core/hle/kernel/k_scoped_resource_reservation.h"
 #include "core/hle/kernel/k_shared_memory.h"
 #include "core/hle/kernel/k_shared_memory_info.h"
@@ -18,15 +28,20 @@
 #include "core/hle/kernel/k_thread_queue.h"
 #include "core/hle/kernel/k_worker_task_manager.h"
 
-#include "core/arm/dynarmic/arm_dynarmic_32.h"
-#include "core/arm/dynarmic/arm_dynarmic_64.h"
 #ifdef HAS_NCE
 #include "core/arm/nce/arm_nce.h"
+#endif
+#ifdef HAS_SCARLETNX
+#include "core/arm/scarletnx/scarletnx_process.h"
 #endif
 
 namespace Kernel {
 
 namespace {
+
+// Switch 2 titles size their heap as total memory minus ~6.3 GiB (~9.5 GiB), past the 8 GiB
+// 39-bit heap region of the Switch 1 layout.
+constexpr size_t Switch2ExtraHeapRegionSize = 8ULL << 30;
 
 Result TerminateChildren(KernelCore& kernel, KProcess* process, const KThread* thread_to_not_terminate) {
     // Request that all children threads terminate.
@@ -59,7 +74,6 @@ Result TerminateChildren(KernelCore& kernel, KProcess* process, const KThread* t
         KThread* cur_child = nullptr;
         {
             KScopedLightLock proc_lk(process->GetListLock());
-
             auto& thread_list = process->GetThreadList();
             for (auto it = thread_list.begin(); it != thread_list.end(); ++it) {
                 if (KThread* thread = std::addressof(*it); thread != thread_to_not_terminate) {
@@ -210,6 +224,11 @@ Result KProcess::Initialize(KernelCore& kernel, const Svc::CreateProcessParamete
     m_arg_pointer = 0;
     m_arg_return_address = 0;
     m_main_thread_handle_addr = 0;
+    m_process_handle_addr = 0;
+    m_homebrew_next_load_path_addr = 0;
+    m_homebrew_next_load_argv_addr = 0;
+    m_is_homebrew_in_place_next_load = false;
+    m_has_homebrew_nxlink_argv_marker = false;
     m_code_size = params.code_num_pages * PageSize;
     m_is_application = True(params.flags & Svc::CreateProcessFlag::IsApplication);
 
@@ -419,7 +438,8 @@ Result KProcess::Initialize(KernelCore& kernel, const Svc::CreateProcessParamete
             False(params.flags & Svc::CreateProcessFlag::DisableDeviceAddressSpaceMerge);
         R_TRY(m_page_table.Initialize(as_type, enable_aslr, enable_das_merge, !enable_aslr, pool,
                                       params.code_address, code_size, m_system_resource, res_limit,
-                                      m_memory, aslr_space_start));
+                                      m_memory, aslr_space_start,
+                                      m_is_switch2 ? Switch2ExtraHeapRegionSize : 0));
     }
     ON_RESULT_FAILURE_2 {
         m_page_table.Finalize();
@@ -947,6 +967,7 @@ Result KProcess::Run(KernelCore& kernel, s32 priority, size_t stack_size) {
 
         stack_top = stack_bottom + stack_size;
         m_main_thread_stack_size = stack_size;
+        m_main_thread_stack_top = stack_top;
     }
 
     // Ensure our stack is safe to clean up on exit.
@@ -1004,6 +1025,11 @@ Result KProcess::Run(KernelCore& kernel, s32 priority, size_t stack_size) {
         // svcCloseHandle on exit.
         if (GetInteger(m_main_thread_handle_addr) != 0) {
             this->GetMemory().Write32(m_main_thread_handle_addr, thread_handle);
+        }
+        if (GetInteger(m_process_handle_addr) != 0) {
+            Handle process_handle;
+            R_TRY(m_handle_table.Add(kernel, std::addressof(process_handle), this));
+            this->GetMemory().Write32(m_process_handle_addr, process_handle);
         }
     } else {
         main_thread->GetContext().r[0] = 0;
@@ -1255,19 +1281,14 @@ Result KProcess::LoadFromMetadata(KernelCore& kernel, const FileSys::ProgramMeta
     static_assert(sizeof(params.name) <= sizeof(name));
     std::memcpy(params.name.data(), name.data(), sizeof(params.name));
 
-    // Initialize for application process.
+    // Initialize for application process. Switch 2 needs its flag first: the page table sizes
+    // the heap region from it.
+    m_is_switch2 = metadata.IsSwitch2();
     R_TRY(this->Initialize(kernel, params, metadata.GetKernelCapabilities(), res_limit, pool, aslr_space_start));
 
     // Assign remaining properties.
     m_ideal_core_id = metadata.GetMainThreadCore();
-
-    // Switch 2 applications get more memory than a 64-bit heap region holds (nninitStartup sizes
-    // its heap as total memory minus ~6.3 GiB), so count the alias region as well, bounded by the
-    // pool through the resource limit.
-    if (metadata.IsSwitch2()) {
-        m_is_switch2 = true;
-        m_max_process_memory = m_page_table.GetHeapRegionSize() + m_page_table.GetAliasRegionSize();
-    }
+    m_uses_pauth_returns = metadata.UsesExtendedAcid();
 
     // Set up emulation context.
     this->InitializeInterfaces(kernel);
@@ -1311,13 +1332,37 @@ void KProcess::LoadModule(KernelCore& kernel, CodeSet code_set, KProcessAddress 
 }
 
 void KProcess::InitializeInterfaces(KernelCore& kernel) {
+#ifdef __EMSCRIPTEN__
+    ASSERT(false && "unimplemented");
+#else
     m_exclusive_monitor =
         Core::MakeExclusiveMonitor(this->GetMemory(), Core::Hardware::NUM_CPU_CORES);
+
+#ifdef HAS_HYPERVISOR
+    // EDEN_NX2_HYPERVISOR=1: run the application natively when its VM is ready (Core::Memory
+    // attached it to this page table at initialization).
+    if (this->IsApplication() && this->Is64Bit() && kernel.IsMulticore() &&
+        Core::Hv::Vm::Get().IsAttached(this->GetPageTable().GetImpl()) &&
+        Core::Hv::Vm::Get().IsReady()) {
+        for (size_t i = 0; i < Core::Hardware::NUM_CPU_CORES; i++) {
+            m_arm_interfaces[i] = std::make_unique<Core::ArmHypervisor>(kernel.System(), this, i);
+        }
+        LOG_INFO(Kernel, "Running the application natively through Hypervisor.framework");
+        return;
+    }
+#endif
 
 #ifdef HAS_NCE
     if (this->IsApplication() && Settings::IsNceEnabled()) {
         for (size_t i = 0; i < Core::Hardware::NUM_CPU_CORES; i++)
             m_arm_interfaces[i] = std::make_unique<Core::ArmNce>(kernel.System(), true, i);
+    } else
+#endif
+#ifdef HAS_SCARLETNX
+    if (Core::ScarletNxProcess::ShouldUse(kernel.System(), *this)) {
+        auto scarletnx = std::make_shared<Core::ScarletNxProcess>(kernel.System(), *this);
+        for (size_t i = 0; i < Core::Hardware::NUM_CPU_CORES; i++)
+            m_arm_interfaces[i] = Core::MakeScarletNxInterface(scarletnx, this->Is64Bit(), i);
     } else
 #endif
         if (this->Is64Bit()) {
@@ -1333,6 +1378,7 @@ void KProcess::InitializeInterfaces(KernelCore& kernel) {
                 static_cast<Core::DynarmicExclusiveMonitor&>(*m_exclusive_monitor), i);
         }
     }
+#endif
 }
 
 bool KProcess::InsertWatchpoint(KernelCore& kernel, KProcessAddress addr, u64 size, DebugWatchpointType type) {

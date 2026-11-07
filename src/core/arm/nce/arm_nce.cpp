@@ -157,19 +157,38 @@ bool ArmNce::HandleGuestAlignmentFault(GuestContext* guest_ctx, void* raw_info, 
     return HandleFailedGuestFault(guest_ctx, raw_info, raw_context);
 }
 
+constexpr size_t NCE_WRITE_FAULT_CLUSTER_PAGES = 4;
+
 bool ArmNce::HandleGuestAccessFault(GuestContext* guest_ctx, void* raw_info, void* raw_context) {
     auto* info = static_cast<siginfo_t*>(raw_info);
 
-    // Try to handle an invalid access.
-    // TODO: handle accesses which split a page?
-    const Common::ProcessAddress addr =
-        (reinterpret_cast<u64>(info->si_addr) & ~Memory::YUZU_PAGEMASK);
     auto& memory = guest_ctx->parent->m_running_thread->GetOwnerProcess()->GetMemory();
-    if (memory.InvalidateNCE(addr, Memory::YUZU_PAGESIZE)) {
-        // We handled the access successfully and are returning to guest code.
+    const auto result = memory.InvalidateNCE(addr, Memory::YUZU_PAGESIZE);
+    if (result == Memory::NCEAccessFaultAction::Retry) {
         return true;
     }
+    if (result == Memory::NCEAccessFaultAction::Instruction) {
+        return HandleGuestAlignmentFault(guest_ctx, raw_info, raw_context);
+    }
 
+    // Try to handle an invalid access.
+    auto const acc_size = 16; // Max architectural access size
+    // Please note accesses can be wider than 16-bytes
+    // This should handle **most** of the fragant issues with cases like 128-bit vector
+    // ld/st or GPU writes.
+    // This computes the addr for the (first) page corresponding to the access (if not crossing)
+    auto const addr_c1 = Common::ProcessAddress(u64(info->si_addr) & ~Memory::YUZU_PAGEMASK);
+    if (!(acc_size > 1 && (addr_c1 & Memory::YUZU_PAGEMASK) + acc_size > Memory::YUZU_PAGESIZE)) {
+        if (memory.InvalidateNCE(addr_c1, Memory::YUZU_PAGESIZE))
+            return true;
+    } else {
+        // Corresponds to the 2nd page, this means the access is split between two pages
+        auto const addr_c2 = (addr_c1 & ~Memory::YUZU_PAGEMASK) + Memory::YUZU_PAGESIZE;
+        // Always invalidate 2nd page, but only account if 1st page was invalidated properly
+        memory.InvalidateNCE(addr_c2, Memory::YUZU_PAGESIZE);
+        if (memory.InvalidateNCE(addr_c1, Memory::YUZU_PAGESIZE))
+            return true;
+    }
     // We couldn't handle the access.
     return HandleFailedGuestFault(guest_ctx, raw_info, raw_context);
 }
@@ -231,7 +250,7 @@ HaltReason ArmNce::RunThread(Kernel::KThread* thread) {
         hr = ReturnToRunCodeByExceptionLevelChange(m_thread_id, thread_params);  // Android: Use "process handle SIGUSR2 -n true -p true -s false" (and SIGURG) in LLDB when debugging
     }
 
-    // Critical section for thread cleanup
+    // Critical section for thread cleanup.
     std::atomic_thread_fence(std::memory_order_acquire);
 
     // Cache values before releasing thread

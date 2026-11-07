@@ -1,0 +1,41 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#pragma once
+
+#include <vector>
+
+#include <powah_emit.hpp>
+#include "common/common_types.h"
+
+namespace biscuit {
+class Assembler;
+}  // namespace biscuit
+
+namespace Dynarmic::IR {
+class Block;
+class Inst;
+enum class Cond;
+enum class Opcode;
+}  // namespace Dynarmic::IR
+
+namespace Dynarmic::Backend::PPC64 {
+
+struct EmittedBlockInfo {
+    std::uint32_t* entry_point;
+    size_t size;
+};
+
+struct EmitConfig {
+    bool enable_cycle_counting;
+    bool always_little_endian;
+    bool a64_variant;
+};
+
+struct EmitContext;
+
+EmittedBlockInfo EmitPPC64(powah::Context& code, IR::Block block, const EmitConfig& emit_conf);
+template<IR::Opcode op>
+void EmitIR(powah::Context& code, EmitContext& ctx, IR::Inst* inst);
+
+}  // namespace Dynarmic::Backend::RV64

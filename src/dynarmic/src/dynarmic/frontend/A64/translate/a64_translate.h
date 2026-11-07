@@ -11,6 +11,7 @@
 #include <optional>
 
 #include "common/common_types.h"
+#include "dynarmic/interface/A64/config.h"
 
 namespace Dynarmic {
 
@@ -38,16 +39,19 @@ struct TranslationOptions {
     /// If this is false, we treat the instruction as a NOP.
     /// If this is true, we emit an ExceptionRaised instruction.
     bool hook_hint_instructions = true;
+
+    bool enable_pauth_returns = false;
+    u32 address_space_bits = 64;
 };
 
 /**
  * This function translates instructions in memory into our intermediate representation.
  * @param descriptor The starting location of the basic block. Includes information like PC, FPCR state, &c.
  * @param memory_read_code The function we should use to read emulated memory.
- * @param options Configures how certain instructions are translated.
+ * @param conf Configures how certain instructions are translated.
  * @return A translated basic block in the intermediate representation.
  */
-void Translate(IR::Block& block, LocationDescriptor descriptor, MemoryReadCodeFuncType memory_read_code, TranslationOptions options);
+void Translate(IR::Block& block, LocationDescriptor descriptor, A64::UserConfig const& conf);
 
 /**
  * This function translates a single provided instruction into our intermediate representation.

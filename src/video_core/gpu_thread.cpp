@@ -53,7 +53,6 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
         Common::SetCurrentThreadName("GPU");
         VideoCommon::GpuSplit::MarkGpuThread();
         Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
-        Common::SetCurrentThreadToPerformanceCores();
         system.RegisterHostThread();
 
         auto current_context = context.Acquire();
@@ -63,29 +62,13 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
         namespace Profile = VideoCommon::Nx2Profile;
         auto& split = VideoCommon::GpuSplit::Get();
         while (!stop_token.stop_requested()) {
-            Profile::Report();
-            split.MaybeStart(system);
-            if (scheduler.HasPendingChannels()) {
-                // Suspended channels wait on semaphores the CPU releases: poll them meanwhile.
-                {
-                    Profile::Scope scope{Profile::Zone::ResumePending};
-                    scheduler.ResumePending(system.GPU());
-                }
+            if (scheduler.HasPendingNativeChannels()) {
+                scheduler.ResumePending(system.GPU());
                 if (!state.queue.TryPop(next)) {
-                    // The CPU usually releases the semaphore soon after: poll for half a
-                    // millisecond before sleeping, or every wait also waits out a host sleep
-                    // (title 1 waits ~25 times a second).
-                    Profile::Scope scope{Profile::Zone::PendingSleep};
-                    if (std::chrono::steady_clock::now() - last_progress <
-                        std::chrono::microseconds{500}) {
-                        std::this_thread::yield();
-                    } else {
-                        std::this_thread::sleep_for(std::chrono::milliseconds{1});
-                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds{1});
                     continue;
                 }
             } else {
-                Profile::Scope scope{Profile::Zone::Idle};
                 state.queue.PopWait(next, stop_token);
             }
             if (stop_token.stop_requested()) {
@@ -105,7 +88,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                     if (run->before_later_reads) {
                         // GPU memory maps unmap caches (UnmapMemory downloads): the back's state.
                         split.DeferFunction(std::move(run->func));
-                        split.Drain(VideoCommon::DrainSite::Map);
+                        split.Drain();
                     } else {
                         split.DeferFunction(std::move(run->func));
                     }
@@ -164,22 +147,22 @@ void ThreadManager::TickGPU(bool is_async) {
     PushCommand(GPUTickCommand(), false, is_async);
 }
 
-void ThreadManager::Run(std::function<void()>&& func, bool is_async, bool before_later_reads) {
-    PushCommand(RunCommand{std::move(func), before_later_reads}, false, is_async);
+void ThreadManager::Run(std::function<void()>&& func, bool is_async) {
+    PushCommand(RunCommand{std::move(func)}, false, is_async);
 }
 
 void ThreadManager::InvalidateRegion(DAddr addr, u64 size) {
     rasterizer->OnCacheInvalidation(addr, size);
 }
 
-void ThreadManager::FlushAndInvalidateRegion(DAddr addr, u64 size, bool is_async) {
+void ThreadManager::FlushAndInvalidateRegion(DAddr addr, u64 size) {
     if (Settings::IsGPULevelHigh()) {
         if (!is_async) {
-            PushCommand(FlushRegionCommand(addr, size), false, is_async);
+            PushCommand(FlushRegionCommand(addr, size));
         } else {
             auto& gpu = system.GPU();
             const u64 fence = gpu.RequestFlush(addr, size);
-            TickGPU(is_async);
+            TickGPU();
             gpu.WaitForSyncOperation(fence);
         }
     }

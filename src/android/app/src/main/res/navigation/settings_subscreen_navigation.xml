@@ -105,6 +105,12 @@
         android:name="org.yuzu.yuzu_emu.fragments.GameFoldersFragment"
         android:label="GameFoldersFragment" />
 
+    <fragment
+        android:id="@+id/switch2ReadinessFragment"
+        android:name="org.yuzu.yuzu_emu.fragments.Switch2ReadinessFragment"
+        android:label="@string/switch2_readiness"
+        tools:layout="@layout/fragment_switch2_readiness" />
+
     <activity
         android:id="@+id/emulationActivity"
         android:name="org.yuzu.yuzu_emu.activities.EmulationActivity"

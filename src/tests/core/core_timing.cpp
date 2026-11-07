@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: 2016 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -13,6 +16,7 @@
 
 #include "core/core.h"
 #include "core/core_timing.h"
+#include "core/guest_clock.h"
 
 namespace {
 // Numbers are chosen randomly to make sure the correct one is given.
@@ -56,14 +60,15 @@ u64 TestTimerSpeed(Core::Timing::CoreTiming& core_timing) {
 } // Anonymous namespace
 
 TEST_CASE("CoreTiming[BasicOrder]", "[core]") {
+    Core::System system{};
     ScopeInit guard;
     auto& core_timing = guard.core_timing;
     std::vector<std::shared_ptr<Core::Timing::EventType>> events{
-        Core::Timing::CreateEvent("callbackA", HostCallbackTemplate<0>),
-        Core::Timing::CreateEvent("callbackB", HostCallbackTemplate<1>),
-        Core::Timing::CreateEvent("callbackC", HostCallbackTemplate<2>),
-        Core::Timing::CreateEvent("callbackD", HostCallbackTemplate<3>),
-        Core::Timing::CreateEvent("callbackE", HostCallbackTemplate<4>),
+        system.CreateTimingEvent("callbackA", HostCallbackTemplate<0>),
+        system.CreateTimingEvent("callbackB", HostCallbackTemplate<1>),
+        system.CreateTimingEvent("callbackC", HostCallbackTemplate<2>),
+        system.CreateTimingEvent("callbackD", HostCallbackTemplate<3>),
+        system.CreateTimingEvent("callbackE", HostCallbackTemplate<4>),
     };
 
     expected_callback = 0;
@@ -97,14 +102,15 @@ TEST_CASE("CoreTiming[BasicOrder]", "[core]") {
 }
 
 TEST_CASE("CoreTiming[BasicOrderNoPausing]", "[core]") {
+    Core::System system{};
     ScopeInit guard;
     auto& core_timing = guard.core_timing;
     std::vector<std::shared_ptr<Core::Timing::EventType>> events{
-        Core::Timing::CreateEvent("callbackA", HostCallbackTemplate<0>),
-        Core::Timing::CreateEvent("callbackB", HostCallbackTemplate<1>),
-        Core::Timing::CreateEvent("callbackC", HostCallbackTemplate<2>),
-        Core::Timing::CreateEvent("callbackD", HostCallbackTemplate<3>),
-        Core::Timing::CreateEvent("callbackE", HostCallbackTemplate<4>),
+        system.CreateTimingEvent("callbackA", HostCallbackTemplate<0>),
+        system.CreateTimingEvent("callbackB", HostCallbackTemplate<1>),
+        system.CreateTimingEvent("callbackC", HostCallbackTemplate<2>),
+        system.CreateTimingEvent("callbackD", HostCallbackTemplate<3>),
+        system.CreateTimingEvent("callbackE", HostCallbackTemplate<4>),
     };
 
     core_timing.SyncPause(true);
@@ -143,4 +149,21 @@ TEST_CASE("CoreTiming[BasicOrderNoPausing]", "[core]") {
     printf("HostTimer No Pausing Scheduling Time: %.3f %.6f\n", micro, mili);
     printf("HostTimer No Pausing Timer Time: %.3f %.6f\n", timer_time / 1000.f,
            timer_time / 1000000.f);
+}
+
+TEST_CASE("Guest counter units follow the application ABI", "[guest-clock]") {
+    using Core::Timing::GetGuestCounterFrequency;
+    using Core::Timing::GetGuestCounterTicks;
+    REQUIRE(GetGuestCounterFrequency(false) == 19'200'000);
+    REQUIRE(GetGuestCounterFrequency(true) == 31'250'000);
+    REQUIRE(GetGuestCounterTicks(0, true) == 0);
+    REQUIRE(GetGuestCounterTicks(19'200'000, true) == 31'250'000);
+    REQUIRE(GetGuestCounterTicks(9'600'000, true) == 15'625'000);
+    REQUIRE(GetGuestCounterTicks(1, true) == 1);
+    REQUIRE(GetGuestCounterTicks(2, true) == 3);
+    REQUIRE(GetGuestCounterTicks(19'199'999, true) == 31'249'998);
+    REQUIRE(GetGuestCounterTicks(19'200'001, true) == 31'250'001);
+    REQUIRE(GetGuestCounterTicks(1ULL << 60, true) == 1876499844737706666ULL);
+    REQUIRE(GetGuestCounterTicks(1ULL << 60, false) == (1ULL << 60));
+    REQUIRE(GetGuestCounterTicks(~0ULL, false) == ~0ULL);
 }

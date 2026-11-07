@@ -29,8 +29,7 @@ using TimedCallback = std::function<std::optional<std::chrono::nanoseconds>(
 
 /// Contains the characteristics of a particular event.
 struct EventType {
-    explicit EventType(TimedCallback&& callback_, std::string&& name_)
-        : callback{std::move(callback_)}, name{std::move(name_)}, sequence_number{0} {}
+    explicit EventType(TimedCallback&& callback_, std::string&& name_) : callback{std::move(callback_)}, name{std::move(name_)}, sequence_number{0} {}
 
     /// The event's callback function.
     TimedCallback callback;
@@ -90,11 +89,6 @@ public:
     /// Checks if core timing is running.
     bool IsRunning() const;
 
-    /// Checks if the timer thread has started.
-    bool HasStarted() const {
-        return has_started;
-    }
-
     /// Checks if there are any pending time events.
     bool HasPendingEvents() const;
 
@@ -134,45 +128,29 @@ public:
     /// Checks for events manually and returns time in nanoseconds for next event, threadsafe.
     std::optional<s64> Advance();
 
-#ifdef _WIN32
-    void SetTimerResolutionNs(std::chrono::nanoseconds ns);
-#endif
-
     struct Event;
 
     void Reset();
 
     using heap_t = boost::heap::fibonacci_heap<CoreTiming::Event, boost::heap::compare<std::greater<>>>;
+    Common::Event event{};
+    Common::Event pause_event{};
+
+    alignas(64) mutable std::mutex basic_lock;
+    alignas(64) std::mutex advance_lock;
+    alignas(64) std::atomic<bool> paused{};
+    alignas(64) std::atomic<bool> paused_set{};
+    alignas(64) std::atomic<bool> wait_set{};
+    std::function<void()> on_thread_init{};
     heap_t event_queue;
+    std::jthread timer_thread;
     s64 global_timer = 0;
-#ifdef _WIN32
-    s64 timer_resolution_ns;
-#endif
     u64 event_fifo_id = 0;
     s64 pause_end_time{};
     /// Cycle timing
     u64 cpu_ticks{};
     s64 downcount{};
-    Common::Event event{};
-    Common::Event pause_event{};
-    std::function<void()> on_thread_init{};
-    std::jthread timer_thread;
-    mutable std::mutex basic_lock;
-    std::mutex advance_lock;
-    std::atomic<bool> paused{};
-    std::atomic<bool> paused_set{};
-    std::atomic<bool> wait_set{};
-    std::atomic<bool> has_started{};
     bool is_multicore{};
 };
-
-/// Creates a core timing event with the given name and callback.
-///
-/// @param name     The name of the core timing event to create.
-/// @param callback The callback to execute for the event.
-///
-/// @returns An EventType instance representing the created event.
-///
-std::shared_ptr<EventType> CreateEvent(std::string name, TimedCallback&& callback);
 
 } // namespace Core::Timing

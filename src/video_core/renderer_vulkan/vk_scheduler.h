@@ -12,8 +12,7 @@
 #include <cstddef>
 #include <deque>
 #include <functional>
-#include <mutex>
-#include <string>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -28,7 +27,6 @@
 #include "common/polyfill_thread.h"
 #include "common/settings.h"
 #include "video_core/gpu_split.h"
-#include "video_core/renderer_vulkan/fragment_barrier_state.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
@@ -46,11 +44,16 @@ class GraphicsPipeline;
 class StateTracker;
 
 struct QueryCacheParams;
+struct RenderingAttachments;
 
 /// The scheduler abstracts command buffer and fence management with an interface that's able to do
 /// OpenGL-like operations on Vulkan command buffers.
 class Scheduler {
 public:
+    static constexpr u32 DEPTH_ATTACHMENT_BIT = 1u << 8;
+    static constexpr u32 STENCIL_ATTACHMENT_BIT = 1u << 9;
+    static constexpr u32 ALL_ATTACHMENTS = 0x3FF;
+
     explicit Scheduler(const Device& device, StateTracker& state_tracker);
     ~Scheduler();
 
@@ -105,42 +108,50 @@ public:
     void DispatchWork();
 
     /// Requests to begin a renderpass.
-    void RequestRenderpass(const Framebuffer* framebuffer,
-                           std::source_location location = std::source_location::current());
+    void RequestRenderpass(const Framebuffer* framebuffer, u32 touched = ALL_ATTACHMENTS,
+                           u32 written = ALL_ATTACHMENTS);
 
-    /// Defers a full-attachment color clear so it becomes the next render pass.
-    bool DeferColorClear(const Framebuffer* framebuffer, u32 rt_slot, const VkClearValue& value);
+    bool OverrideLoadOps(const Framebuffer* framebuffer, u32 attachments,
+                         VkAttachmentLoadOp load_op, const VkClearValue& value);
 
-    /// Defers a full depth/stencil clear so it becomes the next render pass.
-    bool DeferDepthStencilClear(const Framebuffer* framebuffer, const VkClearValue& value);
+    void DiscardResolvedAttachments(VkImageView resolve_view);
 
-    /// Realizes any pending deferred clear before its framebuffer can be moved or freed.
-    void FlushDeferredClear();
+    bool CanAliasRenderPass(const Framebuffer* framebuffer) const;
+
+    bool IsRenderPassImage(VkImage image) const;
 
     /// Requests the current execution context to be able to execute operations only allowed outside
     /// of a renderpass.
-    void RequestOutsideRenderPassOperationContext(
-        std::source_location location = std::source_location::current());
+    void RequestOutsideRenderPassOperationContext();
 
-    void DeferFragmentBarrier() {
-        fragment_barrier.Defer(state.renderpass != VK_NULL_HANDLE);
-    }
-
-    bool HasFragmentBarrier() const {
-        return fragment_barrier.Pending();
-    }
-
-    void NoteRenderPassStores() {
-        render_pass_has_stores = true;
-    }
-
-    bool RenderPassHasStores() const {
-        return render_pass_has_stores;
-    }
+    void RequestComputeDispatchContext();
 
     /// Returns true when a render pass is currently active in the scheduler state.
     bool IsRenderPassActive() const {
-        return state.renderpass != VK_NULL_HANDLE;
+        return state.framebuffer_id != 0;
+    }
+
+    u64 ActiveRenderPassSerial() const noexcept {
+        if (state.framebuffer_id != 0) {
+            return renderpass_serial;
+        }
+        return (std::numeric_limits<u64>::max)();
+    }
+
+    u64 WaitForIdleSerial() const noexcept {
+        return wfi_serial;
+    }
+
+    void NotifyWaitForIdle() noexcept {
+        ++wfi_serial;
+    }
+
+    void MarkRenderPassWrites() noexcept {
+        renderpass_writes = true;
+    }
+
+    bool HasDepthWrites() const noexcept {
+        return (attachments_written & DEPTH_ATTACHMENT_BIT) != 0;
     }
 
     /// Update the pipeline to the current execution context.
@@ -191,23 +202,16 @@ public:
     template <typename T>
         requires std::is_invocable_v<T, vk::CommandBuffer>
     void Record(T&& c) {
+        if (pending_begin) {
+            FlushPendingRenderPass();
+        }
         this->RecordWithUploadBuffer(
             [command = std::move(c)](vk::CommandBuffer cmdbuf, vk::CommandBuffer) {
                 command(cmdbuf);
             });
     }
 
-    /// Whether the recording thread submitted `tick` within 20 ms.
-    [[nodiscard]] bool WaitForSubmission(u64 tick) const {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{20};
-        while (tick >= master_semaphore->CurrentTick()) {
-            if (std::chrono::steady_clock::now() >= deadline) {
-                return false;
-            }
-            std::this_thread::sleep_for(std::chrono::microseconds{100});
-        }
-        return true;
-    }
+    bool RetractUnrecordedRenderPass();
 
     /// Returns the current command buffer tick.
     [[nodiscard]] u64 CurrentTick() const noexcept {
@@ -225,83 +229,14 @@ public:
         return master_semaphore->IsFree(tick);
     }
 
-    /// Waits for the given GPU tick, optionally pacing frames. Threads other than the one that
-    /// records (the async present thread) pass may_flush = false: flushing from there records
-    /// into the current chunk while that thread does (corrupt command buffers, crashes). They
-    /// wait for the recording thread to submit the tick instead, and give up after 20 ms (it may
-    /// be waiting for them).
-    void Wait(u64 tick, double target_fps = 0.0, bool may_flush = true) {
-        const bool trace = Common::DkbFrameTrace::Enabled() && target_fps > 0.0;
-        const auto trace_start = trace ? std::chrono::steady_clock::now()
-                                       : std::chrono::steady_clock::time_point{};
-        if (tick > 0 && (may_flush || WaitForSubmission(tick))) {
-            if (tick >= master_semaphore->CurrentTick()) {
-                Flush();
-            }
-            master_semaphore->Wait(tick);
+    /// Waits for the given tick to trigger on the GPU.
+    void Wait(u64 tick) {
+        if (tick >= master_semaphore->CurrentTick()) {
+            Flush();
         }
-        const auto trace_waited = trace ? std::chrono::steady_clock::now()
-                                        : std::chrono::steady_clock::time_point{};
-        double trace_requested_ms{};
-        double trace_sleep_ms{};
-        double trace_slept_ms{};
-        if (Settings::values.use_speed_limit.GetValue() && target_fps > 0.0) {
-            auto now = std::chrono::steady_clock::now();
-            if (last_target_fps != target_fps) {
-                frame_interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(1.0 / target_fps));
-                max_frame_count = static_cast<int>(0.1 * target_fps);
-                last_target_fps = target_fps;
-                frame_counter = 0;
-                start_time = now;
-            }
-            frame_counter++;
-            auto target_time = start_time + frame_interval * frame_counter;
-            if (target_time >= now) {
-                constexpr auto spin_tail = std::chrono::milliseconds(1);
-                auto sleep_time = target_time - now;
-                if (trace) {
-                    trace_requested_ms =
-                        std::chrono::duration<double, std::milli>(sleep_time).count();
-                }
-                if (sleep_time > spin_tail * 2) {
-                    if (trace) {
-                        trace_sleep_ms =
-                            std::chrono::duration<double, std::milli>(sleep_time - spin_tail).count();
-                    }
-                    const auto sleep_start = trace ? std::chrono::steady_clock::now()
-                                                   : std::chrono::steady_clock::time_point{};
-                    std::this_thread::sleep_for(sleep_time - spin_tail);
-                    if (trace) {
-                        trace_slept_ms = std::chrono::duration<double, std::milli>(
-                            std::chrono::steady_clock::now() - sleep_start).count();
-                    }
-                }
-                while (std::chrono::steady_clock::now() < target_time) {
-                    std::this_thread::yield();
-                }
-            } else if (frame_counter > max_frame_count) {
-                frame_counter = 0;
-                start_time = now;
-            }
-        }
-        if (trace) {
-            static thread_local Common::DkbFrameTrace::RateLimit rate;
-            const auto end = std::chrono::steady_clock::now();
-            if (rate.Ready(end)) {
-                LOG_INFO(Render_Vulkan,
-                         "DKB host_pace target_fps={} enabled={} may_flush={} "
-                         "cpu_wait_wall_ms={:.3f} pace_requested_ms={:.3f} "
-                         "sleep_requested_ms={:.3f} sleep_actual_wall_ms={:.3f} "
-                         "pace_actual_wall_ms={:.3f}",
-                         target_fps, Settings::values.use_speed_limit.GetValue(), may_flush,
-                         std::chrono::duration<double, std::milli>(trace_waited - trace_start).count(),
-                         trace_requested_ms, trace_sleep_ms, trace_slept_ms,
-                         std::chrono::duration<double, std::milli>(end - trace_waited).count());
-            }
-        }
+        master_semaphore->Wait(tick);
     }
 
-    /// Returns the master timeline semaphore.
     [[nodiscard]] MasterSemaphore& GetMasterSemaphore() const noexcept {
         return *master_semaphore;
     }
@@ -309,8 +244,34 @@ public:
     std::mutex submit_mutex;
 
 private:
-    std::chrono::steady_clock::time_point last_flush{};
-    bool flush_pending{};
+    void ApplyFramePacing(double target_fps) {
+        if (!Settings::values.use_speed_limit.GetValue() || target_fps <= 0.0) {
+            return;
+        }
+        auto now = std::chrono::steady_clock::now();
+        if (last_target_fps != target_fps) {
+            frame_interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(1.0 / target_fps));
+            max_frame_count = static_cast<int>(0.1 * target_fps);
+            last_target_fps = target_fps;
+            frame_counter = 0;
+            start_time = now;
+        }
+        frame_counter++;
+        auto target_time = start_time + frame_interval * frame_counter;
+        if (target_time >= now) {
+            auto sleep_time = target_time - now;
+            if (sleep_time > std::chrono::milliseconds(15)) {
+                std::this_thread::sleep_for(sleep_time - std::chrono::milliseconds(1));
+            }
+            while (std::chrono::steady_clock::now() < target_time) {
+                std::this_thread::yield();
+            }
+        } else if (frame_counter > max_frame_count) {
+            frame_counter = 0;
+            start_time = now;
+        }
+    }
 
     class Command {
     public:
@@ -344,6 +305,10 @@ private:
             command(cmdbuf, upload_cmdbuf);
         }
 
+        T& Get() noexcept {
+            return command;
+        }
+
     private:
         T command;
     };
@@ -353,16 +318,18 @@ private:
         void ExecuteAll(vk::CommandBuffer cmdbuf, vk::CommandBuffer upload_cmdbuf);
 
         template <typename T>
-        bool Record(T& command) {
+        T* Record(T& command) {
             using FuncType = TypedCommand<T>;
             static_assert(sizeof(FuncType) < sizeof(data), "Lambda is too large");
 
             command_offset = Common::AlignUp(command_offset, alignof(FuncType));
             if (command_offset > sizeof(data) - sizeof(FuncType)) {
-                return false;
+                return nullptr;
             }
             Command* const current_last = last;
-            last = new (data.data() + command_offset) FuncType(std::move(command));
+            FuncType* const recorded =
+                new (data.data() + command_offset) FuncType(std::move(command));
+            last = recorded;
 
             if (current_last) {
                 current_last->SetNext(last);
@@ -370,7 +337,7 @@ private:
                 first = last;
             }
             command_offset += sizeof(FuncType);
-            return true;
+            return &recorded->Get();
         }
 
         void MarkSubmit() {
@@ -391,36 +358,29 @@ private:
 
         size_t command_offset = 0;
         bool submit = false;
-        alignas(std::max_align_t) std::array<u8, 0x8000> data{};
+        alignas(std::max_align_t) std::array<u8, 0x8000> data;
     };
 
     struct State {
-        VkRenderPass renderpass{};
-        VkFramebuffer framebuffer{};
-        VkExtent2D render_area = {0, 0};
+        u64 framebuffer_id = 0;
         GraphicsPipeline* graphics_pipeline = nullptr;
+        bool rendering = false;
+        bool discards_msaa_color = false;
+        bool discards_msaa_depth = false;
+        u32 num_color = 0;
+        bool has_depth = false;
+        bool has_stencil = false;
+        u32 layer_count = 1;
         bool is_rescaling = false;
         bool rescaling_defined = false;
         bool mesh_layout = false;
         bool needs_state_enable_refresh = false;
-        u32 descriptor_buffer_chunk = 0;
-        bool descriptor_buffer_bound = false;
+        bool uses_transform_feedback = false;
     };
 
-    struct DeferredClear {
-        const Framebuffer* framebuffer = nullptr;
-        u32 color_clear_mask = 0;
-        std::array<VkClearValue, 8> color_values{};
-        bool depth_stencil = false;
-        VkClearValue depth_stencil_value{};
-    };
+    void BeginRenderPassImpl(const Framebuffer* framebuffer);
 
-    /// Begins a render pass for the given framebuffer, optionally with clear values.
-    void BeginRenderPassImpl(const Framebuffer* framebuffer, VkRenderPass renderpass,
-                             const VkClearValue* clear_values, u32 clear_value_count);
-
-    /// If a deferred clear is pending.
-    void RealizeDeferredClear();
+    void BindFramebuffer(const Framebuffer* framebuffer);
 
     void WorkerThread(std::stop_token stop_token);
 
@@ -432,11 +392,20 @@ private:
 
     u64 SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore);
 
-    void AllocateNewContext();
-
     void EndPendingOperations();
 
+    void RecordDynamicBegin(const DeferredClear* clear);
+
+    void FlushPendingRenderPass();
+
     void EndRenderPass();
+
+    void PublishComputeWrites();
+
+    void RelaxAttachmentOps(RenderingAttachments& attachments) const;
+
+    u32 RefineImageAccesses(const RenderingAttachments& attachments,
+                            std::array<VkAccessFlags2, 9>& accesses) const;
 
     void AcquireNewChunk();
 
@@ -444,8 +413,7 @@ private:
     StateTracker& state_tracker;
 
     std::unique_ptr<MasterSemaphore> master_semaphore;
-    FragmentBarrierState fragment_barrier;
-    bool render_pass_has_stores{};
+    bool compute_writes_pending{};
     bool graphics_pipeline_missing{};
     std::unique_ptr<CommandPool> command_pool;
 
@@ -503,17 +471,31 @@ private:
     vk::CommandBuffer current_cmdbuf;
     vk::CommandBuffer current_upload_cmdbuf;
 
-    DeferredClear deferred_clear;
-
     std::unique_ptr<CommandChunk> chunk;
     std::function<void()> on_submit;
 
     State state;
     u64 recording_epoch = 0;
 
+    u64 renderpass_serial = 0;
+    u64 alias_framebuffer_id = 0;
+    u64 wfi_serial = 0;
+    bool renderpass_writes = false;
+    bool renderpass_pristine = false;
+    bool compute_writes = false;
+    u32 attachments_touched = 0;
+    u32 attachments_written = 0;
+    RenderingAttachments* recorded_attachments = nullptr;
+    RenderingAttachments* ended_attachments = nullptr;
+    VkMemoryBarrier2 renderpass_write_barrier{};
+    VkMemoryBarrier2 compute_write_barrier{};
+    VkMemoryBarrier2 upload_write_barrier{};
     u32 num_renderpass_images = 0;
     std::array<VkImage, 9> renderpass_images{};
     std::array<VkImageSubresourceRange, 9> renderpass_image_ranges{};
+    std::array<VkImageView, 9> renderpass_views{};
+    VkExtent2D renderpass_extent{};
+    u32 renderpass_layers = 0;
 
     std::queue<std::unique_ptr<CommandChunk>> work_queue;
     std::vector<std::unique_ptr<CommandChunk>> chunk_reserve;
@@ -523,12 +505,6 @@ private:
     std::condition_variable_any event_cv;
     bool worker_waiting{}; ///< The worker is waiting for work (guarded by queue_mutex)
     std::jthread worker_thread;
-
-    std::chrono::steady_clock::duration frame_interval{};
-    std::chrono::steady_clock::time_point start_time{};
-    double last_target_fps{};
-    u64 max_frame_count{};
-    u64 frame_counter{};
 };
 
 } // namespace Vulkan

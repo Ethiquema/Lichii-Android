@@ -12,22 +12,22 @@
 namespace Service::Audio {
 using namespace AudioCore::AudioIn;
 
-IAudioInManager::IAudioInManager(Core::System& system_)
-    : ServiceFramework{system_, "audin:u"}, impl{std::make_shared<AudioCore::AudioIn::Manager>(
-                                                system_)} {
-    // clang-format off
-    static const FunctionInfo functions[] = {
-        {0, D<&IAudioInManager::ListAudioIns>, "ListAudioIns"},
-        {1, D<&IAudioInManager::OpenAudioIn>, "OpenAudioIn"},
-        {2, D<&IAudioInManager::ListAudioIns>, "ListAudioInsAuto"},
-        {3, D<&IAudioInManager::OpenAudioIn>, "OpenAudioInAuto"},
-        {4, D<&IAudioInManager::ListAudioInsAutoFiltered>, "ListAudioInsAutoFiltered"},
-        {5, D<&IAudioInManager::OpenAudioInProtocolSpecified>, "OpenAudioInProtocolSpecified"},
-    };
-    // clang-format on
-
-    RegisterHandlers(functions);
+std::optional<ServiceFrameworkBase::FunctionInfoBase> IAudioInManager::FindRequest(u32 key) {
+    static constexpr auto functions = CreateStaticMap(
+        FunctionInfo{0, D<&IAudioInManager::ListAudioIns>, "ListAudioIns"},
+        FunctionInfo{1, D<&IAudioInManager::OpenAudioIn>, "OpenAudioIn"},
+        FunctionInfo{2, D<&IAudioInManager::ListAudioIns>, "ListAudioInsAuto"},
+        FunctionInfo{3, D<&IAudioInManager::OpenAudioIn>, "OpenAudioInAuto"},
+        FunctionInfo{4, D<&IAudioInManager::ListAudioInsAutoFiltered>, "ListAudioInsAutoFiltered"},
+        FunctionInfo{5, D<&IAudioInManager::OpenAudioInProtocolSpecified>, "OpenAudioInProtocolSpecified"}
+    );
+    return HandlerTableGenerateWithFind(key, functions);
 }
+
+IAudioInManager::IAudioInManager(Core::System& system_)
+    : ServiceFramework{system_, "audin:u"}
+    , impl{std::make_unique<AudioCore::AudioIn::Manager>(system_)}
+{}
 
 IAudioInManager::~IAudioInManager() = default;
 
@@ -68,7 +68,7 @@ Result IAudioInManager::OpenAudioInAuto(
 Result IAudioInManager::ListAudioInsAutoFiltered(
     OutArray<AudioDeviceName, BufferAttr_HipcAutoSelect> out_audio_ins, Out<u32> out_count) {
     LOG_DEBUG(Service_Audio, "called");
-    *out_count = impl->GetDeviceNames(out_audio_ins, true);
+    *out_count = impl->GetDeviceNames(system, out_audio_ins, true);
     R_SUCCEED();
 }
 
@@ -93,8 +93,8 @@ Result IAudioInManager::OpenAudioInProtocolSpecified(
 
     size_t new_session_id{};
 
-    R_TRY(impl->LinkToManager());
-    R_TRY(impl->AcquireSessionId(new_session_id));
+    R_TRY(impl->LinkToManager(system));
+    R_TRY(impl->AcquireSessionId(system, new_session_id));
 
     LOG_DEBUG(Service_Audio, "Opening new AudioIn, session_id={}, free sessions={}", new_session_id,
               impl->num_free_sessions);

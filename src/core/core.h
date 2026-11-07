@@ -18,8 +18,10 @@
 
 #include "common/common_types.h"
 #include "core/file_sys/vfs/vfs_types.h"
+#include "core/hle/service/dmnt/dmnt_types.h"
 #include "core/hle/service/os/event.h"
 #include "core/hle/service/kernel_helpers.h"
+#include "core/core_timing.h"
 
 namespace Core::Frontend {
 class EmuWindow;
@@ -47,8 +49,14 @@ enum class ResultStatus : u16;
 
 namespace Core::Memory {
 struct CheatEntry;
+struct RuntimeCheatInfo;
 class Memory;
 } // namespace Core::Memory
+
+namespace Service::DMNT {
+    class CheatProcessManager;
+    struct CheatEntry;
+}
 
 namespace Service {
 
@@ -133,6 +141,10 @@ struct PerfStatsResults;
 FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,
                                          const std::string& path);
 
+/// Whether the file (from GetGameFileFromPath) is a Switch 2 program, which uses the Switch 2
+/// settings profile.
+bool IsSwitch2Program(const FileSys::VirtualFile& file);
+
 /// Enumeration representing the return values of the System Initialize and Load process.
 enum class SystemResultStatus : u32 {
     Success,             ///< Succeeded
@@ -170,6 +182,8 @@ public:
      * This function will start emulation and run the relevant devices
      */
     void Run();
+
+    void DumpGuestThreads();
 
     /**
      * Pause the OS and Application
@@ -343,9 +357,11 @@ public:
 
     [[nodiscard]] FileSys::VirtualFilesystem GetFilesystem() const;
 
-    void RegisterCheatList(const std::vector<Memory::CheatEntry>& list,
+    void RegisterCheatList(const std::vector<Service::DMNT::CheatEntry>& list,
                            const std::array<u8, 0x20>& build_id, u64 main_region_begin,
                            u64 main_region_size);
+    [[nodiscard]] std::vector<Memory::RuntimeCheatInfo> GetRuntimeCheats() const;
+    bool SetCheatEnabled(u32 cheat_id, bool enabled);
 
     void SetFrontendAppletSet(Service::AM::Frontend::FrontendAppletSet&& set);
 
@@ -383,6 +399,9 @@ public:
     [[nodiscard]] const Core::Debugger& GetDebugger() const;
 
     [[nodiscard]] Tools::RenderdocAPI& GetRenderdocAPI();
+
+    [[nodiscard]] Service::DMNT::CheatProcessManager& GetCheatManager();
+    [[nodiscard]] const Service::DMNT::CheatProcessManager& GetCheatManager() const;
 
     void SetExitLocked(bool locked);
     bool GetExitLocked() const;
@@ -451,6 +470,9 @@ public:
     /// Applies any changes to settings to this core instance.
     void ApplySettings();
 
+    std::shared_ptr<Core::Timing::EventType> CreateTimingEvent(std::string name, Core::Timing::TimedCallback&& callback);
+
+private:
     struct Impl;
     std::unique_ptr<Impl> impl;
 };

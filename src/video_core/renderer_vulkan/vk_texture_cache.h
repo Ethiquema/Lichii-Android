@@ -6,21 +6,14 @@
 
 #pragma once
 
-#include <chrono>
-#include <deque>
-#include <memory>
-#include <optional>
+#include <bitset>
 #include <span>
 
 #include "video_core/texture_cache/texture_cache_base.h"
 
 #include "shader_recompiler/shader_info.h"
 #include "video_core/renderer_vulkan/vk_compute_pass.h"
-#include "video_core/renderer_vulkan/vk_dlss_network_probe.h"
-#include "video_core/renderer_vulkan/vk_fsr3_upscaler.h"
-#ifdef EGLANTINE_STREAMLINE
-#include "video_core/renderer_vulkan/vk_streamline_dlss.h"
-#endif
+#include "video_core/renderer_vulkan/vk_guest_memory.h"
 #include "video_core/renderer_vulkan/vk_render_pass_cache.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/texture_cache/image_view_base.h"
@@ -45,7 +38,6 @@ class Device;
 class Image;
 class ImageView;
 class Framebuffer;
-class RenderPassCache;
 class StagingBufferPool;
 class Scheduler;
 
@@ -81,13 +73,12 @@ public:
                                  MemoryAllocator& memory_allocator_,
                                  StagingBufferPool& staging_buffer_pool_,
                                  BlitImageHelper& blit_image_helper_,
-                                 RenderPassCache& render_pass_cache_,
                                  DescriptorPool& descriptor_pool,
                                  ComputePassDescriptorQueue& compute_pass_descriptor_queue);
 
     void Finish();
 
-    StagingBufferRef UploadStagingBuffer(size_t size, bool deferred = false);
+    StagingBufferRef UploadStagingBuffer(size_t size);
 
     StagingBufferRef DownloadStagingBuffer(size_t size, bool deferred = false);
 
@@ -95,20 +86,11 @@ public:
 
     void TickFrame();
 
-    void FlushDeferredClear();
-
     u64 GetDeviceLocalMemory() const;
 
     u64 GetDeviceMemoryUsage() const;
 
-    /// GPU progress: the texture cache frees a deleted image once the GPU is past its last use.
-    [[nodiscard]] u64 CurrentTick() const noexcept;
-
-    [[nodiscard]] bool IsFree(u64 tick) const noexcept;
-
-    u64 GetDeviceMemoryBudget() const;
-
-    u64 GetDeviceMemorySlack() const;
+    u64 GetDeviceAllocationUsage() const;
 
     bool CanReportMemoryUsage() const;
 
@@ -133,24 +115,11 @@ public:
                    Tegra::Engines::Fermi2D::Filter filter,
                    Tegra::Engines::Fermi2D::Operation operation);
 
-    /// Stands in for a DLSS evaluation: temporal upscale of input_color (render_size on the host)
-    /// into dst, with FSR 3.1 when given the depth, else with the temporal stand-in. False when dst
-    /// cannot take it.
+    /// Stands in for a DLSS evaluation: temporal upscale of input_color into dst, accumulated with
+    /// a copy of dst's previous contents (the last output). False when dst cannot take it.
     bool TemporalUpscale(Framebuffer* dst_framebuffer, ImageView& dst, ImageView& input_color,
-                         ImageView& motion_vectors, ImageView* depth,
-                         std::array<u32, 2> render_size, std::array<f32, 2> jitter,
-                         std::array<f32, 2> motion_scale, bool use_history);
-
-    /// True when TemporalUpscale would use the depth (FSR 3.1 not forced off and not failed).
-    [[nodiscard]] bool WantsTemporalUpscaleDepth() const;
-
-    /// True while TemporalUpscale would use NVIDIA DLSS (on, Streamline running, not failed).
-    [[nodiscard]] bool UsesNvidiaDlss() const;
-
-    /// Records a health check of a game's DLSS network output against its input (both sampled in
-    /// the GENERAL layout) and returns an earlier check's result once the GPU has finished it.
-    [[nodiscard]] std::optional<VideoCore::GameDlssProbe> ProbeGameDlssOutput(ImageView& input,
-                                                                              ImageView& output);
+                         ImageView& motion_vectors, std::array<f32, 2> jitter,
+                         std::array<f32, 2> motion_scale);
 
     void CopyImage(Image& dst, Image& src, std::span<const VideoCommon::ImageCopy> copies);
 
@@ -169,22 +138,21 @@ public:
 
     void ConvertImage(Framebuffer* dst, ImageView& dst_view, ImageView& src_view);
 
-    bool CanAccelerateImageUpload(Image&) const noexcept {
-        return false;
-    }
-
     bool CanUploadMSAA() const noexcept {
         return true;
     }
 
     void AccelerateImageUpload(Image&, const StagingBufferRef&,
-                               std::span<const VideoCommon::SwizzleParameters>,
-                               u32 z_start, u32 z_count);
+                               std::span<const VideoCommon::SwizzleParameters>);
 
-    /// Decodes only `layers` of an ASTC array; the staging buffer holds those layers in order.
-    void AccelerateImageUploadLayers(Image&, const StagingBufferRef&,
-                                     std::span<const VideoCommon::SwizzleParameters>,
-                                     std::span<const u32> layers);
+    void ImportGuestMemory(const Common::HostMemory& host_memory);
+
+    [[nodiscard]] bool HasGuestMemory() const noexcept {
+        return guest_memory.has_value();
+    }
+
+    [[nodiscard]] std::optional<StagingBufferRef> GuestMemorySource(const u8* pointer,
+                                                                    size_t size) const;
 
     void InsertUploadMemoryBarrier() {}
 
@@ -229,6 +197,8 @@ public:
 
     void EraseResolveShadow(VkImage msaa_image);
 
+    bool CopyResolveShadow(VkImage msaa_image, VkImage dst_image, const VkImageCopy2& region);
+
     std::span<const VkFormat> ViewFormats(PixelFormat format) {
         return view_formats[static_cast<std::size_t>(format)];
     }
@@ -245,71 +215,13 @@ public:
     MemoryAllocator& memory_allocator;
     StagingBufferPool& staging_buffer_pool;
     BlitImageHelper& blit_image_helper;
-    RenderPassCache& render_pass_cache;
-    DescriptorPool& descriptor_pool;
-    ComputePassDescriptorQueue& compute_pass_descriptor_queue;
-
-    /// FSR 3.1 in place of a DLSS evaluation (TemporalUpscale), created on first use.
-    bool UpscaleWithFsr3(Framebuffer* dst_framebuffer, ImageView& input_color,
-                         ImageView& motion_vectors, ImageView& depth,
-                         std::array<u32, 2> render_size, std::array<f32, 2> jitter,
-                         std::array<f32, 2> motion_scale);
-    std::unique_ptr<Fsr3Upscaler> fsr3_upscaler;
-    bool fsr3_unsupported{};
-    /// The game DLSS network's health check (ProbeGameDlssOutput), created on first use.
-    std::unique_ptr<DlssNetworkProbe> dlss_network_probe;
-    std::optional<std::chrono::steady_clock::time_point> fsr3_last_evaluation;
-
-    /// Draws an upscaler's RGBA16F output into the DLSS output and returns it to GENERAL.
-    void DrawUpscaledOutput(Framebuffer* dst_framebuffer, VkImageView view, VkImage image,
-                            VkSampler sampler);
-#ifdef EGLANTINE_STREAMLINE
-    /// NVIDIA's DLSS (through NVIDIA Streamline) in place of the game's,
-    /// before FSR 3.1, when the setting is on. Returns false to fall back to FSR 3.1.
-    bool UpscaleWithDlss(Framebuffer* dst_framebuffer, ImageView& input_color,
-                         ImageView& motion_vectors, ImageView& depth,
-                         std::array<u32, 2> render_size, std::array<f32, 2> jitter,
-                         std::array<f32, 2> motion_scale, bool reset);
-    std::unique_ptr<StreamlineDlssUpscaler> dlss_upscaler;
-    bool dlss_unsupported{};
-#endif
-
-    /// TemporalUpscale's history: its previous result (images[current]) and the image the next
-    /// result is stored to.
-    struct TemporalHistory {
-        std::array<vk::Image, 2> images;
-        std::array<vk::ImageView, 2> views;
-        size_t current{};
-        VkFormat format{};
-        VkExtent2D extent{};
-    } temporal_history;
-
     std::optional<ASTCDecoderPass> astc_decoder_pass;
-    std::optional<BcEncoderPass> bc_encoder_pass;
-
-    /// ASTC decoded on the GPU and re-compressed to BC1/BC3 there (accelerate_astc=Gpu with
-    /// astc_recompression=Bc1/Bc3): decode into a temporary RGBA8 image, encode, copy.
-    void TranscodeAstcToBcn(Image& image, const StagingBufferRef& map,
-                            std::span<const VideoCommon::SwizzleParameters> swizzles);
-
-    /// Temporary decode images, reusable once the GPU is past `tick`.
-    struct PendingTranscode {
-        u64 tick;
-        vk::Image image;
-        std::vector<vk::ImageView> views;
-        u32 width;
-        u32 height;
-        u32 levels;
-        u32 layers;
-        u32 unused_frames;
-    };
-    std::deque<PendingTranscode> pending_transcodes;
-    /// Decode images the GPU is done with, for the next texture of the same shape.
-    std::vector<PendingTranscode> free_transcodes;
 
     std::optional<BlockLinearUnswizzle3DPass> bl3d_unswizzle_pass;
+    std::optional<BlockLinearUnswizzle2DBufferPass> bl2d_buffer_unswizzle_pass;
     const Settings::ResolutionScalingInfo& resolution;
     std::array<std::vector<VkFormat>, VideoCore::Surface::MaxPixelFormat> view_formats;
+    std::bitset<VideoCore::Surface::MaxPixelFormat> host_copy_formats;
 
     static constexpr size_t indexing_slots = 8 * sizeof(size_t);
     std::array<vk::Buffer, indexing_slots> buffers{};
@@ -346,14 +258,7 @@ public:
     };
     ::Common::unordered_map<VkImage, TirColorScratch> tir_color_scratch;
     std::vector<std::pair<u64, ResolveShadow>> pending_resolve_shadows;
-
-    struct PendingByteAddressedShadow {
-        u64 tick;
-        vk::Image image;
-        vk::ImageView view;
-        vk::Buffer bridge;
-    };
-    std::deque<PendingByteAddressedShadow> pending_byte_addressed_shadows;
+    u64 framebuffer_serial{};
 };
 
 class Framebuffer {
@@ -376,21 +281,17 @@ public:
                            std::span<ImageView*, NUM_RT> color_buffers, ImageView* depth_buffer,
                            bool is_rescaled = false);
 
-    [[nodiscard]] VkFramebuffer Handle() const noexcept {
-        return *framebuffer;
+    [[nodiscard]] u64 Id() const noexcept {
+        return id;
     }
 
-    [[nodiscard]] VkRenderPass RenderPass() const noexcept {
-        return renderpass;
+    [[nodiscard]] const RenderingFormats& Formats() const noexcept {
+        return formats;
     }
 
-    [[nodiscard]] const RenderPassKey& RenderPassKeyBase() const noexcept {
-        return render_pass_key;
+    [[nodiscard]] const RenderingAttachments& Attachments() const noexcept {
+        return attachments;
     }
-
-    [[nodiscard]] VkRenderPass RenderPassVariant(u32 color_clear_mask, bool depth_stencil_clear,
-                                                 u32 color_discard_mask,
-                                                 bool depth_stencil_discard) const;
 
     [[nodiscard]] VkExtent2D RenderArea() const noexcept {
         return render_area;
@@ -402,10 +303,6 @@ public:
 
     [[nodiscard]] VkSampleCountFlagBits Samples() const noexcept {
         return samples;
-    }
-
-    [[nodiscard]] u32 NumColorBuffers() const noexcept {
-        return num_color_buffers;
     }
 
     [[nodiscard]] u32 NumImages() const noexcept {
@@ -436,8 +333,12 @@ public:
         return is_rescaled;
     }
 
-    [[nodiscard]] bool DiscardsMsaaColor() const noexcept {
-        return discard_msaa_color;
+    /// Records that a render pass has begun, so its resolve attachments will hold valid contents
+    /// once it ends.
+    void MarkResolveShadowsUpToDate() const;
+
+    [[nodiscard]] bool DiscardsMsaaDepth() const noexcept {
+        return discard_msaa_depth;
     }
 
     [[nodiscard]] bool DiscardsMsaaDepthStencil() const noexcept {
@@ -472,24 +373,27 @@ private:
     VkExtent2D render_area{};
     u32 layers = 1;
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
-    u32 num_color_buffers = 0;
     u32 num_images = 0;
     std::array<VkImage, 9> images{};
     std::array<VkImageSubresourceRange, 9> image_ranges{};
     std::array<size_t, NUM_RT> rt_map{};
+    std::array<VkImageView, NUM_RT> color_attachments{};
+    std::array<VkFormat, NUM_RT> color_attachment_formats{};
+    std::array<VkImageView, NUM_RT> color_resolve_attachments{};
+    std::array<VkResolveModeFlagBits, NUM_RT> color_resolve_modes{};
+    VkImageView depth_attachment{};
+    VkImageView depth_resolve_attachment{};
+    VkResolveModeFlagBits depth_resolve_mode = VK_RESOLVE_MODE_NONE;
+    VkResolveModeFlagBits stencil_resolve_mode = VK_RESOLVE_MODE_NONE;
+    VkFormat depth_attachment_format = VK_FORMAT_UNDEFINED;
+    u32 num_color_attachments = 0;
+    u32 layer_count = 1;
     bool has_depth{};
     bool has_stencil{};
     bool is_rescaled{};
     std::array<VkImage, 9> resolve_shadow_images{};
     u32 num_resolve_shadows = 0;
     TextureCacheRuntime* runtime_ptr{nullptr};
-    RenderPassKey render_pass_key{};
-    RenderPassCache* render_pass_cache{nullptr};
-    bool discard_msaa_color{};
-    bool discard_msaa_depth_stencil{};
-    mutable std::array<u32, NUM_MEMOIZED_RENDER_PASS_VARIANTS> variant_keys{};
-    mutable std::array<VkRenderPass, NUM_MEMOIZED_RENDER_PASS_VARIANTS> variant_render_passes{};
-    mutable u32 num_memoized_variants{};
 };
 
 class Image : public VideoCommon::ImageBase {
@@ -512,6 +416,10 @@ public:
     void UploadMemory(const StagingBufferRef& map,
                       std::span<const VideoCommon::BufferImageCopy> copies);
 
+    /// Replaces the image contents with its block linear guest data held in a GPU buffer.
+    /// Returns false when the image layout is not supported.
+    bool UploadSwizzledFromBuffer(VkBuffer buffer, VkDeviceSize offset);
+
     void DownloadMemory(VkBuffer buffer, size_t offset,
                         std::span<const VideoCommon::BufferImageCopy> copies);
 
@@ -520,8 +428,6 @@ public:
 
     void DownloadMemory(const StagingBufferRef& map,
                         std::span<const VideoCommon::BufferImageCopy> copies);
-
-    void AllocateComputeUnswizzleImage();
 
     [[nodiscard]] VkImage Handle() const noexcept {
         return *(this->*current_image);
@@ -542,46 +448,10 @@ public:
 
     /// Returns true when the image is already initialized and mark it as initialized
     [[nodiscard]] bool ExchangeInitialization() noexcept {
-        return std::exchange(initialized, true);
+        return std::exchange(InitializationFor(current_image), true);
     }
 
     VkImageView StorageImageView(s32 level) noexcept;
-
-    /// A storage view of one layer of a host level (decoding only some layers of an array).
-    VkImageView StorageImageLayerView(s32 level, u32 layer);
-
-    /// SparseLayers images: gives `layers` device memory where they have none yet. Returns the
-    /// layers that have memory afterwards (a cap per image can leave some out).
-    std::vector<u32> BindLayers(std::span<const u32> layers);
-
-    /// SparseTiles images: gives the host sparse blocks under `rects` (and the mip tail, for
-    /// levels in it) device memory where they have none yet. False if that failed.
-    bool BindTiles(std::span<const VideoCommon::LevelRect> rects);
-
-    /// SparseTiles images: the host sparse block, in texels, and the first level of the mip tail.
-    u32 SparseTileWidth() const noexcept {
-        return sparse_layers.tile_width;
-    }
-    u32 SparseTileHeight() const noexcept {
-        return sparse_layers.tile_height;
-    }
-    s32 SparseTailLevel() const noexcept {
-        return static_cast<s32>(sparse_layers.tail_level);
-    }
-
-    /// SparseTiles images whose blocks without memory of their own share one zeroed block.
-    bool SparseTilesShareZeroBlock() const noexcept {
-        return sparse_layers.zero_block != VK_NULL_HANDLE;
-    }
-
-    /// SparseTiles images sharing a zeroed block, before the GPU renders into them: every block
-    /// gets memory of its own, all cleared (the caller loads the data again). False on failure.
-    bool BackTilesWhole();
-
-    /// Device memory BindLayers has bound to the image's layers (an unbacked image has no other).
-    u64 SparseBoundBytes() const noexcept {
-        return sparse_layers.bound_bytes;
-    }
 
     bool IsRescaled() const noexcept;
 
@@ -589,123 +459,30 @@ public:
 
     bool ScaleDown(bool ignore = false);
 
-    u64 allocation_tick;
-
-    friend class BlockLinearUnswizzle3DPass;
-
 private:
     bool BlitScaleHelper(bool scale_up);
 
     bool NeedsScaleHelper() const;
 
+    std::vector<vk::ImageView>& StorageViewsFor(vk::Image Image::*image);
+
+    bool& InitializationFor(vk::Image Image::*image) noexcept;
+
     Scheduler* scheduler{};
     TextureCacheRuntime* runtime{};
 
-    /// Memory bound to the layers of a SparseLayers image. Declared before the images, so it is
-    /// released after them.
-    struct SparseLayerMemory {
-        SparseLayerMemory() = default;
-        SparseLayerMemory(const SparseLayerMemory&) = delete;
-        SparseLayerMemory& operator=(const SparseLayerMemory&) = delete;
-        SparseLayerMemory(SparseLayerMemory&& other) noexcept {
-            *this = std::move(other);
-        }
-        SparseLayerMemory& operator=(SparseLayerMemory&& other) noexcept {
-            Release();
-            allocator = std::exchange(other.allocator, nullptr);
-            requirements = other.requirements;
-            sparse = other.sparse;
-            width = other.width;
-            height = other.height;
-            levels = other.levels;
-            tile_width = other.tile_width;
-            tile_height = other.tile_height;
-            layer_bytes = other.layer_bytes;
-            layer_memory = std::move(other.layer_memory);
-            other.layer_memory.clear();
-            level_tiles = std::move(other.level_tiles);
-            other.level_tiles.clear();
-            tail_level = other.tail_level;
-            zero_block = std::exchange(other.zero_block, VK_NULL_HANDLE);
-            tail_memory = std::exchange(other.tail_memory, VK_NULL_HANDLE);
-            bound_bytes = other.bound_bytes;
-            warned = other.warned;
-            return *this;
-        }
-        ~SparseLayerMemory() {
-            Release();
-        }
-        void Release() noexcept {
-            if (allocator == nullptr) {
-                return;
-            }
-            for (const VmaAllocation allocation : layer_memory) {
-                allocator->FreeSparseMemory(allocation);
-            }
-            for (const auto& tiles : level_tiles) {
-                for (const VmaAllocation allocation : tiles) {
-                    allocator->FreeSparseMemory(allocation);
-                }
-            }
-            allocator->FreeSparseMemory(tail_memory);
-            allocator->FreeSparseMemory(zero_block);
-            zero_block = VK_NULL_HANDLE;
-            layer_memory.clear();
-            level_tiles.clear();
-            tail_memory = VK_NULL_HANDLE;
-        }
-
-        const MemoryAllocator* allocator{};
-        VkMemoryRequirements requirements{};
-        VkSparseImageMemoryRequirements sparse{};
-        u32 width{};       ///< Host level 0
-        u32 height{};
-        u32 levels{};      ///< Host levels
-        u32 tile_width{};  ///< Sparse block, in texels
-        u32 tile_height{};
-        VkDeviceSize layer_bytes{}; ///< One layer's levels before the mip tail, and its own tail
-        std::vector<VmaAllocation> layer_memory; ///< Per layer, null until bound
-        /// SparseTiles: per level before the mip tail, per sparse block (rows), null until bound
-        std::vector<std::vector<VmaAllocation>> level_tiles;
-        u32 tail_level{}; ///< SparseTiles: first level of the mip tail
-        /// SparseTiles: the zeroed block every block without memory of its own is bound to, where
-        /// the driver can't sample unbound memory
-        VmaAllocation zero_block{};
-        VmaAllocation tail_memory{};             ///< The mip tail all layers share, if one
-        VkDeviceSize bound_bytes{};
-        bool warned{};
-    };
-    SparseLayerMemory sparse_layers;
-
-    /// Reads the image's sparse requirements; false when it can't be bound by layer.
-    bool InitSparseLayers();
-
-    /// Reads the image's sparse requirements; false when it can't be bound by sparse block.
-    bool InitSparseTiles();
-
-    /// Binds one zeroed block to every block of a SparseTiles image (and memory to its mip tail).
-    bool BindZeroBlock();
-
-    /// Records a clear of the whole image to zero.
-    void ClearTiles();
-
     vk::Image original_image;
     vk::Image scaled_image;
-
-    vk::Buffer compute_unswizzle_buffer;
-    VkDeviceSize compute_unswizzle_buffer_size = 0;
-    bool has_compute_unswizzle_buffer = false;
-
-    void AllocateComputeUnswizzleBuffer(u32 max_slices);
 
     // Use a pointer to field because it is relative, so that the object can be
     // moved without breaking the reference.
     vk::Image Image::*current_image{};
 
     std::vector<vk::ImageView> storage_image_views;
-    std::vector<vk::ImageView> storage_layer_views; ///< By host level * layers + layer
+    std::vector<vk::ImageView> scaled_storage_image_views;
     VkImageAspectFlags aspect_mask = 0;
-    bool initialized = false;
+    bool original_initialized = false;
+    bool scaled_initialized = false;
 
     std::optional<Framebuffer> scale_framebuffer;
     std::optional<Framebuffer> normal_framebuffer;
@@ -761,10 +538,6 @@ public:
         return samples;
     }
 
-    [[nodiscard]] bool SupportsDepthComparison() const noexcept {
-        return supports_depth_comparison;
-    }
-
     [[nodiscard]] bool RequiresBorderColorFormat() const noexcept {
         return requires_border_color_format;
     }
@@ -803,7 +576,7 @@ private:
 
     std::array<vk::ImageView, Shader::NUM_TEXTURE_TYPES> image_views;
     std::optional<StorageViews> storage_views;
-    vk::ImageView typeless_storage_view;
+    std::array<vk::ImageView, Shader::NUM_TEXTURE_TYPES> typeless_storage_views;
     vk::ImageView depth_view;
     vk::ImageView stencil_view;
     vk::ImageView color_view;
@@ -815,7 +588,6 @@ private:
 
     VkComponentMapping swizzle_mapping{};
 
-    bool supports_depth_comparison = false;
     bool requires_border_color_format = false;
     bool supports_minmax_filter = false;
     bool has_identity_swizzle = true;
@@ -862,38 +634,73 @@ public:
         return base_ci;
     }
 
+    [[nodiscard]] VkSampler HandleWithNearestFilter() const noexcept {
+        return *sampler_nearest;
+    }
+
+    [[nodiscard]] bool HasLinearFiltering() const noexcept {
+        return static_cast<bool>(sampler_nearest);
+    }
+
+    [[nodiscard]] VkSampler HandleWithoutDepthComparison() const noexcept {
+        return *sampler_noncompare;
+    }
+
+    [[nodiscard]] bool HasDepthComparison() const noexcept {
+        return static_cast<bool>(sampler_noncompare);
+    }
+
+    [[nodiscard]] VkSampler HandleWithDefaultBorderColor() const noexcept {
+        return *sampler_default_border;
+    }
+
+    [[nodiscard]] bool HasCustomBorderColor() const noexcept {
+        return static_cast<bool>(sampler_default_border);
+    }
+
+    [[nodiscard]] VkSampler HandleWithDefaultReduction() const noexcept {
+        return *sampler_default_reduction;
+    }
+
+    [[nodiscard]] bool HasMinmaxReduction() const noexcept {
+        return static_cast<bool>(sampler_default_reduction);
+    }
+
+    [[nodiscard]] VkSampler HandleWithSrgbBorderColor() const noexcept {
+        return *sampler_srgb_border;
+    }
+
+    [[nodiscard]] bool HasSrgbBorderColor() const noexcept {
+        return static_cast<bool>(sampler_srgb_border);
+    }
+
+    [[nodiscard]] bool NeedsSwizzleMapping() const noexcept {
+        return needs_swizzle_mapping;
+    }
+
+    [[nodiscard]] VkSampler HandleWithSwizzle(const VkComponentMapping& mapping, bool srgb);
+
 private:
-    struct VariantKey {
-        bool reduce_anisotropy;
-        bool force_nearest;
-        bool drop_reduction;
-        bool drop_custom_border;
-        bool srgb_border;
-        std::array<VkComponentSwizzle, 4> swizzle;
-
-        bool operator==(const VariantKey&) const noexcept = default;
-
-        [[nodiscard]] bool HasSwizzle() const noexcept {
-            return swizzle != std::array<VkComponentSwizzle, 4>{};
-        }
-    };
-
-    struct Variant {
-        VariantKey key;
+    struct SwizzleVariant {
+        VkComponentMapping mapping;
+        bool srgb;
         vk::Sampler sampler;
     };
 
-    static constexpr size_t MAX_VARIANTS = 32;
+    CustomBorderColorBudget custom_border_color_budget;
 
-    [[nodiscard]] VariantKey MakeKey(const ImageView& image_view, bool is_depth) const noexcept;
-    [[nodiscard]] VkSampler Find(const VariantKey& key) const noexcept;
-    VkSampler Emplace(VariantKey key);
+    vk::Sampler sampler;
+    vk::Sampler sampler_default_anisotropy;
+    vk::Sampler sampler_nearest;
+    vk::Sampler sampler_noncompare;
+    vk::Sampler sampler_default_border;
+    vk::Sampler sampler_default_reduction;
+    vk::Sampler sampler_srgb_border;
 
     CustomBorderColorBudget custom_border_color_budget;
     std::vector<Variant> variants;
 
     const Device* device_ptr{nullptr};
-    Tegra::Texture::TSCEntry descriptor{};
     VkSamplerCreateInfo base_ci{};
     VkSamplerReductionModeEXT reduction_mode{VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE_EXT};
     std::array<float, 4> border_color{};
@@ -902,7 +709,6 @@ private:
 
     bool has_added_anisotropy{};
     bool has_linear_filtering{};
-    bool has_depth_comparison{};
     bool has_minmax_reduction{};
     bool has_custom_border_colors{};
     bool has_srgb_border_color{};
@@ -910,12 +716,12 @@ private:
 };
 
 struct TextureCacheParams {
-    static constexpr bool ENABLE_VALIDATION = true;
     static constexpr bool FRAMEBUFFER_BLITS = false;
     static constexpr bool HAS_EMULATED_COPIES = false;
     static constexpr bool HAS_DEVICE_MEMORY_INFO = true;
     static constexpr bool IMPLEMENTS_ASYNC_DOWNLOADS = true;
     static constexpr bool HAS_MSAA_DOWNLOADS = true;
+    static constexpr bool USE_UNIFIED_MEMORY = true;
 
     using Runtime = Vulkan::TextureCacheRuntime;
     using Image = Vulkan::Image;

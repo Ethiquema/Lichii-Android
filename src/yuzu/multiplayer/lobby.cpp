@@ -23,6 +23,7 @@
 #include "yuzu/multiplayer/message.h"
 #include "yuzu/multiplayer/state.h"
 #include "yuzu/multiplayer/validation.h"
+#include "qt_common/uisettings.h"
 #ifdef ENABLE_WEB_SERVICE
 #include "web_service/web_backend.h"
 #endif
@@ -61,14 +62,12 @@ Lobby::Lobby(QWidget* parent, QStandardItemModel* list,
     ui->room_list->setContextMenuPolicy(Qt::CustomContextMenu);
 
     ui->nickname->setValidator(validation.GetNickname());
-    ui->nickname->setText(
-        QString::fromStdString(UISettings::values.multiplayer_nickname.GetValue()));
+    ui->nickname->setText(QString::fromStdString(UISettings::values.multiplayer_nickname.GetValue()));
 
     // Try find the best nickname by default
     if (ui->nickname->text().isEmpty() || ui->nickname->text() == QStringLiteral("Eden")) {
-        if (!Settings::values.eden_username.GetValue().empty()) {
-            ui->nickname->setText(
-                QString::fromStdString(Settings::values.eden_username.GetValue()));
+        if (auto const username = Settings::values.eden_username.GetValue(); !username.empty()) {
+            ui->nickname->setText(QString::fromStdString(username));
         } else if (!GetProfileUsername().empty()) {
             ui->nickname->setText(QString::fromStdString(GetProfileUsername()));
         } else {
@@ -80,21 +79,17 @@ Lobby::Lobby(QWidget* parent, QStandardItemModel* list,
     connect(ui->refresh_list, &QPushButton::clicked, this, &Lobby::RefreshLobby);
     connect(ui->search, &QLineEdit::textChanged, proxy, &LobbyFilterProxyModel::SetFilterSearch);
     connect(ui->games_owned, &QCheckBox::toggled, proxy, &LobbyFilterProxyModel::SetFilterOwned);
-    connect(ui->hide_empty, &QCheckBox::toggled, proxy, &LobbyFilterProxyModel::SetFilterEmpty);
-    connect(ui->hide_full, &QCheckBox::toggled, proxy, &LobbyFilterProxyModel::SetFilterFull);
+    connect(ui->public_rooms, &QCheckBox::toggled, proxy, &LobbyFilterProxyModel::SetFilterPublic);
     connect(ui->room_list, &QTreeView::doubleClicked, this, &Lobby::OnJoinRoom);
     connect(ui->room_list, &QTreeView::clicked, this, &Lobby::OnExpandRoom);
 
     // Actions
-    connect(&room_list_watcher, &QFutureWatcher<AnnounceMultiplayerRoom::RoomList>::finished, this,
-            &Lobby::OnRefreshLobby);
+    connect(&room_list_watcher, &QFutureWatcher<AnnounceMultiplayerRoom::RoomList>::finished, this, &Lobby::OnRefreshLobby);
 
     // Load persistent filters after events are connected to make sure they apply
-    ui->search->setText(
-        QString::fromStdString(UISettings::values.multiplayer_filter_text.GetValue()));
+    ui->search->setText(QString::fromStdString(UISettings::values.multiplayer_filter_text.GetValue()));
     ui->games_owned->setChecked(UISettings::values.multiplayer_filter_games_owned.GetValue());
-    ui->hide_empty->setChecked(UISettings::values.multiplayer_filter_hide_empty.GetValue());
-    ui->hide_full->setChecked(UISettings::values.multiplayer_filter_hide_full.GetValue());
+    ui->public_rooms->setChecked(UISettings::values.multiplayer_filter_public_rooms.GetValue());
 }
 
 Lobby::~Lobby() = default;
@@ -214,12 +209,9 @@ void Lobby::OnJoinRoom(const QModelIndex& source) {
     UISettings::values.multiplayer_nickname = ui->nickname->text().toStdString();
     UISettings::values.multiplayer_filter_text = ui->search->text().toStdString();
     UISettings::values.multiplayer_filter_games_owned = ui->games_owned->isChecked();
-    UISettings::values.multiplayer_filter_hide_empty = ui->hide_empty->isChecked();
-    UISettings::values.multiplayer_filter_hide_full = ui->hide_full->isChecked();
-    UISettings::values.multiplayer_ip =
-        proxy->data(connection_index, LobbyItemHost::HostIPRole).value<QString>().toStdString();
-    UISettings::values.multiplayer_port =
-        proxy->data(connection_index, LobbyItemHost::HostPortRole).toInt();
+    UISettings::values.multiplayer_filter_public_rooms = ui->public_rooms->isChecked();
+    UISettings::values.multiplayer_ip = proxy->data(connection_index, LobbyItemHost::HostIPRole).value<QString>().toStdString();
+    UISettings::values.multiplayer_port = proxy->data(connection_index, LobbyItemHost::HostPortRole).toInt();
     emit SaveConfig();
 }
 
@@ -227,8 +219,8 @@ void Lobby::ResetModel() {
     model->clear();
     model->insertColumns(0, Column::TOTAL);
     model->setHeaderData(Column::MEMBER, Qt::Horizontal, tr("Players"), Qt::DisplayRole);
-    model->setHeaderData(Column::ROOM_NAME, Qt::Horizontal, tr("Room Name"), Qt::DisplayRole);
-    model->setHeaderData(Column::GAME_NAME, Qt::Horizontal, tr("Preferred Game"), Qt::DisplayRole);
+    model->setHeaderData(Column::ROOM_NAME, Qt::Horizontal, tr("Name"), Qt::DisplayRole);
+    model->setHeaderData(Column::GAME_NAME, Qt::Horizontal, tr("Game"), Qt::DisplayRole);
     model->setHeaderData(Column::HOST, Qt::Horizontal, tr("Host"), Qt::DisplayRole);
 }
 
@@ -344,26 +336,12 @@ bool LobbyFilterProxyModel::filterAcceptsRow(int sourceRow, const QModelIndex& s
         return true;
     }
 
-    // filter by empty rooms
-    if (filter_empty) {
-        QModelIndex member_list = sourceModel()->index(sourceRow, Column::MEMBER, sourceParent);
-        int player_count =
-            sourceModel()->data(member_list, LobbyItemMemberList::MemberListRole).toList().size();
-        if (player_count == 0) {
+    // filter by non-password protected
+    if (filter_public) {
+        QModelIndex password_index = sourceModel()->index(sourceRow, Column::ROOM_NAME);
+        bool has_password = sourceModel()->data(password_index, LobbyItemName::PasswordRole).toBool();
+        if (has_password)
             return false;
-        }
-    }
-
-    // filter by filled rooms
-    if (filter_full) {
-        QModelIndex member_list = sourceModel()->index(sourceRow, Column::MEMBER, sourceParent);
-        int player_count =
-            sourceModel()->data(member_list, LobbyItemMemberList::MemberListRole).toList().size();
-        int max_players =
-            sourceModel()->data(member_list, LobbyItemMemberList::MaxPlayerRole).toInt();
-        if (player_count >= max_players) {
-            return false;
-        }
     }
 
     // filter by search parameters
@@ -371,18 +349,9 @@ bool LobbyFilterProxyModel::filterAcceptsRow(int sourceRow, const QModelIndex& s
         QModelIndex game_name = sourceModel()->index(sourceRow, Column::GAME_NAME, sourceParent);
         QModelIndex room_name = sourceModel()->index(sourceRow, Column::ROOM_NAME, sourceParent);
         QModelIndex host_name = sourceModel()->index(sourceRow, Column::HOST, sourceParent);
-        bool preferred_game_match = sourceModel()
-                                        ->data(game_name, LobbyItemGame::GameNameRole)
-                                        .toString()
-                                        .contains(filter_search, filterCaseSensitivity());
-        bool room_name_match = sourceModel()
-                                   ->data(room_name, LobbyItemName::NameRole)
-                                   .toString()
-                                   .contains(filter_search, filterCaseSensitivity());
-        bool username_match = sourceModel()
-                                  ->data(host_name, LobbyItemHost::HostUsernameRole)
-                                  .toString()
-                                  .contains(filter_search, filterCaseSensitivity());
+        bool preferred_game_match = sourceModel()->data(game_name, LobbyItemGame::GameNameRole).toString().contains(filter_search, filterCaseSensitivity());
+        bool room_name_match = sourceModel()->data(room_name, LobbyItemName::NameRole).toString().contains(filter_search, filterCaseSensitivity());
+        bool username_match = sourceModel()->data(host_name, LobbyItemHost::HostUsernameRole).toString().contains(filter_search, filterCaseSensitivity());
         if (!preferred_game_match && !room_name_match && !username_match) {
             return false;
         }
@@ -424,13 +393,8 @@ void LobbyFilterProxyModel::SetFilterOwned(bool filter) {
     invalidate();
 }
 
-void LobbyFilterProxyModel::SetFilterEmpty(bool filter) {
-    filter_empty = filter;
-    invalidate();
-}
-
-void LobbyFilterProxyModel::SetFilterFull(bool filter) {
-    filter_full = filter;
+void LobbyFilterProxyModel::SetFilterPublic(bool filter) {
+    filter_public = filter;
     invalidate();
 }
 

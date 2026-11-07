@@ -2,10 +2,10 @@
 
 #pragma once
 
-#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include "video_core/engines/maxwell_3d.h"
 
@@ -41,11 +41,8 @@ struct VertexRepackParameters {
     u32 dispatch_groups;
 };
 
-inline std::optional<VertexRepackParameters> MakeVertexRepackParameters(u32 offset, u32 size,
-                                                                        u64 alignment,
-                                                                        u64 max_storage_range,
-                                                                        u32 max_dispatch_groups,
-                                                                        u64 buffer_size) {
+inline std::optional<VertexRepackParameters> MakeVertexRepackParameters(
+    u32 offset, u32 size, u64 alignment, u64 max_storage_range, u32 max_dispatch_groups) {
     if (size == 0 || alignment == 0) {
         return std::nullopt;
     }
@@ -53,11 +50,9 @@ inline std::optional<VertexRepackParameters> MakeVertexRepackParameters(u32 offs
     const u64 output_size = vertices * 72;
     const u64 base = u64{offset} / alignment * alignment;
     const u64 bias = offset - base;
-    // The word-rounded range must not run past the end of the source buffer
-    const u64 available = buffer_size > base ? buffer_size - base : 0;
-    const u64 range = (std::min)((bias + size + 3) / 4 * 4, available);
+    const u64 range = (bias + size + 3) / 4 * 4;
     const u64 groups = (vertices * 18 + 127) / 128;
-    if (range < bias + size || output_size > (std::numeric_limits<u32>::max)() ||
+    if (output_size > (std::numeric_limits<u32>::max)() ||
         range > (std::numeric_limits<u32>::max)() || output_size > max_storage_range ||
         range > max_storage_range || groups > max_dispatch_groups) {
         return std::nullopt;
@@ -65,6 +60,18 @@ inline std::optional<VertexRepackParameters> MakeVertexRepackParameters(u32 offs
     return VertexRepackParameters{static_cast<u32>(vertices), static_cast<u32>(output_size),
                                  static_cast<u32>(base), static_cast<u32>(bias),
                                  static_cast<u32>(range), static_cast<u32>(groups)};
+}
+
+// EGLANTINE_TEST_VERTEX_REPACK: "0" turns the repack off, "1" on for every driver; unset, it is on
+// except where the device fetches the unaligned layout correctly (VertexRepackAllowed).
+inline const char* VertexRepackSetting() {
+    static const char* const value = std::getenv("EGLANTINE_TEST_VERTEX_REPACK");
+    return value;
+}
+
+inline bool& VertexRepackAllowed() {
+    static bool allowed = true;
+    return allowed;
 }
 
 inline bool VertexRepackEnabled() {

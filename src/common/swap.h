@@ -50,7 +50,7 @@ namespace Common {
 }
 #else
 // Generic implementation - compiler will optimise these into their respective
-// __builtin_byteswapXX() and such; if not, the compiler is stupid and we probably
+// __builtin_byteswapXX() and such; if not, the compiler does not and we probably
 // have bigger problems to worry about :)
 [[nodiscard]] inline u16 swap16(u16 data) noexcept {
     return (data >> 8) | (data << 8);

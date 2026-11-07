@@ -1,8 +1,12 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "audio_core/renderer/memory/pool_mapper.h"
 #include "audio_core/renderer/sink/circular_buffer_sink_info.h"
+#include "audio_core/renderer/upsampler/upsampler_manager.h"
 
 namespace AudioCore::Renderer {
 
@@ -16,10 +20,8 @@ CircularBufferSinkInfo::CircularBufferSinkInfo() {
 }
 
 void CircularBufferSinkInfo::CleanUp() {
-    // Only device sinks own an upsampler. This sink's state is a CircularBufferState, whose
-    // first words are buffer positions: reading them as DeviceState::upsampler_info freed a
-    // garbage pointer when a game changed or removed its circular buffer sink. Clear the
-    // positions too, so a stale offset cannot survive into the next session.
+    // The state holds a CircularBufferState, not a DeviceState: there is no upsampler here, and
+    // reading it as one turned current_pos into a pointer (Mario Tennis Fever crashed on it).
     state.fill(0);
     parameter.fill(0);
     type = Type::Invalid;
@@ -32,7 +34,7 @@ void CircularBufferSinkInfo::Update(BehaviorInfo::ErrorInfo& error_info, OutStat
     auto current_params{reinterpret_cast<CircularBufferInParameter*>(parameter.data())};
     auto current_state{reinterpret_cast<CircularBufferState*>(state.data())};
 
-    if (in_use == buffer_params->in_use && !buffer_unmapped) {
+    if (in_use == bool(buffer_params->in_use) && !buffer_unmapped) {
         error_info.error_code = ResultSuccess;
         error_info.address = CpuAddr(0);
         out_status.writeOffset = current_state->last_pos2;

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "common/settings.h"
 #include "video_core/frame_gen/lossless_dll.h"
 #include "video_core/renderer_vulkan/present/lsfg_shaders.h"
 #include "video_core/renderer_vulkan/present/util.h"
@@ -10,12 +11,16 @@ namespace Vulkan {
 
 LsfgShaders::LsfgShaders(const Device& device) {
     if (!device.IsVulkanMemoryModelSupported() || !device.HasNullDescriptor() ||
-        !device.IsFloat16Supported()) {
+        !device.IsNativeFloat16Enabled()) {
         return;
     }
 
+    const bool prefer_fp16 =
+        Settings::values.frame_gen_fp16.GetValue() && device.IsFloat16Supported();
+
     VideoCore::FrameGen::ShaderModules code;
-    if (VideoCore::FrameGen::LoadShaderModules(code) != VideoCore::FrameGen::LosslessStatus::Ok) {
+    if (VideoCore::FrameGen::LoadShaderModules(code, prefer_fp16) !=
+        VideoCore::FrameGen::LosslessStatus::Ok) {
         return;
     }
 

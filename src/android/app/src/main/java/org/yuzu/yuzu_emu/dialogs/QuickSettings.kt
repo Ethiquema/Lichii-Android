@@ -64,7 +64,7 @@ class QuickSettings(val emulationFragment: EmulationFragment) {
         statusText.setTextColor(
             MaterialColors.getColor(
                 statusText,
-                com.google.android.material.R.attr.colorPrimary
+                androidx.appcompat.R.attr.colorPrimary
             )
         )
 

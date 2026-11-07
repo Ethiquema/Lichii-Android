@@ -5,16 +5,16 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
-#include <atomic>
-#include <cstdlib>
-#include <limits>
+#include <optional>
 #include <vector>
 
 #include <boost/container/small_vector.hpp>
 #include <fmt/format.h>
 
 #include "video_core/renderer_vulkan/pipeline_helper.h"
+#include "video_core/renderer_vulkan/pipeline_optimization.h"
 #include "video_core/renderer_vulkan/pipeline_statistics.h"
+#include "video_core/renderer_vulkan/pipeline_stats.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
@@ -22,7 +22,6 @@
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
-#include "video_core/shader_handle_program.h"
 #include "video_core/shader_notify.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -198,6 +197,7 @@ void ComputePipeline::TickUpscalerTrace() {
 }
 
 ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk::PipelineCache& pipeline_cache_,
+                                 std::shared_mutex& pipeline_cache_mutex_,
                                  DescriptorPool& descriptor_pool,
                                  GuestDescriptorQueue& guest_descriptor_queue_,
                                  DescriptorBufferRing& descriptor_buffer_ring_,
@@ -206,7 +206,8 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
                                  VideoCore::ShaderNotify* shader_notify, const Shader::Info& info_,
                                  vk::ShaderModule spv_module_, u64 shader_hash_)
     : device{device_},
-      pipeline_cache(pipeline_cache_), guest_descriptor_queue{guest_descriptor_queue_},
+      pipeline_cache(pipeline_cache_), pipeline_cache_mutex(pipeline_cache_mutex_),
+      guest_descriptor_queue{guest_descriptor_queue_},
       descriptor_buffer_ring{descriptor_buffer_ring_}, info{info_},
       shader_hash{shader_hash_}, spv_module(std::move(spv_module_)) {
     if (shader_notify) {
@@ -225,10 +226,9 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
         builder.CreateDescriptorSetLayout(uses_push_descriptor, uses_descriptor_buffer);
     if (uses_descriptor_buffer) {
         descriptor_buffer_layout = builder.MakeDescriptorBufferLayout(*descriptor_set_layout);
-        if (!descriptor_buffer_ring.CanAllocate(descriptor_buffer_layout.size)) {
-            LOG_DEBUG(Render_Vulkan,
-                        "Compute shader {:016X} needs {} descriptor bytes per dispatch, falling "
-                        "back to sets",
+        if (descriptor_buffer_layout.size > DescriptorBufferRing::MaxAllocationSize()) {
+            LOG_WARNING(Render_Vulkan,
+                        "Compute shader {:016X} needs {} descriptor bytes, falling back to sets",
                         shader_hash, descriptor_buffer_layout.size);
             uses_descriptor_buffer = false;
             descriptor_buffer_layout = {};
@@ -267,9 +267,23 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
         if (uses_descriptor_buffer) {
             flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
         }
+        if (BuildsUnoptimized(device.GetDriverID(), shader_hash)) {
+            flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
+        }
+        if (uses_descriptor_buffer) {
+            flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+        }
+        VkPipelineCreationFeedback creation_feedback{};
+        const VkPipelineCreationFeedbackCreateInfo feedback_ci{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO,
+            .pNext = nullptr,
+            .pPipelineCreationFeedback = &creation_feedback,
+            .pipelineStageCreationFeedbackCount = 0,
+            .pPipelineStageCreationFeedbacks = nullptr,
+        };
         const VkComputePipelineCreateInfo compute_ci{
             .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-            .pNext = nullptr,
+            .pNext = device.IsExtPipelineCreationFeedbackSupported() ? &feedback_ci : nullptr,
             .flags = flags,
             .stage{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -288,6 +302,7 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
             .basePipelineIndex = 0,
         };
         try {
+            std::shared_lock cache_lock{pipeline_cache_mutex};
             pipeline = device.GetLogical().CreateComputePipeline(compute_ci, *pipeline_cache);
         } catch (const vk::Exception& exception) {
             LOG_CRITICAL(Render_Vulkan, "Adreno rejected compute shader {:016X}: {}", shader_hash,
@@ -299,6 +314,14 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
                 shader_notify->MarkShaderComplete();
             }
             return;
+        }
+
+        if ((creation_feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT) != 0) {
+            const bool cache_hit =
+                (creation_feedback.flags &
+                 VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT) != 0;
+            LOG_DEBUG(Render_Vulkan, "Compute pipeline {:016X} cache_hit={} duration={}us",
+                      shader_hash, cache_hit, creation_feedback.duration / 1000);
         }
 
         // Log compute pipeline creation
@@ -344,19 +367,14 @@ void ComputePipeline::RunBuild() {
 
 bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
                                 Tegra::MemoryManager& gpu_memory, Scheduler& scheduler,
-                                BufferCache& buffer_cache, TextureCache& texture_cache,
-                                TextureCacheRuntime& texture_runtime,
-                                std::optional<ByteAddressedShadow>& shadow) {
-    shadow.reset();
+                                BufferCache& buffer_cache, TextureCache& texture_cache) {
     guest_descriptor_queue.Acquire(scheduler, num_descriptor_entries, uses_descriptor_buffer);
 
     buffer_cache.SetComputeUniformBufferState(info.constant_buffer_mask, &uniform_buffer_sizes);
     buffer_cache.UnbindComputeStorageBuffers();
     size_t ssbo_index{};
     for (const auto& desc : info.storage_buffers_descriptors) {
-        ASSERT(desc.count == 1);
-        buffer_cache.BindComputeStorageBuffer(ssbo_index, desc.cbuf_index, desc.cbuf_offset,
-                                              desc.is_written, desc.indirect_offset);
+        buffer_cache.BindComputeStorageBuffer(ssbo_index, desc.cbuf_index, desc.cbuf_offset, desc.is_written, desc.count);
         ++ssbo_index;
     }
 
@@ -369,22 +387,17 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
     const auto& cbufs{qmd.const_buffer_config};
     const bool via_header_index{qmd.linked_tsc != 0};
     const auto read_handle{[&](const auto& desc, u32 index) {
-        if (desc.handle_program != ~0U) {
-            // Read by the shader from a storage buffer: computed for this dispatch.
-            return TexturePair(VideoCommon::EvaluateTextureHandle(
-                                   info, desc.handle_program, gpu_memory,
-                                   [&](u32 cbuf) -> GPUVAddr {
-                                       return cbuf < cbufs.size() &&
-                                                      ((qmd.const_buffer_enable_mask >> cbuf) &
-                                                       1) != 0
-                                                  ? cbufs[cbuf].Address()
-                                                  : GPUVAddr{};
-                                   }),
-                               via_header_index);
-        }
         ASSERT(((qmd.const_buffer_enable_mask >> desc.cbuf_index) & 1) != 0);
         const u32 index_offset{index << desc.size_shift};
-        const u32 offset{desc.cbuf_offset + index_offset};
+        u32 offset{desc.cbuf_offset + index_offset};
+        if constexpr (std::is_same_v<decltype(desc), const Shader::TextureDescriptor&>) {
+            if (desc.has_index_cbuf) {
+                ASSERT(((qmd.const_buffer_enable_mask >> desc.index_cbuf_index) & 1) != 0);
+                offset += gpu_memory.Read<u32>(cbufs[desc.index_cbuf_index].Address() +
+                                               desc.index_cbuf_offset)
+                          << desc.index_shift;
+            }
+        }
         const GPUVAddr addr{cbufs[desc.cbuf_index].Address() + offset};
         if constexpr (std::is_same_v<decltype(desc), const Shader::TextureDescriptor&> ||
                       std::is_same_v<decltype(desc), const Shader::TextureBufferDescriptor&>) {
@@ -393,12 +406,19 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
                 const u32 secondary_offset{desc.secondary_cbuf_offset};
                 const GPUVAddr separate_addr{cbufs[desc.secondary_cbuf_index].Address() +
                                              secondary_offset};
-                const u32 lhs_raw{gpu_memory.Read<u32>(addr) << desc.shift_left};
-                const u32 rhs_raw{gpu_memory.Read<u32>(separate_addr) << desc.secondary_shift_left};
+                const u32 lhs_raw{(gpu_memory.Read<u32>(addr) << desc.shift_left) & desc.mask};
+                const u32 rhs_raw{(gpu_memory.Read<u32>(separate_addr)
+                                   << desc.secondary_shift_left) &
+                                  desc.secondary_mask};
                 return TexturePair(lhs_raw | rhs_raw, via_header_index);
             }
         }
-        return TexturePair(gpu_memory.Read<u32>(addr), via_header_index);
+        u32 raw{gpu_memory.Read<u32>(addr)};
+        if constexpr (std::is_same_v<decltype(desc), const Shader::TextureDescriptor&> ||
+                      std::is_same_v<decltype(desc), const Shader::TextureBufferDescriptor&>) {
+            raw &= desc.mask;
+        }
+        return TexturePair(raw, via_header_index);
     }};
     const auto add_image{[&](const auto& desc, bool blacklist) {
         for (u32 index = 0; index < desc.count; ++index) {
@@ -429,100 +449,28 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
         add_image(desc, desc.is_written);
     }
     texture_cache.FillImageViews(std::span(views.data(), views.size()), true);
-    if (auto& trace{GetUpscalerTrace()}; trace.enabled && kepler_compute.IsNativeMode()) {
-        const u64 frame{trace.frame.load(std::memory_order_relaxed)};
-        if (!trace.armed && frame >= trace.first_frame && info.uses_subgroup_shuffles) {
-            trace.armed = true;
-            trace.armed_frame = frame;
-            LOG_INFO(Render_Vulkan, "Upscaler trace armed at frame {} by {:016x}", frame,
-                     shader_hash);
-        }
-        if (trace.armed && frame > trace.armed_frame && frame <= trace.armed_frame + trace.frames) {
-            TraceUpscalerDispatch(trace, info, shader_hash, kepler_compute, gpu_memory,
-                                  buffer_cache, texture_cache, views);
-        }
-    }
-
     if (RecordingSampledTextures()) {
         sampled_images.clear();
         const size_t first = Shader::NumDescriptors(info.texture_buffer_descriptors) +
                              Shader::NumDescriptors(info.image_buffer_descriptors);
-        for (size_t index = first; index < first + Shader::NumDescriptors(info.texture_descriptors);
-             ++index) {
-            sampled_images.push_back({views[index].index, views[index].id, samplers[index - first]});
+        const size_t count = Shader::NumDescriptors(info.texture_descriptors);
+        for (size_t view_index = first; view_index < first + count; ++view_index) {
+            sampled_images.push_back(
+                {views[view_index].index, views[view_index].id, samplers[view_index - first]});
         }
     }
-
-    std::optional<size_t> shadow_index;
-    size_t image_index{Shader::NumDescriptors(info.texture_buffer_descriptors) +
-                       Shader::NumDescriptors(info.image_buffer_descriptors) +
-                       Shader::NumDescriptors(info.texture_descriptors)};
-    written_images.clear();
-    for (const auto& desc : info.image_descriptors) {
-        for (u32 i = 0; i < desc.count; ++i, ++image_index) {
-            if (desc.is_written) {
-                written_images.push_back(views[image_index].id);
-            }
-            const auto& view{texture_cache.GetImageView(views[image_index].id)};
-            if (!desc.is_byte_addressed || view.format != PixelFormat::R16_FLOAT) {
-                continue;
-            }
-            if (shadow_index || !kepler_compute.IsNativeMode() ||
-                kepler_compute.GetIndirectComputeAddress() || desc.count != 1 ||
-                desc.is_read || !desc.is_written || desc.type != Shader::TextureType::Color2D ||
-                desc.format != Shader::ImageFormat::R32_UINT || info.uses_global_memory) {
-                throw Shader::RuntimeError("Unsupported packed R16 surface dispatch or unbounded global access");
-            }
-            shadow_index = image_index;
-        }
-    }
-    if (shadow_index) {
-        const auto max_dim{device.GetMaxComputeWorkGroupCount()};
-        if (qmd.grid_dim_x == 0 || qmd.grid_dim_y == 0 || qmd.grid_dim_z == 0 ||
-            qmd.grid_dim_x > max_dim[0] || qmd.grid_dim_y > max_dim[1] ||
-            qmd.grid_dim_z > max_dim[2]) {
-            throw Shader::RuntimeError("Invalid packed R16 surface dispatch dimensions");
-        }
-        const auto& target_view{texture_cache.GetImageView(views[*shadow_index].id)};
-        const auto* target{target_view.BackingImage()};
-        if (!target) {
-            throw Shader::RuntimeError("Unknown packed R16 surface backing");
-        }
-        const auto target_ranges{ByteAddressedMappedRanges(gpu_memory, target->gpu_addr,
-                                                          target->guest_size_bytes)};
-        for (size_t i = 0; i < views.size(); ++i) {
-            if (i == *shadow_index) {
-                continue;
-            }
-            const auto& view{texture_cache.GetImageView(views[i].id)};
-            if (view.IsBuffer()) {
-                continue;
-            }
-            const auto* image{view.BackingImage()};
-            if (!image) {
-                throw Shader::RuntimeError("Unknown packed R16 surface peer image at binding {}", i);
-            }
-            for (const auto& a : target_ranges) {
-                for (const auto& b : ByteAddressedMappedRanges(gpu_memory, image->gpu_addr,
-                                                               image->guest_size_bytes)) {
-                    if (a.Overlaps(b)) {
-                        throw Shader::RuntimeError("Aliased packed R16 surface peer image at binding {}", i);
-                    }
-                }
-            }
-        }
-        image_index = Shader::NumDescriptors(info.texture_buffer_descriptors) +
-                      Shader::NumDescriptors(info.image_buffer_descriptors) +
-                      Shader::NumDescriptors(info.texture_descriptors);
+    if (RecordingWrittenImages()) {
+        written_images.clear();
+        size_t image_index{Shader::NumDescriptors(info.texture_buffer_descriptors) +
+                           Shader::NumDescriptors(info.image_buffer_descriptors) +
+                           Shader::NumDescriptors(info.texture_descriptors)};
         for (const auto& desc : info.image_descriptors) {
             for (u32 i = 0; i < desc.count; ++i, ++image_index) {
-                if (image_index != *shadow_index) {
-                    static_cast<void>(texture_cache.GetImageView(views[image_index].id)
-                        .StorageView(desc.type, desc.format, desc.is_byte_addressed));
+                if (desc.is_written) {
+                    written_images.push_back(views[image_index].id);
                 }
             }
         }
-        shadow = texture_runtime.CreateByteAddressedShadow(target_view);
     }
 
     buffer_cache.UnbindComputeTextureBuffers();
@@ -552,10 +500,6 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
 
     buffer_cache.UpdateComputeBuffers();
     buffer_cache.BindHostComputeBuffers();
-    if (buffer_cache.any_buffer_uploaded) {
-        buffer_cache.runtime.PostCopyBarrier();
-        buffer_cache.any_buffer_uploaded = false;
-    }
 
     RescalingPushConstant rescaling;
     const VideoCommon::SamplerId* samplers_it{samplers.data()};
@@ -605,33 +549,14 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
 
     const DescriptorUpdateEntry* const descriptor_data{guest_descriptor_queue.UpdateData()};
     VkDeviceSize descriptor_buffer_offset{};
-    u32 descriptor_buffer_chunk{};
+    bool descriptor_buffer_ready{false};
     if (uses_descriptor_buffer) {
         const DescriptorBufferRing::Allocation alloc{
             descriptor_buffer_ring.Allocate(scheduler, descriptor_buffer_layout.size)};
-        if (!alloc.host) {
-            LOG_DEBUG(Render_Vulkan, "Failed to reserve descriptor memory, skipping dispatch");
-            return false;
-        }
-        WriteDescriptorBuffer(device, descriptor_buffer_layout, descriptor_data, alloc.host);
-        descriptor_buffer_offset = alloc.offset;
-        descriptor_buffer_chunk = alloc.chunk;
-    }
-
-    const bool bind_descriptor_buffer{
-        uses_descriptor_buffer && scheduler.UpdateDescriptorBufferChunk(descriptor_buffer_chunk)};
-
-    if (shadow) {
-        image_index = Shader::NumDescriptors(info.texture_buffer_descriptors) +
-                      Shader::NumDescriptors(info.image_buffer_descriptors) +
-                      Shader::NumDescriptors(info.texture_descriptors);
-        for (const auto& desc : info.image_descriptors) {
-            for (u32 i = 0; i < desc.count; ++i, ++image_index) {
-                if (desc.is_written) {
-                    texture_cache.MarkModification(
-                        texture_cache.GetImageView(views[image_index].id).image_id);
-                }
-            }
+        if (alloc.host) {
+            WriteDescriptorBuffer(device, descriptor_buffer_layout, descriptor_data, alloc.host);
+            descriptor_buffer_offset = alloc.offset;
+            descriptor_buffer_ready = true;
         }
     }
 
@@ -657,6 +582,12 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
                                  rescaling_data.data());
         }
         if (uses_descriptor_buffer) {
+            if (!descriptor_buffer_ready) {
+                return;
+            }
+            const VkDescriptorBufferBindingInfoEXT binding_info{
+                descriptor_buffer_ring.BindingInfo()};
+            cmdbuf.BindDescriptorBuffersEXT(binding_info);
             const u32 buffer_index{};
             cmdbuf.SetDescriptorBufferOffsetsEXT(VK_PIPELINE_BIND_POINT_COMPUTE, *pipeline_layout,
                                                  0, buffer_index, descriptor_buffer_offset);

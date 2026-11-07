@@ -80,7 +80,7 @@ void WritePortablePixmap(const std::filesystem::path& path, const std::string& m
 void WriteGrayscalePgm(const std::filesystem::path& path, VkExtent2D extent,
                        std::span<const u8> pixels) {
     const size_t expected = static_cast<size_t>(extent.width) * extent.height;
-    WritePortablePixmap(path, "P5", extent, pixels.subspan(0, (std::min)(expected, pixels.size())));
+    WritePortablePixmap(path, "P5", extent, pixels.subspan(0, std::min(expected, pixels.size())));
 }
 
 void WriteRaw(const std::filesystem::path& path, std::span<const u8> pixels) {
@@ -203,16 +203,15 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
     }
 
     if (unavailable || !Settings::values.frame_gen.GetValue()) {
-        if (chain || fsr3_chain) {
+        if (chain) {
             scheduler.Finish();
             chain.reset();
-            fsr3_chain.reset();
         }
         warm_streak = 0;
         return;
     }
 
-    if (!shaders->IsValid() && Settings::values.frame_gen_type.GetValue() != Settings::FrameGenType::Fsr3) {
+    if (!shaders->IsValid()) {
         unavailable = true;
         return;
     }
@@ -222,12 +221,12 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
         return;
     }
 
-    peak_guest_extent.width = (std::max)(peak_guest_extent.width, guest_extent.width);
-    peak_guest_extent.height = (std::max)(peak_guest_extent.height, guest_extent.height);
+    peak_guest_extent.width = std::max(peak_guest_extent.width, guest_extent.width);
+    peak_guest_extent.height = std::max(peak_guest_extent.height, guest_extent.height);
 
     const VkExtent2D extent{.width = frame->width, .height = frame->height};
     const f32 flow_scale = ConfiguredFlowScale(peak_guest_extent, extent);
-    if ((!chain && !fsr3_chain) || built_extent.width != extent.width || built_extent.height != extent.height ||
+    if (!chain || built_extent.width != extent.width || built_extent.height != extent.height ||
         built_format != format || built_flow_scale != flow_scale) {
         Rebuild(device, extent, format, flow_scale);
     }
@@ -240,28 +239,21 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
     warm_streak = warm ? warm_streak + 1 : 0;
     generated = warm && warm_streak >= LSFG_RECURRENCE_FRAMES && plan.generations > 0;
 
-    const bool use_fsr3 = Settings::values.frame_gen_type.GetValue() == Settings::FrameGenType::Fsr3;
-
-    if (use_fsr3 && fsr3_chain) {
-        scheduler.RequestOutsideRenderPassOperationContext();
-        fsr3_chain->Process(device, scheduler, *frame->image, *frame->storage_view, count);
-    } else if (chain) {
-        scheduler.RequestOutsideRenderPassOperationContext();
-        scheduler.Record([this, source = *frame->image, extent, count,
-                          dispatch = warm](vk::CommandBuffer cmdbuf) {
-            CopyPresentedFrame(cmdbuf, source, chain->Input(count), extent);
-            if (dispatch) {
-                chain->DispatchShared(cmdbuf, count);
-            }
-        });
-
-        const bool dump_requested = generated && Settings::values.frame_gen_dump_flow.GetValue();
-        if (!dump_requested) {
-            dumped = false;
-        } else if (!dumped) {
-            DumpDebugImages(count);
-            dumped = true;
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.Record([this, source = *frame->image, extent, count,
+                      dispatch = warm](vk::CommandBuffer cmdbuf) {
+        CopyPresentedFrame(cmdbuf, source, chain->Input(count), extent);
+        if (dispatch) {
+            chain->DispatchShared(cmdbuf, count);
         }
+    });
+
+    const bool dump_requested = generated && Settings::values.frame_gen_dump_flow.GetValue();
+    if (!dump_requested) {
+        dumped = false;
+    } else if (!dumped) {
+        DumpDebugImages(count);
+        dumped = true;
     }
 }
 
@@ -279,43 +271,27 @@ size_t FrameGen::GeneratedFrameCount() const {
 }
 
 void FrameGen::GenerateInto(const Device& device, Frame* destination, size_t generation) {
-    const bool use_fsr3 = Settings::values.frame_gen_type.GetValue() == Settings::FrameGenType::Fsr3;
+    chain->SetTarget(device, last_generations, generation, destination->index,
+                     *destination->storage_view);
 
-    if (use_fsr3 && fsr3_chain) {
-        const f32 blend = static_cast<f32>(generation + 1) / static_cast<f32>(last_generations + 1);
-        const f32 flow_scale = ConfiguredFlowScale(peak_guest_extent, built_extent);
+    const VkExtent2D extent{.width = destination->width, .height = destination->height};
 
-        scheduler.RequestOutsideRenderPassOperationContext();
-        fsr3_chain->Generate(device, scheduler, *destination->image, *destination->storage_view,
-                             blend, flow_scale);
-    } else if (chain) {
-        chain->SetTarget(device, last_generations, generation, destination->index,
-                         *destination->storage_view);
-
-        const VkExtent2D extent{.width = destination->width, .height = destination->height};
-
-        scheduler.RequestOutsideRenderPassOperationContext();
-        scheduler.Record([this, count = last_count, generation_count = last_generations, generation,
-                          target = destination->index, image = *destination->image,
-                          extent](vk::CommandBuffer cmdbuf) {
-            chain->DispatchGeneration(cmdbuf, count, generation_count, generation, target, image,
-                                      extent);
-        });
-    }
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.Record([this, count = last_count, generation_count = last_generations, generation,
+                      target = destination->index, image = *destination->image,
+                      extent](vk::CommandBuffer cmdbuf) {
+        chain->DispatchGeneration(cmdbuf, count, generation_count, generation, target, image,
+                                  extent);
+    });
 }
 
 void FrameGen::Rebuild(const Device& device, VkExtent2D extent, VkFormat format, f32 flow_scale) {
     scheduler.Finish();
     chain.reset();
-    fsr3_chain.reset();
 
     built_flow_scale = flow_scale;
 
-    if (Settings::values.frame_gen_type.GetValue() == Settings::FrameGenType::Fsr3) {
-        fsr3_chain.emplace(device, memory_allocator, extent, format);
-    } else {
-        chain.emplace(device, memory_allocator, *shaders, extent, format, built_flow_scale);
-    }
+    chain.emplace(device, memory_allocator, *shaders, extent, format, built_flow_scale);
     built_extent = extent;
     built_format = format;
     frame_count = 0;

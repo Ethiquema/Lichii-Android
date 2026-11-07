@@ -12,7 +12,6 @@
 #include "audio_core/audio_core.h"
 #include "common/fs/fs.h"
 #include "common/logging.h"
-#include "common/nx2_sampler.h"
 #include "common/adpf.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -26,8 +25,6 @@
 #include "core/debugger/debugger.h"
 #include "core/debugger/nx2_debug_tools.h"
 #include "core/device_memory.h"
-#include "core/file_sys/card_image.h"
-#include "core/file_sys/content_archive.h"
 #include "core/file_sys/fs_filesystem.h"
 #include "core/file_sys/nup_container.h"
 #include "core/file_sys/patch_manager.h"
@@ -35,7 +32,6 @@
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/romfs_factory.h"
 #include "core/file_sys/savedata_factory.h"
-#include "core/file_sys/submission_package.h"
 #include "core/file_sys/vfs/vfs_concat.h"
 #include "core/file_sys/vfs/vfs_real.h"
 #include "core/gpu_dirty_memory_manager.h"
@@ -50,6 +46,7 @@
 #include "core/hle/service/am/frontend/applets.h"
 #include "core/hle/service/am/process_creation.h"
 #include "core/hle/service/apm/apm_controller.h"
+#include "core/hle/service/dmnt/cheat_process_manager.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/glue/glue_manager.h"
 #include "core/hle/service/glue/time/static.h"
@@ -62,9 +59,9 @@
 #include "core/hle/service/set/system_settings_server.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/internal_network/network.h"
+#include "core/loader/homebrew_nxlink.h"
 #include "core/loader/loader.h"
 #include "core/memory.h"
-#include "core/memory/cheat_engine.h"
 #include "core/perf_stats.h"
 #include "core/reporter.h"
 #include "core/tools/freezer.h"
@@ -72,6 +69,7 @@
 #include "hid_core/hid_core.h"
 #include "network/network.h"
 #include "video_core/host1x/host1x.h"
+#include "video_core/nx2_diag.h"
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
 
@@ -118,72 +116,43 @@ FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,
     return vfs->OpenFile(path, FileSys::OpenMode::Read);
 }
 
-namespace {
-
-// Detect the platform before initializing the kernel memory layout and guest clock.
-bool IsSwitch2Program(const FileSys::VirtualFile& file, u64 program_id, std::size_t program_index) {
+// Switch 2 titles boot as a loose ExeFS, with main.npdm next to main.
+bool IsSwitch2Program(const FileSys::VirtualFile& file) {
     FileSys::ProgramMetadata metadata;
     if (FileSys::NupContainer::IsNupFile(file)) {
         FileSys::NupContainer nup{file};
         if (nup.GetStatus() != Loader::ResultStatus::Success) {
             return false;
         }
-        const auto base = nup.FindBasePackage();
-        const auto update = nup.FindBestUpdatePackage();
         std::optional<std::size_t> program;
-        if (update && nup.GetExeFSDir(*update) != nullptr) {
-            program = update;
-        } else if (base && nup.GetExeFSDir(*base) != nullptr) {
+        if (const auto base = nup.FindBasePackage();
+            base && nup.GetExeFSDir(*base) != nullptr) {
             program = base;
+        } else if (const auto update = nup.FindBestUpdatePackage();
+                   update && nup.GetExeFSDir(*update) != nullptr) {
+            program = update;
         }
-        const auto exefs = program ? nup.GetExeFSDir(*program) : nullptr;
-        const auto npdm = exefs != nullptr ? exefs->GetFile("main.npdm") : nullptr;
-        return npdm != nullptr && metadata.Load(npdm) == Loader::ResultStatus::Success &&
-               metadata.IsSwitch2();
+        LOG_INFO(Core,
+                 "diag: thread {} prio={} core={} state={:#x} reason={} cv_key={:#x} arb_key={:#x} "
+                 "addr_key={:#x}/{:#x} pc={:#x} lr={:#x} chain={:#x}",
+                 thread.GetThreadId(), thread.GetPriority(), thread.GetActiveCore(),
+                 static_cast<u32>(thread.GetRawState()),
+                 static_cast<u32>(thread.GetWaitReasonForDebugging()), thread.GetConditionVariableKey(),
+                 thread.GetAddressArbiterKey(), GetInteger(thread.GetAddressKey()),
+                 thread.GetAddressKeyValue(), context.pc, context.lr, fmt::join(frames, ","));
     }
-    const auto type = file != nullptr ? Loader::IdentifyFile(file) : Loader::FileType::Unknown;
-    if (type == Loader::FileType::XCI || type == Loader::FileType::XCZ) {
-        const FileSys::XCI xci{file, program_id, program_index};
-        if (xci.GetStatus() != Loader::ResultStatus::Success) {
-            return false;
-        }
-        const auto partition = xci.GetSecurePartitionNSP();
-        const auto program = partition != nullptr
-                                 ? partition->GetNCA(xci.GetProgramTitleID(),
-                                                     FileSys::ContentRecordType::Program)
-                                 : nullptr;
-        const auto exefs = program != nullptr ? program->GetExeFS() : nullptr;
-        const auto npdm = exefs != nullptr ? exefs->GetFile("main.npdm") : nullptr;
-        return npdm != nullptr && metadata.Load(npdm) == Loader::ResultStatus::Success &&
-               metadata.IsSwitch2();
-    }
-    if (type == Loader::FileType::NSP || type == Loader::FileType::NSZ) {
-        const FileSys::NSP nsp{file, program_id, program_index};
-        if (nsp.GetStatus() != Loader::ResultStatus::Success) {
-            return false;
-        }
-        auto exefs = nsp.GetExeFS();
-        if (!nsp.IsExtractedType()) {
-            const auto program =
-                nsp.GetNCA(nsp.GetProgramTitleID(), FileSys::ContentRecordType::Program);
-            exefs = program != nullptr ? program->GetExeFS() : nullptr;
-        }
-        const auto npdm = exefs != nullptr ? exefs->GetFile("main.npdm") : nullptr;
-        return npdm != nullptr && metadata.Load(npdm) == Loader::ResultStatus::Success &&
-               metadata.IsSwitch2();
-    }
-    const auto dir = file != nullptr ? file->GetContainingDirectory() : nullptr;
-    const auto npdm = dir != nullptr ? dir->GetFile("main.npdm") : nullptr;
-    return npdm != nullptr && metadata.Load(npdm) == Loader::ResultStatus::Success &&
-           metadata.IsSwitch2();
+    LOG_INFO(Core, "diag: thread dump end");
 }
-
-} // namespace
 
 struct System::Impl {
     explicit Impl(System& system)
-        : kernel{system}, fs_controller{system}, hid_core{kernel}, cpu_manager{system},
-          reporter{system}, applet_manager{system}, frontend_applets{system}, profile_manager{} {}
+        : kernel{system}
+        , fs_controller{system}
+        , hid_core{kernel}
+        , cpu_manager{system}
+        , reporter{system}
+        , profile_manager{}
+    {}
 
     u64 program_id;
 
@@ -191,10 +160,16 @@ struct System::Impl {
         device_memory.emplace();
 
         is_multicore = Settings::values.use_multi_core.GetValue();
-        memory_layout = Settings::values.memory_layout_mode.GetValue();
+        extended_memory_layout = Settings::values.memory_layout_mode.GetValue() != Settings::MemoryLayout::Memory_4Gb;
 
         core_timing.SetMulticore(is_multicore);
         core_timing.Initialize([&system]() { system.RegisterHostThread(); });
+
+        applet_manager.emplace(system);
+        frontend_applets.emplace(system);
+        apm_controller.emplace(core_timing);
+        arp_manager.emplace();
+        profile_manager.emplace();
 
         // Create a default fs if one doesn't already exist.
         if (virtual_filesystem == nullptr) {
@@ -205,7 +180,7 @@ struct System::Impl {
         }
 
         // Create default implementations of applets if one is not provided.
-        frontend_applets.SetDefaultAppletsIfMissing();
+        frontend_applets->SetDefaultAppletsIfMissing();
 
         auto const is_async_gpu = Settings::values.use_asynchronous_gpu_emulation.GetValue();
 
@@ -218,7 +193,8 @@ struct System::Impl {
         const bool must_reinitialize =
             !device_memory.has_value() ||
             is_multicore != Settings::values.use_multi_core.GetValue() ||
-            memory_layout != Settings::values.memory_layout_mode.GetValue();
+            extended_memory_layout != (Settings::values.memory_layout_mode.GetValue() !=
+                                       Settings::MemoryLayout::Memory_4Gb);
 
         if (!must_reinitialize) {
             return;
@@ -227,7 +203,9 @@ struct System::Impl {
         LOG_DEBUG(Kernel, "Re-initializing");
 
         is_multicore = Settings::values.use_multi_core.GetValue();
-        memory_layout = Settings::values.memory_layout_mode.GetValue();
+        extended_memory_layout =
+            Settings::values.memory_layout_mode.GetValue() != Settings::MemoryLayout::Memory_4Gb;
+        unified_memory = Settings::values.use_unified_memory.GetValue();
 
         Initialize(system);
     }
@@ -354,7 +332,16 @@ struct System::Impl {
         audio_core.emplace(system);
 
         service_manager = std::make_shared<Service::SM::ServiceManager>(kernel);
+
+        // Create cheat_manager BEFORE services, as DMNT::LoopProcess needs it
+        cheat_manager = std::make_unique<Service::DMNT::CheatProcessManager>(system);
+
         services.emplace(service_manager, system, stop_event.get_token());
+
+        // Apply any pending cheats that were registered before cheat_manager was initialized
+        if (pending_cheats.has_pending) {
+            ApplyPendingCheats(system);
+        }
 
         is_powered_on = true;
         exit_locked = false;
@@ -376,10 +363,14 @@ struct System::Impl {
 
         const bool switch2_program =
             virtual_filesystem != nullptr &&
-            IsSwitch2Program(GetGameFileFromPath(virtual_filesystem, filepath), params.program_id,
-                             params.program_index);
+            IsSwitch2Program(GetGameFileFromPath(virtual_filesystem, filepath));
         Settings::SetCurrentProgramIsSwitch2(switch2_program);
         Settings::SetAstcRecompressionOverride(std::nullopt);
+        // The frontends switch before they set up the window, this covers the others.
+        if (params.launch_type == Service::AM::LaunchType::FrontendInitiated) {
+            Settings::SetActiveProfile(switch2_program ? Settings::Profile::Switch2
+                                                       : Settings::Profile::Switch1);
+        }
 
         // Switch 2 titles size their heap from the total memory and need the 12 GiB layout. Set it
         // as a per-game value, so RestoreGlobalState brings back the configured layout afterwards.
@@ -457,14 +448,9 @@ struct System::Impl {
         // Waiting for GPU before initializing CPU
         cpu_manager.Initialize();
 
-        // Initialize cheat engine
-        if (cheat_engine) {
-            cheat_engine->Initialize();
-        }
-
         // Register with applet manager
         // All threads are started, begin main process execution, now that we're in the clear
-        applet_manager.CreateAndInsertByFrontendAppletParameters(std::move(process), params);
+        applet_manager->CreateAndInsertByFrontendAppletParameters(std::move(process), params);
 
         if (Settings::values.gamecard_inserted) {
             if (Settings::values.gamecard_current_game) {
@@ -488,7 +474,8 @@ struct System::Impl {
             LOG_ERROR(Core, "Failed to find program id for ROM");
         }
 
-        GameSettings::LoadOverrides(program_id, gpu_core->Renderer());
+        GameSettings::LoadOverrides(program_id, gpu_core->Renderer(),
+                                    Settings::values.enable_global_overrides);
         if (auto room_member = Network::GetRoomMember().lock()) {
             Network::GameInfo game_info;
             game_info.name = name;
@@ -496,8 +483,14 @@ struct System::Impl {
             game_info.version = title_version;
             room_member->SendGameInfo(game_info);
         }
-        debug_service = Nx2Debug::MaybeStartService(system, name, params.program_id);
-        Nx2Sampler::StartFromEnvironment();
+        if (std::getenv("EDEN_DIAG_THREAD_DUMP")) {
+            thread_dump_event = Core::Timing::CreateEvent(
+                "DiagThreadDump", [&system](s64, std::chrono::nanoseconds) -> std::optional<std::chrono::nanoseconds> {
+                    system.DumpGuestThreads();
+                    return std::nullopt;
+                });
+            core_timing.ScheduleLoopingEvent(std::chrono::seconds{10}, std::chrono::seconds{30}, thread_dump_event);
+        }
         return SystemResultStatus::Success;
     }
 
@@ -505,9 +498,6 @@ struct System::Impl {
         debug_service.reset();
         SetShuttingDown(true);
         Common::ADPF::Shutdown();
-
-        // Reset per-game flags
-        Settings::values.use_squashed_iterated_blend = false;
 
         is_powered_on = false;
         exit_locked = false;
@@ -517,15 +507,29 @@ struct System::Impl {
 
         stop_event.request_stop();
         core_timing.SyncPause(false);
+        Loader::HomebrewNxlink::StopServer();
         Network::CancelPendingSocketOperations();
         kernel.SuspendEmulation(true);
-        kernel.CloseServices();
         kernel.ShutdownCores();
+
+        // Notify services helpers of shutdown
+        audio_core->Shutdown();
+
+        // Wait for threads/services to join
+        kernel.CloseServices();
+
+        // service shutdown
         services.reset();
         service_manager.reset();
+        frontend_applets.reset();
+        applet_manager.reset();
+        apm_controller.reset();
+        arp_manager.reset();
+        profile_manager.reset();
+
         fs_controller.Reset();
-        cheat_engine.reset();
         core_timing.ClearPendingEvents();
+        core_timing.Reset();
         app_loader.reset();
         audio_core.reset();
         gpu_core.reset();
@@ -540,16 +544,6 @@ struct System::Impl {
         if (auto room_member = Network::GetRoomMember().lock()) {
             Network::GameInfo game_info{};
             room_member->SendGameInfo(game_info);
-        }
-
-        // Reset all glue registrations
-        arp_manager.ResetAll();
-
-        // The guest RAM section keeps every page the game touched until it is destroyed (up to
-        // 12 GiB), and the next Load reuses it. Switch 2 only: Switch 1 keeps its behaviour.
-        // InitializeKernel creates it again, sized for the next game.
-        if (Settings::CurrentProgramIsSwitch2()) {
-            device_memory.reset();
         }
 
         LOG_DEBUG(Core, "Shutdown OK");
@@ -575,6 +569,7 @@ struct System::Impl {
     }
 
     Timing::CoreTiming core_timing;
+    std::shared_ptr<Timing::EventType> thread_dump_event;
     Kernel::KernelCore kernel;
     /// RealVfsFilesystem instance
     FileSys::VirtualFilesystem virtual_filesystem;
@@ -583,19 +578,18 @@ struct System::Impl {
     CpuManager cpu_manager;
     Reporter reporter;
     /// Applets
-    Service::AM::AppletManager applet_manager;
-    Service::AM::Frontend::FrontendAppletHolder frontend_applets;
+    std::optional<Service::AM::AppletManager> applet_manager;
+    std::optional<Service::AM::Frontend::FrontendAppletHolder> frontend_applets;
     /// APM (Performance) services
-    Service::APM::Controller apm_controller{core_timing};
+    std::optional<Service::APM::Controller> apm_controller;
     /// Service State
-    Service::Glue::ARPManager arp_manager;
-    Service::Account::ProfileManager profile_manager;
+    std::optional<Service::Glue::ARPManager> arp_manager;
+    std::optional<Service::Account::ProfileManager> profile_manager;
     /// Network instance
     Network::NetworkInstance network_instance;
     Core::SpeedLimiter speed_limiter;
     ExecuteProgramCallback execute_program_callback;
     ExitCallback exit_callback;
-    ApplicationChangedCallback application_changed_callback;
 
     std::optional<Service::Services> services;
     std::optional<Core::Debugger> debugger;
@@ -605,7 +599,6 @@ struct System::Impl {
     std::optional<Tegra::Host1x::Host1x> host1x_core;
     std::optional<Core::DeviceMemory> device_memory;
     std::optional<AudioCore::AudioCore> audio_core;
-    std::optional<Memory::CheatEngine> cheat_engine;
     std::optional<Tools::Freezer> memory_freezer;
     std::optional<Tools::RenderdocAPI> renderdoc_api;
     std::optional<Tegra::GPU> gpu_core;
@@ -627,13 +620,24 @@ struct System::Impl {
     std::unique_ptr<Loader::AppLoader> app_loader;
     std::stop_source stop_event;
 
+    /// Cheat Manager (DMNT)
+    std::unique_ptr<Service::DMNT::CheatProcessManager> cheat_manager;
+    /// Pending cheats to register after cheat_manager is initialized
+    struct PendingCheats {
+        std::vector<Service::DMNT::CheatEntry> list;
+        std::array<u8, 32> build_id{};
+        u64 main_region_begin{};
+        u64 main_region_size{};
+        bool has_pending{false};
+    } pending_cheats;
+
     mutable std::mutex suspend_guard;
     std::mutex general_channel_mutex;
     std::atomic_bool is_paused{};
     std::atomic_bool is_shutting_down{};
     std::atomic_bool is_powered_on{};
     bool is_multicore : 1 = false;
-    Settings::MemoryLayout memory_layout{Settings::MemoryLayout::Memory_4Gb};
+    bool extended_memory_layout : 1 = false;
     bool exit_locked : 1 = false;
     bool exit_requested : 1 = false;
     bool nvdec_active : 1 = false;
@@ -645,6 +649,61 @@ struct System::Impl {
             general_channel_context.emplace(system, "GeneralChannel");
             general_channel_event.emplace(*general_channel_context);
         }
+    }
+
+    void ApplyPendingCheats(System& system) {
+        if (!pending_cheats.has_pending || !cheat_manager) {
+            return;
+        }
+
+        LOG_DEBUG(Core, "Applying {} pending cheats", pending_cheats.list.size());
+
+        const auto result = cheat_manager->AttachToApplicationProcess(
+            pending_cheats.build_id, pending_cheats.main_region_begin,
+            pending_cheats.main_region_size);
+
+        if (result.IsError()) {
+            LOG_WARNING(Core, "Failed to attach cheat process: result={}", result.raw);
+            pending_cheats = {};
+            return;
+        }
+
+        LOG_DEBUG(Core, "Cheat process attached successfully");
+
+        for (const auto& entry : pending_cheats.list) {
+            if (entry.cheat_id == 0 && entry.definition.num_opcodes != 0) {
+                LOG_DEBUG(Core, "Setting master cheat '{}' with {} opcodes",
+                         entry.definition.readable_name.data(), entry.definition.num_opcodes);
+                const auto set_result = cheat_manager->SetMasterCheat(entry.definition);
+                if (set_result.IsError()) {
+                    LOG_WARNING(Core, "Failed to set master cheat: result={}", set_result.raw);
+                }
+                break;
+            }
+        }
+
+        // Add normal cheats (cheat_id != 0)
+        for (const auto& entry : pending_cheats.list) {
+            if (entry.cheat_id == 0 || entry.definition.num_opcodes == 0) {
+                continue;
+            }
+
+            u32 assigned_id = 0;
+            LOG_DEBUG(Core, "Adding cheat '{}' (enabled={}, {} opcodes)",
+                     entry.definition.readable_name.data(), entry.enabled,
+                     entry.definition.num_opcodes);
+            const auto add_result = cheat_manager->AddCheat(assigned_id, entry.enabled,
+                                                            entry.definition);
+            if (add_result.IsError()) {
+                LOG_WARNING(Core,
+                            "Failed to add cheat (original_id={} enabled={} name='{}'): result={}",
+                            entry.cheat_id, entry.enabled,
+                            entry.definition.readable_name.data(), add_result.raw);
+            }
+        }
+
+        // Clear pending cheats
+        pending_cheats = {};
     }
 };
 
@@ -901,27 +960,88 @@ FileSys::VirtualFilesystem System::GetFilesystem() const {
     return impl->virtual_filesystem;
 }
 
-void System::RegisterCheatList(const std::vector<Memory::CheatEntry>& list,
+void System::RegisterCheatList(const std::vector<Service::DMNT::CheatEntry>& list,
                                const std::array<u8, 32>& build_id, u64 main_region_begin,
                                u64 main_region_size) {
-    impl->cheat_engine.emplace(*this, list, build_id);
-    impl->cheat_engine->SetMainMemoryParameters(main_region_begin, main_region_size);
+    // If cheat_manager is not yet initialized, cache the cheats for later
+    if (!impl->cheat_manager) {
+        impl->pending_cheats.list = list;
+        impl->pending_cheats.build_id = build_id;
+        impl->pending_cheats.main_region_begin = main_region_begin;
+        impl->pending_cheats.main_region_size = main_region_size;
+        impl->pending_cheats.has_pending = true;
+        LOG_INFO(Core, "Cached {} cheats for later registration", list.size());
+        return;
+    }
+
+    // Attach cheat process to the current application process
+    const auto result = impl->cheat_manager->AttachToApplicationProcess(build_id, main_region_begin,
+                                                                        main_region_size);
+    if (result.IsError()) {
+        LOG_WARNING(Core, "Failed to attach cheat process: result={}", result.raw);
+        return;
+    }
+
+    // Empty list: nothing more to do
+    if (list.empty()) {
+        return;
+    }
+
+    // Set master cheat if present (cheat_id == 0)
+    for (const auto& entry : list) {
+        if (entry.cheat_id == 0 && entry.definition.num_opcodes != 0) {
+            const auto set_result = impl->cheat_manager->SetMasterCheat(entry.definition);
+            if (set_result.IsError()) {
+                LOG_WARNING(Core, "Failed to set master cheat: result={}", set_result.raw);
+            }
+            // Only one master cheat allowed
+            break;
+        }
+    }
+
+    // Add normal cheats (cheat_id != 0)
+    for (const auto& entry : list) {
+        if (entry.cheat_id == 0 || entry.definition.num_opcodes == 0) {
+            continue;
+        }
+
+        u32 assigned_id = 0;
+        const auto add_result = impl->cheat_manager->AddCheat(assigned_id, entry.enabled,
+                                                               entry.definition);
+        if (add_result.IsError()) {
+            LOG_WARNING(Core,
+                        "Failed to add cheat (original_id={} enabled={} name='{}'): result={}",
+                        entry.cheat_id, entry.enabled,
+                        entry.definition.readable_name.data(), add_result.raw);
+        }
+    }
+}
+
+std::vector<Memory::RuntimeCheatInfo> System::GetRuntimeCheats() const {
+    if (!impl->cheat_engine) {
+        return {};
+    }
+    return impl->cheat_engine->GetCheats();
+}
+
+bool System::SetCheatEnabled(u32 cheat_id, bool enabled) {
+    return impl->cheat_engine && impl->cheat_engine->SetCheatEnabled(cheat_id, enabled);
 }
 
 void System::SetFrontendAppletSet(Service::AM::Frontend::FrontendAppletSet&& set) {
-    impl->frontend_applets.SetFrontendAppletSet(std::move(set));
+    impl->frontend_applets->SetFrontendAppletSet(std::move(set));
 }
 
 Service::AM::Frontend::FrontendAppletHolder& System::GetFrontendAppletHolder() {
-    return impl->frontend_applets;
+    return *impl->frontend_applets;
 }
 
 const Service::AM::Frontend::FrontendAppletHolder& System::GetFrontendAppletHolder() const {
-    return impl->frontend_applets;
+    return *impl->frontend_applets;
 }
 
 Service::AM::AppletManager& System::GetAppletManager() {
-    return impl->applet_manager;
+    return *impl->applet_manager;
 }
 
 void System::SetContentProvider(std::unique_ptr<FileSys::ContentProviderUnion> provider) {
@@ -962,27 +1082,27 @@ const Reporter& System::GetReporter() const {
 }
 
 Service::Glue::ARPManager& System::GetARPManager() {
-    return impl->arp_manager;
+    return *impl->arp_manager;
 }
 
 const Service::Glue::ARPManager& System::GetARPManager() const {
-    return impl->arp_manager;
+    return *impl->arp_manager;
 }
 
 Service::APM::Controller& System::GetAPMController() {
-    return impl->apm_controller;
+    return *impl->apm_controller;
 }
 
 const Service::APM::Controller& System::GetAPMController() const {
-    return impl->apm_controller;
+    return *impl->apm_controller;
 }
 
 Service::Account::ProfileManager& System::GetProfileManager() {
-    return impl->profile_manager;
+    return *impl->profile_manager;
 }
 
 const Service::Account::ProfileManager& System::GetProfileManager() const {
-    return impl->profile_manager;
+    return *impl->profile_manager;
 }
 
 void System::SetExitLocked(bool locked) {
@@ -1043,6 +1163,14 @@ const Core::Debugger& System::GetDebugger() const {
 
 Tools::RenderdocAPI& System::GetRenderdocAPI() {
     return *impl->renderdoc_api;
+}
+
+Service::DMNT::CheatProcessManager& System::GetCheatManager() {
+    return *impl->cheat_manager;
+}
+
+const Service::DMNT::CheatProcessManager& System::GetCheatManager() const {
+    return *impl->cheat_manager;
 }
 
 void System::RunServer(std::unique_ptr<Service::ServerManager>&& server_manager) {
@@ -1136,6 +1264,10 @@ void System::ApplySettings() {
         // Frontends switch docked/handheld through the settings; let the running game know.
         GetAppletManager().OperationModeChanged();
     }
+}
+
+std::shared_ptr<Core::Timing::EventType> System::CreateTimingEvent(std::string name, Core::Timing::TimedCallback&& callback) {
+    return std::make_shared<Core::Timing::EventType>(std::move(callback), std::move(name));
 }
 
 } // namespace Core

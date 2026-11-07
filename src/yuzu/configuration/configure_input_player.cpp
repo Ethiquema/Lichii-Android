@@ -14,6 +14,7 @@
 #include <QTimer>
 #include "common/assert.h"
 #include "common/param_package.h"
+#include "qt_common/qt_config.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
 #include "hid_core/hid_types.h"
@@ -465,30 +466,40 @@ ConfigureInputPlayer::ConfigureInputPlayer(QWidget* parent, std::size_t player_i
 
         button->setContextMenuPolicy(Qt::CustomContextMenu);
 
-        connect(button, &QPushButton::customContextMenuRequested,
-                [=, this](const QPoint& menu_location) {
-                    QMenu context_menu;
-                    Common::ParamPackage param = emulated_controller->GetMotionParam(motion_id);
-                    context_menu.addAction(tr("Clear"), [&] {
-                        emulated_controller->SetMotionParam(motion_id, {});
-                        motion_map[motion_id]->setText(tr("[not set]"));
-                    });
-                    if (param.Has("motion")) {
-                        context_menu.addAction(tr("Set gyro threshold"), [&] {
-                            const int gyro_threshold =
-                                static_cast<int>(param.Get("threshold", 0.007f) * 1000.0f);
-                            const int new_threshold = QInputDialog::getInt(
-                                this, tr("Set threshold"), tr("Choose a value between 0% and 100%"),
-                                gyro_threshold, 0, 100);
-                            param.Set("threshold", new_threshold / 1000.0f);
-                            emulated_controller->SetMotionParam(motion_id, param);
-                        });
-                        context_menu.addAction(tr("Calibrate sensor"), [&] {
-                            emulated_controller->StartMotionCalibration();
-                        });
-                    }
-                    context_menu.exec(motion_map[motion_id]->mapToGlobal(menu_location));
+        connect(button, &QPushButton::customContextMenuRequested, [=, this](const QPoint& menu_location) {
+            QMenu context_menu;
+            Common::ParamPackage param = emulated_controller->GetMotionParam(motion_id);
+            context_menu.addAction(tr("Clear"), [&] {
+                emulated_controller->SetMotionParam(motion_id, {});
+                motion_map[motion_id]->setText(tr("[not set]"));
+            });
+            if (param.Has("motion")) {
+                context_menu.addAction(tr("Set gyro threshold"), [&] {
+                    const int gyro_threshold = int(param.Get("threshold", 0.007f) * 1000.0f);
+                    const int new_threshold = QInputDialog::getInt(
+                        this, tr("Set threshold"), tr("Choose a value between 0% and 100%"),
+                        gyro_threshold, 0, 100);
+                    param.Set("threshold", new_threshold / 1000.0f);
+                    emulated_controller->SetMotionParam(motion_id, param);
                 });
+                context_menu.addAction(tr("Invert X"), [&] {
+                    param.Set("invert_x", param.Get("invert_x", "+") == "-" ? "+" : "-");
+                    emulated_controller->SetMotionParam(motion_id, param);
+                });
+                context_menu.addAction(tr("Invert Y"), [&] {
+                    param.Set("invert_y", param.Get("invert_y", "+") == "-" ? "+" : "-");
+                    emulated_controller->SetMotionParam(motion_id, param);
+                });
+                context_menu.addAction(tr("Invert Z"), [&] {
+                    param.Set("invert_z", param.Get("invert_z", "+") == "-" ? "+" : "-");
+                    emulated_controller->SetMotionParam(motion_id, param);
+                });
+                context_menu.addAction(tr("Calibrate sensor"), [&] {
+                    emulated_controller->StartMotionCalibration();
+                });
+            }
+            context_menu.exec(motion_map[motion_id]->mapToGlobal(menu_location));
+        });
     }
 
     connect(ui->sliderZLThreshold, &QSlider::valueChanged, [=, this] {

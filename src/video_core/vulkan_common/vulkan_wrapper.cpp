@@ -5,8 +5,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
+#include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -19,6 +23,60 @@
 namespace Vulkan::vk {
 
 namespace {
+
+std::thread::id allocator_owner_thread;
+
+template <typename HandleType>
+struct PendingRelease {
+    VmaAllocator allocator;
+    HandleType handle;
+    VmaAllocation allocation;
+    u64 timeline;
+};
+
+std::mutex deletion_mutex;
+std::atomic<u64> deletion_timeline{1};
+std::vector<PendingRelease<VkImage>> pending_images;
+std::vector<PendingRelease<VkBuffer>> pending_buffers;
+
+template <typename HandleType>
+void PushPendingRelease(std::vector<PendingRelease<HandleType>>& pending, VmaAllocator allocator,
+                        HandleType handle, VmaAllocation allocation) noexcept {
+    std::scoped_lock lock{deletion_mutex};
+    pending.push_back(PendingRelease<HandleType>{
+        .allocator = allocator,
+        .handle = handle,
+        .allocation = allocation,
+        .timeline = deletion_timeline.load(std::memory_order_acquire),
+    });
+}
+
+template <typename HandleType>
+void ExtractReleased(std::vector<PendingRelease<HandleType>>& pending,
+                     std::vector<PendingRelease<HandleType>>& released, u64 completed_value) {
+    const auto split = std::partition(pending.begin(), pending.end(),
+                                      [completed_value](const PendingRelease<HandleType>& entry) {
+                                          return entry.timeline > completed_value;
+                                      });
+    released.assign(split, pending.end());
+    pending.erase(split, pending.end());
+}
+
+void DrainDeletionQueue(u64 completed_value) noexcept {
+    std::vector<PendingRelease<VkImage>> images;
+    std::vector<PendingRelease<VkBuffer>> buffers;
+    {
+        std::scoped_lock lock{deletion_mutex};
+        ExtractReleased(pending_images, images, completed_value);
+        ExtractReleased(pending_buffers, buffers, completed_value);
+    }
+    for (const auto& entry : images) {
+        vmaDestroyImage(entry.allocator, entry.handle, entry.allocation);
+    }
+    for (const auto& entry : buffers) {
+        vmaDestroyBuffer(entry.allocator, entry.handle, entry.allocation);
+    }
+}
 
 template <typename Func>
 void SortPhysicalDevices(std::vector<VkPhysicalDevice>& devices, const InstanceDispatch& dld,
@@ -86,26 +144,26 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkAllocateCommandBuffers);
     X(vkAllocateDescriptorSets);
     X(vkAllocateMemory);
-    X(vkBeginCommandBuffer);
     X(vkBindBufferMemory);
-    X(vkBindImageMemory);
+    X(vkFreeMemory);
+    X(vkBeginCommandBuffer);
     X(vkCmdBeginConditionalRenderingEXT);
     X(vkCmdBeginQuery);
-    X(vkCmdBeginRenderPass);
+    X(vkCmdBeginRendering);
     X(vkCmdBeginTransformFeedbackEXT);
-    X(vkCmdBeginDebugUtilsLabelEXT);
     X(vkCmdBindDescriptorSets);
     X(vkCmdBindIndexBuffer);
+    X(vkCmdBindIndexBuffer2KHR);
     X(vkCmdBindPipeline);
     X(vkCmdBindTransformFeedbackBuffersEXT);
     X(vkCmdBindVertexBuffers);
-    X(vkCmdBlitImage);
+    X(vkCmdBlitImage2);
     X(vkCmdClearAttachments);
     X(vkCmdClearColorImage);
-    X(vkCmdCopyBuffer);
-    X(vkCmdCopyBufferToImage);
-    X(vkCmdCopyImage);
-    X(vkCmdCopyImageToBuffer);
+    X(vkCmdCopyBuffer2);
+    X(vkCmdCopyBufferToImage2);
+    X(vkCmdCopyImage2);
+    X(vkCmdCopyImageToBuffer2);
     X(vkCmdCopyQueryPoolResults);
     X(vkCmdDispatch);
     X(vkCmdDispatchIndirect);
@@ -119,11 +177,9 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCmdDrawMeshTasksEXT);
     X(vkCmdEndConditionalRenderingEXT);
     X(vkCmdEndQuery);
-    X(vkCmdEndRenderPass);
+    X(vkCmdEndRendering);
     X(vkCmdEndTransformFeedbackEXT);
-    X(vkCmdEndDebugUtilsLabelEXT);
     X(vkCmdFillBuffer);
-    X(vkCmdPipelineBarrier);
     X(vkCmdPipelineBarrier2);
     X(vkCmdPushConstants);
     X(vkCmdPushDescriptorSetWithTemplateKHR);
@@ -131,13 +187,11 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCmdSetDepthBias);
     X(vkCmdSetDepthBias2EXT);
     X(vkCmdSetDepthBounds);
-    X(vkCmdSetEvent);
     X(vkCmdSetScissor);
     X(vkCmdSetStencilCompareMask);
     X(vkCmdSetStencilReference);
     X(vkCmdSetStencilWriteMask);
     X(vkCmdSetViewport);
-    X(vkCmdWaitEvents);
     X(vkCmdBindVertexBuffers2EXT);
     X(vkCmdSetCullModeEXT);
     X(vkCmdSetDepthBoundsTestEnableEXT);
@@ -156,7 +210,6 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCmdSetDepthClampEnableEXT);
     X(vkCmdSetFrontFaceEXT);
     X(vkCmdSetLogicOpEXT);
-    X(vkCmdSetPatchControlPointsEXT);
     X(vkCmdSetLineWidth);
     X(vkCmdSetPrimitiveTopologyEXT);
     X(vkCmdSetStencilOpEXT);
@@ -167,8 +220,7 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCmdSetColorBlendEnableEXT);
     X(vkCmdSetColorBlendEquationEXT);
     X(vkCmdResetQueryPool);
-    X(vkCmdWriteTimestamp);
-    X(vkCmdResolveImage);
+    X(vkCmdResolveImage2);
     X(vkCreateBuffer);
     X(vkCreateBufferView);
     X(vkCreateCommandPool);
@@ -176,17 +228,12 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCreateDescriptorPool);
     X(vkCreateDescriptorSetLayout);
     X(vkCreateDescriptorUpdateTemplate);
-    X(vkCreateEvent);
     X(vkCreateFence);
-    X(vkCreateFramebuffer);
     X(vkCreateGraphicsPipelines);
-    X(vkCreateImage);
     X(vkCreateImageView);
     X(vkCreatePipelineCache);
     X(vkCreatePipelineLayout);
     X(vkCreateQueryPool);
-    X(vkCreateRenderPass);
-    X(vkCreateRenderPass2);
     X(vkCreateSampler);
     X(vkCreateSemaphore);
     X(vkCreateShaderModule);
@@ -197,16 +244,13 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkDestroyDescriptorPool);
     X(vkDestroyDescriptorSetLayout);
     X(vkDestroyDescriptorUpdateTemplate);
-    X(vkDestroyEvent);
     X(vkDestroyFence);
-    X(vkDestroyFramebuffer);
     X(vkDestroyImage);
     X(vkDestroyImageView);
     X(vkDestroyPipeline);
     X(vkDestroyPipelineCache);
     X(vkDestroyPipelineLayout);
     X(vkDestroyQueryPool);
-    X(vkDestroyRenderPass);
     X(vkDestroySampler);
     X(vkDestroySemaphore);
     X(vkDestroyShaderModule);
@@ -215,32 +259,24 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkEndCommandBuffer);
     X(vkFreeCommandBuffers);
     X(vkFreeDescriptorSets);
-    X(vkFreeMemory);
     X(vkGetBufferMemoryRequirements2);
+    X(vkGetDeviceBufferMemoryRequirements);
     X(vkGetDeviceQueue);
-    X(vkGetEventStatus);
     X(vkGetFenceStatus);
-    X(vkGetImageMemoryRequirements);
-    X(vkGetImageSparseMemoryRequirements);
     X(vkGetPipelineCacheData);
-    X(vkGetMemoryFdKHR);
-#ifdef _WIN32
-    X(vkGetMemoryWin32HandleKHR);
-#endif
     X(vkGetQueryPoolResults);
     X(vkGetPipelineExecutablePropertiesKHR);
     X(vkGetPipelineExecutableStatisticsKHR);
     X(vkGetPipelineExecutableInternalRepresentationsKHR);
     X(vkGetSemaphoreCounterValue);
-    X(vkMapMemory);
+    X(vkCopyMemoryToImageEXT);
+    X(vkTransitionImageLayoutEXT);
     X(vkQueueBindSparse);
-    X(vkQueueSubmit);
     X(vkQueueSubmit2);
+    X(vkResetCommandPool);
     X(vkResetFences);
     X(vkResetQueryPool);
     X(vkSetDebugUtilsObjectNameEXT);
-    X(vkSetDebugUtilsObjectTagEXT);
-    X(vkUnmapMemory);
     X(vkUpdateDescriptorSetWithTemplate);
     X(vkUpdateDescriptorSets);
     X(vkGetBufferDeviceAddress);
@@ -251,6 +287,7 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCmdSetDescriptorBufferOffsetsEXT);
     X(vkWaitForFences);
     X(vkWaitSemaphores);
+    X(vkGetDeviceFaultInfoEXT);
 
     // Support for timeline semaphores is mandatory in Vulkan 1.2
     if (!dld.vkGetSemaphoreCounterValue) {
@@ -269,6 +306,12 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
         Proc(dld.vkCmdDrawIndexedIndirectCount, dld, "vkCmdDrawIndexedIndirectCountKHR", device);
     }
 
+    // Maintenance4 queries are core in Vulkan 1.3, otherwise require VK_KHR_maintenance4
+    if (!dld.vkGetDeviceBufferMemoryRequirements) {
+        Proc(dld.vkGetDeviceBufferMemoryRequirements, dld,
+             "vkGetDeviceBufferMemoryRequirementsKHR", device);
+    }
+
     // Synchronization2 is core in Vulkan 1.3, otherwise requires VK_KHR_synchronization2
     if (!dld.vkCmdPipelineBarrier2) {
         Proc(dld.vkCmdPipelineBarrier2, dld, "vkCmdPipelineBarrier2KHR", device);
@@ -277,9 +320,19 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
         Proc(dld.vkQueueSubmit2, dld, "vkQueueSubmit2KHR", device);
     }
 
-    if (!dld.vkCreateRenderPass2) {
-        Proc(dld.vkCreateRenderPass2, dld, "vkCreateRenderPass2KHR", device);
-    }
+    const auto load_khr = [&](auto& function, const char* name) {
+        if (!function) {
+            Proc(function, dld, name, device);
+        }
+    };
+    load_khr(dld.vkCmdBeginRendering, "vkCmdBeginRenderingKHR");
+    load_khr(dld.vkCmdEndRendering, "vkCmdEndRenderingKHR");
+    load_khr(dld.vkCmdBlitImage2, "vkCmdBlitImage2KHR");
+    load_khr(dld.vkCmdCopyBuffer2, "vkCmdCopyBuffer2KHR");
+    load_khr(dld.vkCmdCopyBufferToImage2, "vkCmdCopyBufferToImage2KHR");
+    load_khr(dld.vkCmdCopyImage2, "vkCmdCopyImage2KHR");
+    load_khr(dld.vkCmdCopyImageToBuffer2, "vkCmdCopyImageToBuffer2KHR");
+    load_khr(dld.vkCmdResolveImage2, "vkCmdResolveImage2KHR");
 #undef X
 }
 
@@ -312,10 +365,9 @@ bool Load(VkInstance instance, InstanceDispatch& dld) noexcept {
     // These functions may fail to load depending on the enabled extensions.
     // Don't return a failure on these.
     X(vkCreateDebugUtilsMessengerEXT);
-    X(vkCreateDebugReportCallbackEXT);
     X(vkDestroyDebugUtilsMessengerEXT);
-    X(vkDestroyDebugReportCallbackEXT);
     X(vkDestroySurfaceKHR);
+    X(vkGetPhysicalDeviceExternalBufferProperties);
     X(vkGetPhysicalDeviceFeatures2);
     X(vkGetPhysicalDeviceFormatProperties2);
     X(vkGetPhysicalDeviceProperties2);
@@ -327,10 +379,10 @@ bool Load(VkInstance instance, InstanceDispatch& dld) noexcept {
     X(vkGetSwapchainImagesKHR);
     X(vkQueuePresentKHR);
 
-    return X(vkCreateDevice) && X(vkDestroyDevice) && X(vkDestroyDevice) &&
+    return X(vkCreateDevice) && X(vkDestroyDevice) &&
            X(vkEnumerateDeviceExtensionProperties) && X(vkEnumeratePhysicalDevices) &&
            X(vkGetDeviceProcAddr) && X(vkGetPhysicalDeviceFormatProperties) &&
-           X(vkGetPhysicalDeviceMemoryProperties) && X(vkGetPhysicalDeviceMemoryProperties2) &&
+           X(vkGetPhysicalDeviceMemoryProperties2) &&
            X(vkGetPhysicalDeviceProperties) && X(vkGetPhysicalDeviceQueueFamilyProperties);
 #undef X
 }
@@ -349,6 +401,10 @@ void Destroy(VkDevice device, const InstanceDispatch& dld) noexcept {
 
 void Destroy(VkDevice device, VkBuffer handle, const DeviceDispatch& dld) noexcept {
     dld.vkDestroyBuffer(device, handle, nullptr);
+}
+
+void Destroy(VkDevice device, VkDeviceMemory handle, const DeviceDispatch& dld) noexcept {
+    dld.vkFreeMemory(device, handle, nullptr);
 }
 
 void Destroy(VkDevice device, VkBufferView handle, const DeviceDispatch& dld) noexcept {
@@ -372,20 +428,8 @@ void Destroy(VkDevice device, VkDescriptorUpdateTemplate handle,
     dld.vkDestroyDescriptorUpdateTemplate(device, handle, nullptr);
 }
 
-void Destroy(VkDevice device, VkDeviceMemory handle, const DeviceDispatch& dld) noexcept {
-    dld.vkFreeMemory(device, handle, nullptr);
-}
-
-void Destroy(VkDevice device, VkEvent handle, const DeviceDispatch& dld) noexcept {
-    dld.vkDestroyEvent(device, handle, nullptr);
-}
-
 void Destroy(VkDevice device, VkFence handle, const DeviceDispatch& dld) noexcept {
     dld.vkDestroyFence(device, handle, nullptr);
-}
-
-void Destroy(VkDevice device, VkFramebuffer handle, const DeviceDispatch& dld) noexcept {
-    dld.vkDestroyFramebuffer(device, handle, nullptr);
 }
 
 void Destroy(VkDevice device, VkImage handle, const DeviceDispatch& dld) noexcept {
@@ -412,10 +456,6 @@ void Destroy(VkDevice device, VkQueryPool handle, const DeviceDispatch& dld) noe
     dld.vkDestroyQueryPool(device, handle, nullptr);
 }
 
-void Destroy(VkDevice device, VkRenderPass handle, const DeviceDispatch& dld) noexcept {
-    dld.vkDestroyRenderPass(device, handle, nullptr);
-}
-
 void Destroy(VkDevice device, VkSampler handle, const DeviceDispatch& dld) noexcept {
     dld.vkDestroySampler(device, handle, nullptr);
 }
@@ -435,11 +475,6 @@ void Destroy(VkDevice device, VkShaderModule handle, const DeviceDispatch& dld) 
 void Destroy(VkInstance instance, VkDebugUtilsMessengerEXT handle,
              const InstanceDispatch& dld) noexcept {
     dld.vkDestroyDebugUtilsMessengerEXT(instance, handle, nullptr);
-}
-
-void Destroy(VkInstance instance, VkDebugReportCallbackEXT handle,
-             const InstanceDispatch& dld) noexcept {
-    dld.vkDestroyDebugReportCallbackEXT(instance, handle, nullptr);
 }
 
 void Destroy(VkInstance instance, VkSurfaceKHR handle, const InstanceDispatch& dld) noexcept {
@@ -511,20 +546,13 @@ DebugUtilsMessenger Instance::CreateDebugUtilsMessenger(
     return DebugUtilsMessenger(object, handle, *dld);
 }
 
-DebugReportCallback Instance::CreateDebugReportCallback(
-    const VkDebugReportCallbackCreateInfoEXT& create_info) const {
-    VkDebugReportCallbackEXT object;
-    Check(dld->vkCreateDebugReportCallbackEXT(handle, &create_info, nullptr, &object));
-    return DebugReportCallback(object, handle, *dld);
-}
-
 void Image::SetObjectNameEXT(const char* name) const {
     SetObjectName(dld, owner, handle, VK_OBJECT_TYPE_IMAGE, name);
 }
 
 void Image::Release() const noexcept {
     if (handle) {
-        vmaDestroyImage(allocator, handle, allocation);
+        PushPendingRelease(pending_images, allocator, handle, allocation);
     }
 }
 
@@ -559,7 +587,7 @@ void Buffer::SetObjectNameEXT(const char* name) const {
 
 void Buffer::Release() const noexcept {
     if (handle) {
-        vmaDestroyBuffer(allocator, handle, allocation);
+        PushPendingRelease(pending_buffers, allocator, handle, allocation);
     }
 }
 
@@ -571,42 +599,8 @@ void ImageView::SetObjectNameEXT(const char* name) const {
     SetObjectName(dld, owner, handle, VK_OBJECT_TYPE_IMAGE_VIEW, name);
 }
 
-int DeviceMemory::GetMemoryFdKHR() const {
-    const VkMemoryGetFdInfoKHR get_fd_info{
-        .sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
-        .pNext = nullptr,
-        .memory = handle,
-        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR,
-    };
-    int fd;
-    Check(dld->vkGetMemoryFdKHR(owner, &get_fd_info, &fd));
-    return fd;
-}
-
-#ifdef _WIN32
-HANDLE DeviceMemory::GetMemoryWin32HandleKHR() const {
-    const VkMemoryGetWin32HandleInfoKHR get_win32_handle_info{
-        .sType = VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR,
-        .pNext = nullptr,
-        .memory = handle,
-        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT_KHR,
-    };
-    HANDLE win32_handle;
-    Check(dld->vkGetMemoryWin32HandleKHR(owner, &get_win32_handle_info, &win32_handle));
-    return win32_handle;
-}
-#endif
-
-void DeviceMemory::SetObjectNameEXT(const char* name) const {
-    SetObjectName(dld, owner, handle, VK_OBJECT_TYPE_DEVICE_MEMORY, name);
-}
-
 void Fence::SetObjectNameEXT(const char* name) const {
     SetObjectName(dld, owner, handle, VK_OBJECT_TYPE_FENCE, name);
-}
-
-void Framebuffer::SetObjectNameEXT(const char* name) const {
-    SetObjectName(dld, owner, handle, VK_OBJECT_TYPE_FRAMEBUFFER, name);
 }
 
 DescriptorSets DescriptorPool::Allocate(const VkDescriptorSetAllocateInfo& ai) const {
@@ -660,10 +654,6 @@ std::vector<VkImage> SwapchainKHR::GetImages() const {
     return images;
 }
 
-void Event::SetObjectNameEXT(const char* name) const {
-    SetObjectName(dld, owner, handle, VK_OBJECT_TYPE_EVENT, name);
-}
-
 void ShaderModule::SetObjectNameEXT(const char* name) const {
     SetObjectName(dld, owner, handle, VK_OBJECT_TYPE_SHADER_MODULE, name);
 }
@@ -709,6 +699,37 @@ BufferView Device::CreateBufferView(const VkBufferViewCreateInfo& ci) const {
     return BufferView(object, handle, *dld);
 }
 
+ExternalBuffer Device::CreateExternalBuffer(const VkBufferCreateInfo& ci) const {
+    VkBuffer object;
+    Check(dld->vkCreateBuffer(handle, &ci, nullptr, &object));
+    return ExternalBuffer(object, handle, *dld);
+}
+
+DeviceMemory Device::AllocateMemory(const VkMemoryAllocateInfo& ai) const {
+    VkDeviceMemory object;
+    Check(dld->vkAllocateMemory(handle, &ai, nullptr, &object));
+    return DeviceMemory(object, handle, *dld);
+}
+
+void Device::BindBufferMemory(VkBuffer buffer, VkDeviceMemory memory, VkDeviceSize offset) const {
+    Check(dld->vkBindBufferMemory(handle, buffer, memory, offset));
+}
+
+VkMemoryRequirements Device::GetBufferMemoryRequirements(VkBuffer buffer) const noexcept {
+    const VkBufferMemoryRequirementsInfo2 info{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2,
+        .pNext = nullptr,
+        .buffer = buffer,
+    };
+    VkMemoryRequirements2 requirements{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2,
+        .pNext = nullptr,
+        .memoryRequirements = {},
+    };
+    dld->vkGetBufferMemoryRequirements2(handle, &info, &requirements);
+    return requirements.memoryRequirements;
+}
+
 ImageView Device::CreateImageView(const VkImageViewCreateInfo& ci) const {
     VkImageView object;
     Check(dld->vkCreateImageView(handle, &ci, nullptr, &object));
@@ -740,18 +761,6 @@ DescriptorPool Device::CreateDescriptorPool(const VkDescriptorPoolCreateInfo& ci
     VkDescriptorPool object;
     Check(dld->vkCreateDescriptorPool(handle, &ci, nullptr, &object));
     return DescriptorPool(object, handle, *dld);
-}
-
-RenderPass Device::CreateRenderPass(const VkRenderPassCreateInfo& ci) const {
-    VkRenderPass object;
-    Check(dld->vkCreateRenderPass(handle, &ci, nullptr, &object));
-    return RenderPass(object, handle, *dld);
-}
-
-RenderPass Device::CreateRenderPass2(const VkRenderPassCreateInfo2& ci) const {
-    VkRenderPass object;
-    Check(dld->vkCreateRenderPass2(handle, &ci, nullptr, &object));
-    return RenderPass(object, handle, *dld);
 }
 
 DescriptorSetLayout Device::CreateDescriptorSetLayout(
@@ -798,12 +807,6 @@ Sampler Device::CreateSampler(const VkSamplerCreateInfo& ci) const {
     return Sampler(object, handle, *dld);
 }
 
-Framebuffer Device::CreateFramebuffer(const VkFramebufferCreateInfo& ci) const {
-    VkFramebuffer object;
-    Check(dld->vkCreateFramebuffer(handle, &ci, nullptr, &object));
-    return Framebuffer(object, handle, *dld);
-}
-
 CommandPool Device::CreateCommandPool(const VkCommandPoolCreateInfo& ci) const {
     VkCommandPool object;
     Check(dld->vkCreateCommandPool(handle, &ci, nullptr, &object));
@@ -829,68 +832,26 @@ ShaderModule Device::CreateShaderModule(const VkShaderModuleCreateInfo& ci) cons
     return ShaderModule(object, handle, *dld);
 }
 
-Event Device::CreateEvent() const {
-    static constexpr VkEventCreateInfo ci{
-        .sType = VK_STRUCTURE_TYPE_EVENT_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-    };
-
-    VkEvent object;
-    Check(dld->vkCreateEvent(handle, &ci, nullptr, &object));
-    return Event(object, handle, *dld);
-}
-
 SwapchainKHR Device::CreateSwapchainKHR(const VkSwapchainCreateInfoKHR& ci) const {
     VkSwapchainKHR object;
     Check(dld->vkCreateSwapchainKHR(handle, &ci, nullptr, &object));
     return SwapchainKHR(object, handle, *dld);
 }
 
-DeviceMemory Device::TryAllocateMemory(const VkMemoryAllocateInfo& ai) const noexcept {
-    VkDeviceMemory memory;
-    if (dld->vkAllocateMemory(handle, &ai, nullptr, &memory) != VK_SUCCESS) {
-        return {};
-    }
-    return DeviceMemory(memory, handle, *dld);
-}
-
-DeviceMemory Device::AllocateMemory(const VkMemoryAllocateInfo& ai) const {
-    VkDeviceMemory memory;
-    Check(dld->vkAllocateMemory(handle, &ai, nullptr, &memory));
-    return DeviceMemory(memory, handle, *dld);
-}
-
-VkMemoryRequirements Device::GetBufferMemoryRequirements(VkBuffer buffer,
-                                                         void* pnext) const noexcept {
-    const VkBufferMemoryRequirementsInfo2 info{
-        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2,
+VkMemoryRequirements Device::GetDeviceBufferMemoryRequirements(
+    const VkBufferCreateInfo& ci) const noexcept {
+    const VkDeviceBufferMemoryRequirements info{
+        .sType = VK_STRUCTURE_TYPE_DEVICE_BUFFER_MEMORY_REQUIREMENTS,
         .pNext = nullptr,
-        .buffer = buffer,
+        .pCreateInfo = &ci,
     };
     VkMemoryRequirements2 requirements{
         .sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2,
-        .pNext = pnext,
+        .pNext = nullptr,
         .memoryRequirements{},
     };
-    dld->vkGetBufferMemoryRequirements2(handle, &info, &requirements);
+    dld->vkGetDeviceBufferMemoryRequirements(handle, &info, &requirements);
     return requirements.memoryRequirements;
-}
-
-VkMemoryRequirements Device::GetImageMemoryRequirements(VkImage image) const noexcept {
-    VkMemoryRequirements requirements;
-    dld->vkGetImageMemoryRequirements(handle, image, &requirements);
-    return requirements;
-}
-
-std::vector<VkSparseImageMemoryRequirements> Device::GetImageSparseMemoryRequirements(
-    VkImage image) const {
-    u32 count = 0;
-    dld->vkGetImageSparseMemoryRequirements(handle, image, &count, nullptr);
-    std::vector<VkSparseImageMemoryRequirements> requirements(count);
-    dld->vkGetImageSparseMemoryRequirements(handle, image, &count, requirements.data());
-    requirements.resize(count);
-    return requirements;
 }
 
 std::vector<VkPipelineExecutablePropertiesKHR> Device::GetPipelineExecutablePropertiesKHR(
@@ -982,14 +943,6 @@ VkPhysicalDeviceProperties PhysicalDevice::GetProperties() const noexcept {
 
 void PhysicalDevice::GetProperties2(VkPhysicalDeviceProperties2& properties) const noexcept {
     dld->vkGetPhysicalDeviceProperties2(physical_device, &properties);
-}
-
-VkPhysicalDeviceFeatures PhysicalDevice::GetFeatures() const noexcept {
-    VkPhysicalDeviceFeatures2 features2;
-    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    features2.pNext = nullptr;
-    dld->vkGetPhysicalDeviceFeatures2(physical_device, &features2);
-    return features2.features;
 }
 
 void PhysicalDevice::GetFeatures2(VkPhysicalDeviceFeatures2& features) const noexcept {
@@ -1086,6 +1039,28 @@ VkPhysicalDeviceMemoryProperties2 PhysicalDevice::GetMemoryProperties(
     properties.pNext = next_structures;
     dld->vkGetPhysicalDeviceMemoryProperties2(physical_device, &properties);
     return properties;
+}
+
+VkExternalMemoryProperties PhysicalDevice::GetExternalBufferProperties(
+    VkBufferCreateFlags flags, VkBufferUsageFlags usage,
+    VkExternalMemoryHandleTypeFlagBits handle_type) const noexcept {
+    VkExternalBufferProperties properties{
+        .sType = VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES,
+        .pNext = nullptr,
+        .externalMemoryProperties = {},
+    };
+    if (!dld->vkGetPhysicalDeviceExternalBufferProperties) {
+        return properties.externalMemoryProperties;
+    }
+    const VkPhysicalDeviceExternalBufferInfo info{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO,
+        .pNext = nullptr,
+        .flags = flags,
+        .usage = usage,
+        .handleType = handle_type,
+    };
+    dld->vkGetPhysicalDeviceExternalBufferProperties(physical_device, &info, &properties);
+    return properties.externalMemoryProperties;
 }
 
 u32 AvailableVersion(const InstanceDispatch& dld) noexcept {

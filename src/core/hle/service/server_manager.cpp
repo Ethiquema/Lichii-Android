@@ -4,7 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <utility>
+#include <cstdlib>
 
 #include "common/scope_exit.h"
 
@@ -101,8 +101,10 @@ ServerManager::~ServerManager() {
     // Signal stop.
     m_stop_source.request_stop();
     m_wakeup_event->Signal(m_system.Kernel());
+    if (m_deferral_event) m_deferral_event->Signal(m_system.Kernel()); //for sm: and ports
 
-    // Wait for processing to stop.
+
+    // Wait for processing to stop. Schedule
     m_stopped.Wait();
     m_threads.clear();
 
@@ -129,6 +131,13 @@ ServerManager::~ServerManager() {
     if (m_deferral_event) {
         m_deferral_event->GetReadableEvent().Close(m_system.Kernel());
         // Write event is owned by ServiceManager
+    }
+}
+
+void ServerManager::StartAdditionalHostThreads(const char* name, size_t num_threads) {
+    for (size_t i = 0; i < num_threads; i++) {
+        auto thread_name = fmt::format("{}:{}", name, i + 1);
+        m_threads.emplace_back(m_system.Kernel().RunOnHostCoreThread(std::move(thread_name), [&] { this->LoopProcessImpl(); }));
     }
 }
 
@@ -248,18 +257,20 @@ Result ServerManager::ManageDeferral(Kernel::KEvent** out_event) {
     R_SUCCEED();
 }
 
-void ServerManager::SetDeferralCancelHandler(DeferralCancelHandler&& handler) {
-    // Server threads read the handler without a lock, so none may run yet.
-    ASSERT(m_threads.empty());
-    m_deferral_cancel_handler = std::move(handler);
-}
-
 void ServerManager::StartAdditionalHostThreads(const char* name, size_t num_threads) {
     for (size_t i = 0; i < num_threads; i++) {
         auto thread_name = fmt::format("{}:{}", name, i + 1);
         m_threads.emplace_back(m_system.Kernel().RunOnHostCoreThread(
             std::move(thread_name), [&] { this->LoopProcessImpl(); }));
     }
+}
+
+/// @brief Notifies that the system is shutting down (pre-emptively terminate threads)
+void ServerManager::NotifyShutdown() {
+    m_stop_source.request_stop();
+    // Wake them up regardless
+    m_wakeup_event->Signal(m_system.Kernel());
+    if (m_deferral_event) m_deferral_event->Signal(m_system.Kernel()); //for sm: and ports
 }
 
 Result ServerManager::LoopProcess() {
@@ -294,9 +305,8 @@ MultiWaitHolder* ServerManager::WaitSignaled() {
         this->LinkDeferred();
 
         // If we're done, return before we start waiting.
-        if (m_stop_source.stop_requested()) {
+        if (m_stop_source.stop_requested())
             return nullptr;
-        }
 
         auto* selected = m_multi_wait.WaitAny(m_system.Kernel());
         if (selected == std::addressof(*m_wakeup_holder)) {
@@ -434,8 +444,18 @@ Result ServerManager::CompleteSyncRequest(Session* session) {
         R_SUCCEED();
     }
 
+    const bool diag_account_reply = std::getenv("EDEN_DIAG_THREAD_DUMP") != nullptr &&
+                                    session->GetContext()->GetCommand() == 150;
+
     // Send the reply.
+    if (diag_account_reply) {
+        LOG_INFO(Service, "diag: cmd150 before SendReplyHLE");
+    }
     res = server_session->SendReplyHLE(m_system.Kernel(), service_res == IPC::ResultSessionClosed);
+    if (diag_account_reply) {
+        LOG_INFO(Service, "diag: cmd150 after SendReplyHLE result={:#x}", res.raw);
+        m_system.DumpGuestThreads();
+    }
 
     // The reply is written: release the context, and with it the client thread, before another
     // thread may receive the next request on this session.

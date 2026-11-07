@@ -35,21 +35,21 @@ This file is based off of Yuzu and Dynarmic.
 # Do note that situations where multiple architectures are defined
 # should NOT be too dependent on the architecture
 # otherwise, you may end up with duplicate code
-if (CMAKE_OSX_ARCHITECTURES)
-    list(LENGTH CMAKE_OSX_ARCHITECTURES architecture_count)
-    if (architecture_count GREATER 1)
-        set(MULTIARCH_BUILD 1)
-    else()
-        set(MULTIARCH_BUILD 0)
-    endif()
+if (DEFINED CMAKE_OSX_ARCHITECTURES)
+    set(MULTIARCH_BUILD 1)
     set(ARCHITECTURE "${CMAKE_OSX_ARCHITECTURES}")
-
-    # hope and pray the architecture names match
-    foreach(ARCH IN LISTS CMAKE_OSX_ARCHITECTURES)
-        set(ARCHITECTURE_${ARCH} 1)
-        add_definitions(-DARCHITECTURE_${ARCH}=1)
-    endforeach()
-
+    if (IOS)
+        # TODO: Right... the toolchain file won't properly accomodate OSX_ARCHITECTURE
+        # they aren't defining it as a list properly I assume?
+        set(ARCHITECTURE_arm64 1)
+        add_definitions(-DARCHITECTURE_arm64=1)
+    else ()
+        # hope and pray the architecture names match
+        foreach(ARCH ${CMAKE_OSX_ARCHITECTURES})
+            set(ARCHITECTURE_${ARCH} 1)
+            add_definitions(-DARCHITECTURE_${ARCH}=1)
+        endforeach()
+    endif()
     return()
 endif()
 
@@ -99,12 +99,21 @@ function(detect_architecture_symbols)
 endfunction()
 
 # arches here are put in a sane default order of importance
+# EXCEPT FOR WASM, which must be probed for FIRST, because some genius
+# decided to also allow the host architecture to be defined when building
+# for the emscripten target, absolutely lovely detail.
+#
 # notably, amd64, arm64, and riscv (in order) are BY FAR the most common
 # mips is pretty popular in embedded
 # ppc64 is pretty popular in supercomputing
 # sparc is uh
 # ia64 exists
 # the rest exist, but are probably less popular than ia64
+
+detect_architecture_symbols(
+    ARCH wasm
+    SYMBOLS
+        "__EMSCRIPTEN__")
 
 detect_architecture_symbols(
     ARCH arm64
@@ -171,7 +180,7 @@ detect_architecture_symbols(
         "_M_MRX000")
 
 detect_architecture_symbols(
-    ARCH ppc64
+    ARCH powerpc64
     SYMBOLS
         "__ppc64__"
         "__powerpc64__"
@@ -179,7 +188,7 @@ detect_architecture_symbols(
         "_M_PPC64")
 
 detect_architecture_symbols(
-    ARCH ppc
+    ARCH powerpc
     SYMBOLS
         "__ppc__"
         "__ppc"
@@ -207,11 +216,6 @@ detect_architecture_symbols(
     SYMBOLS
         "__loongarch__"
         "__loongarch64")
-
-detect_architecture_symbols(
-    ARCH wasm
-    SYMBOLS
-        "__EMSCRIPTEN__")
 
 # "generic" target
 # If you have reached this point, you're on some as-of-yet unsupported architecture.

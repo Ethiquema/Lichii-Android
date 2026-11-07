@@ -4,15 +4,17 @@
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "video_core/native_diagnostics.h"
 #include <cstring>
+#include <fstream>
+#include <cstdlib>
 #include <set>
-#include <tuple>
 
 #include "common/settings.h"
 #include "video_core/dirty_flags.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/rasterizer_interface.h"
-#include "video_core/render_trace.h"
+#include "video_core/memory_manager.h"
 
 namespace Tegra::Engines {
 namespace {
@@ -39,6 +41,10 @@ void TraceSuppressedDraw(const Maxwell3D& maxwell3d, bool indirect) {
 } // namespace
 
 void Maxwell3D::DrawManager::ProcessMethodCall(Maxwell3D& maxwell3d, u32 method, u32 argument) {
+    if (draw_state.draw_mode == DrawMode::InstanceArray &&
+        method != MAXWELL3D_REG_INDEX(vertex_array_instance_subsequent)) {
+        DrawDeferred(maxwell3d);
+    }
     switch (method) {
     case MAXWELL3D_REG_INDEX(clear_surface):
         return Clear(maxwell3d, 1);
@@ -97,7 +103,20 @@ void Maxwell3D::DrawManager::Clear(Maxwell3D& maxwell3d, u32 layer_count) {
     }
 }
 
-void Maxwell3D::DrawManager::DrawDeferred(Maxwell3D& maxwell3d, bool loop_continues) {
+void Maxwell3D::DrawManager::FlushInstanceArray(Maxwell3D& maxwell3d) {
+    if (draw_state.draw_mode != DrawMode::InstanceArray) {
+        return;
+    }
+    const u32 instance_count = draw_state.instance_count + 1;
+    draw_state.draw_mode = DrawMode::General;
+    draw_state.instance_count = 0;
+    if (maxwell3d.ShouldExecute()) {
+        maxwell3d.rasterizer->Draw(false, instance_count);
+    }
+}
+
+void Maxwell3D::DrawManager::DrawDeferred(Maxwell3D& maxwell3d) {
+    FlushInstanceArray(maxwell3d);
     if (draw_state.draw_mode != DrawMode::Instance || draw_state.instance_count == 0) {
         if (!loop_continues) {
             draw_state.drawn_instances = 0;
@@ -141,6 +160,7 @@ bool Maxwell3D::DrawManager::IsInstanceLoopMethod(u32 method) noexcept {
 }
 
 void Maxwell3D::DrawManager::DrawArray(Maxwell3D& maxwell3d, Maxwell3D::Regs::PrimitiveTopology topology, u32 vertex_first, u32 vertex_count, u32 base_instance, u32 num_instances) {
+    FlushInstanceArray(maxwell3d);
     draw_state.topology = topology;
     draw_state.vertex_buffer.first = vertex_first;
     draw_state.vertex_buffer.count = vertex_count;
@@ -149,20 +169,29 @@ void Maxwell3D::DrawManager::DrawArray(Maxwell3D& maxwell3d, Maxwell3D::Regs::Pr
 }
 
 void Maxwell3D::DrawManager::DrawArrayInstanced(Maxwell3D& maxwell3d, Maxwell3D::Regs::PrimitiveTopology topology, u32 vertex_first, u32 vertex_count, bool subsequent) {
+    if (subsequent && draw_state.draw_mode == DrawMode::InstanceArray &&
+        instance_topology == topology && draw_state.vertex_buffer.first == vertex_first &&
+        draw_state.vertex_buffer.count == vertex_count) {
+        ++draw_state.instance_count;
+        return;
+    }
+    u32 base_instance = 0;
+    if (subsequent) {
+        base_instance = draw_state.base_instance + draw_state.instance_count + 1;
+    }
+    DrawDeferred(maxwell3d);
+    instance_topology = topology;
     draw_state.topology = topology;
     draw_state.vertex_buffer.first = vertex_first;
     draw_state.vertex_buffer.count = vertex_count;
-    if (!subsequent) {
-        draw_state.instance_count = 1;
-        draw_state.drawn_instances = 0;
-    }
-    draw_state.base_instance = draw_state.instance_count - 1;
-    draw_state.draw_mode = DrawMode::Instance;
-    draw_state.instance_count++;
-    ProcessDraw(maxwell3d, false, 1);
+    draw_state.base_instance = base_instance;
+    draw_state.instance_count = 0;
+    draw_state.draw_mode = DrawMode::InstanceArray;
+    UpdateTopology(maxwell3d);
 }
 
 void Maxwell3D::DrawManager::DrawIndex(Maxwell3D& maxwell3d, Maxwell3D::Regs::PrimitiveTopology topology, u32 index_first, u32 index_count, u32 base_index, u32 base_instance, u32 num_instances) {
+    FlushInstanceArray(maxwell3d);
     draw_state.topology = topology;
     draw_state.index_buffer = maxwell3d.regs.index_buffer;
     draw_state.index_buffer.first = index_first;
@@ -173,11 +202,13 @@ void Maxwell3D::DrawManager::DrawIndex(Maxwell3D& maxwell3d, Maxwell3D::Regs::Pr
 }
 
 void Maxwell3D::DrawManager::DrawArrayIndirect(Maxwell3D& maxwell3d, Maxwell3D::Regs::PrimitiveTopology topology) {
+    FlushInstanceArray(maxwell3d);
     draw_state.topology = topology;
     ProcessDrawIndirect(maxwell3d);
 }
 
 void Maxwell3D::DrawManager::DrawIndexedIndirect(Maxwell3D& maxwell3d, Maxwell3D::Regs::PrimitiveTopology topology, u32 index_first, u32 index_count) {
+    FlushInstanceArray(maxwell3d);
     draw_state.topology = topology;
     draw_state.index_buffer = maxwell3d.regs.index_buffer;
     draw_state.index_buffer.first = index_first;
@@ -247,6 +278,9 @@ void Maxwell3D::DrawManager::DrawBegin(Maxwell3D& maxwell3d) {
 
 void Maxwell3D::DrawManager::DrawEnd(Maxwell3D& maxwell3d, u32 instance_count, bool force_draw) {
     switch (draw_state.draw_mode) {
+    case DrawMode::InstanceArray:
+        FlushInstanceArray(maxwell3d);
+        break;
     case DrawMode::Instance:
         if (!force_draw) {
             break;
@@ -313,27 +347,67 @@ void Maxwell3D::DrawManager::DrawTexture(Maxwell3D& maxwell3d) {
 }
 
 void Maxwell3D::DrawManager::UpdateTopology(Maxwell3D& maxwell3d) {
+    using Topology = Maxwell3D::Regs::PrimitiveTopology;
+    using Override = Maxwell3D::Regs::PrimitiveTopologyOverride;
     switch (maxwell3d.regs.primitive_topology_control) {
     case Maxwell3D::Regs::PrimitiveTopologyControl::UseInBeginMethods:
         break;
     case Maxwell3D::Regs::PrimitiveTopologyControl::UseSeparateState:
         switch (maxwell3d.regs.topology_override) {
-        case Maxwell3D::Regs::PrimitiveTopologyOverride::None:
+        case Override::None:
             break;
-        case Maxwell3D::Regs::PrimitiveTopologyOverride::Points:
-            draw_state.topology = Maxwell3D::Regs::PrimitiveTopology::Points;
+        case Override::Points:
+        case Override::LegacyPoints:
+            draw_state.topology = Topology::Points;
             break;
-        case Maxwell3D::Regs::PrimitiveTopologyOverride::Lines:
-            draw_state.topology = Maxwell3D::Regs::PrimitiveTopology::Lines;
+        case Override::Lines:
+        case Override::LegacyLines:
+        case Override::LegacyLinesImm:
+        case Override::LegacyIndexedLines:
+        case Override::LegacyIndexedLines2:
+            draw_state.topology = Topology::Lines;
             break;
-        case Maxwell3D::Regs::PrimitiveTopologyOverride::LineStrip:
-            draw_state.topology = Maxwell3D::Regs::PrimitiveTopology::LineStrip;
+        case Override::LineStrip:
+        case Override::LegacyLineStrip:
+        case Override::LegacyIndexedLineStrip:
+            draw_state.topology = Topology::LineStrip;
             break;
-        default:
-            draw_state.topology = Maxwell3D::Regs::PrimitiveTopology(maxwell3d.regs.topology_override);
+        case Override::Triangles:
+        case Override::LegacyTriangles:
+        case Override::LegacyIndexedTriangles:
+        case Override::LegacyIndexedTriangles2:
+            draw_state.topology = Topology::Triangles;
+            break;
+        case Override::TriangleStrip:
+        case Override::LegacyTriangleStrip:
+        case Override::LegacyIndexedTriangleStrip:
+            draw_state.topology = Topology::TriangleStrip;
+            break;
+        case Override::LegacyTriangleFan:
+        case Override::LegacyTriangleFanImm:
+        case Override::LegacyIndexedTriangleFan:
+            draw_state.topology = Topology::TriangleFan;
+            break;
+        case Override::LinesAdjacency:
+            draw_state.topology = Topology::LinesAdjacency;
+            break;
+        case Override::LineStripAdjacency:
+            draw_state.topology = Topology::LineStripAdjacency;
+            break;
+        case Override::TrianglesAdjacency:
+            draw_state.topology = Topology::TrianglesAdjacency;
+            break;
+        case Override::TriangleStripAdjacency:
+            draw_state.topology = Topology::TriangleStripAdjacency;
+            break;
+        case Override::Patches:
+            draw_state.topology = Topology::Patches;
             break;
         }
         break;
+    }
+    if (u32(draw_state.topology) > u32(Topology::Patches)) {
+        draw_state.topology = Topology::Triangles;
     }
 }
 
@@ -343,6 +417,45 @@ void Maxwell3D::DrawManager::ProcessDraw(Maxwell3D& maxwell3d, bool draw_indexed
     LOG_TRACE(HW_GPU, "called, topology={}, count={}", draw_state.topology, draw_indexed ? draw_state.index_buffer.count : draw_state.vertex_buffer.count);
     UpdateTopology(maxwell3d);
     if (maxwell3d.ShouldExecute()) {
+        auto& native = maxwell3d.GetNativeMacroEngine();
+        if (native.native_turing) {
+            const auto count = draw_indexed ? draw_state.index_buffer.count : draw_state.vertex_buffer.count;
+            if (!count || !instance_count) return;
+            if (native.native_execution_failed) return;
+            if (Settings::values.renderer_backend.GetValue() != Settings::RendererBackend::Vulkan) {
+                native.native_execution_failed = true;
+                LOG_ERROR(HW_GPU, "Native graphics shaders require the experimental Vulkan path");
+                return;
+            }
+            if (VideoCommon::NativeDrawDiagnosticsEnabled()) {
+                static thread_local std::set<std::array<GPUVAddr, Maxwell3D::Regs::MaxShaderProgram>> captured;
+                std::array<GPUVAddr, Maxwell3D::Regs::MaxShaderProgram> programs{};
+                for (size_t stage = 0; stage < programs.size(); ++stage) {
+                    if (!maxwell3d.regs.IsShaderConfigEnabled(stage)) continue;
+                    const auto& pipeline = maxwell3d.regs.pipelines[stage];
+                    programs[stage] = (GPUVAddr{pipeline.reserved[0] & 0xff} << 32) | pipeline.reserved[1];
+                }
+                if (captured.size() < 4096 && captured.insert(programs).second) {
+                    std::ofstream registers("native-graphics-registers.bin", std::ios::binary);
+                    registers.write(reinterpret_cast<const char*>(&maxwell3d.regs), sizeof(maxwell3d.regs));
+                    for (size_t stage = 0; stage < Maxwell3D::Regs::MaxShaderProgram; ++stage) {
+                        if (!maxwell3d.regs.IsShaderConfigEnabled(stage)) continue;
+                        const auto& pipeline = maxwell3d.regs.pipelines[stage];
+                        // C797 uses per-stage program addresses at 0x2014/0x2018,
+                        // unlike Maxwell's program-region plus 0x2004 offset.
+                        const GPUVAddr address = (GPUVAddr{pipeline.reserved[0] & 0xff} << 32) | pipeline.reserved[1];
+                        LOG_INFO(HW_GPU, "Native graphics shader stage={}, address={:#x}", stage, address);
+                        if (!maxwell3d.memory_manager.IsFullyMappedRange(address, 0x1000)) continue;
+                        std::array<u8, 0x1000> bytes{};
+                        maxwell3d.memory_manager.ReadBlockUnsafe(address, bytes.data(), bytes.size());
+                        std::ofstream shader("native-graphics-shader-" + std::to_string(stage) + ".bin", std::ios::binary);
+                        shader.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                    }
+                    LOG_DEBUG(HW_GPU, "Translating native graphics draw: indexed={}, vertices={}, instances={}",
+                              draw_indexed, count, instance_count);
+                }
+            }
+        }
         maxwell3d.rasterizer->Draw(draw_indexed, instance_count);
     } else {
         TraceSuppressedDraw(maxwell3d, false);
@@ -353,7 +466,14 @@ void Maxwell3D::DrawManager::ProcessDrawIndirect(Maxwell3D& maxwell3d) {
     draw_state.draw_element_count = 0;
     LOG_TRACE(HW_GPU, "called, topology={}, is_indexed={}, includes_count={}, buffer_size={}, max_draw_count={}", draw_state.topology, indirect_state.is_indexed, indirect_state.include_count, indirect_state.buffer_size, indirect_state.max_draw_counts);
     UpdateTopology(maxwell3d);
+    if (Settings::getDebugKnobAt(2) && ShouldDiscardCorruptedDraw(draw_state, &indirect_state, indirect_state.is_indexed, 1)) return;
     if (maxwell3d.ShouldExecute()) {
+        auto& native = maxwell3d.GetNativeMacroEngine();
+        if (native.native_turing) {
+            native.native_execution_failed = true;
+            LOG_ERROR(HW_GPU, "Native graphics shader translation required: indirect draw");
+            return;
+        }
         maxwell3d.rasterizer->DrawIndirect();
     } else {
         TraceSuppressedDraw(maxwell3d, true);

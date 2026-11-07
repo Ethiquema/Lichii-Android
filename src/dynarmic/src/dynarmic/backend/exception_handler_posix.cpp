@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -35,6 +36,8 @@
 #    include "dynarmic/backend/riscv64/code_block.h"
 #elif defined(ARCHITECTURE_loongarch64)
 #    include "dynarmic/backend/loongarch64/code_block.h"
+#elif defined(ARCHITECTURE_powerpc64)
+#    include "dynarmic/backend/ppc64/code_block.h"
 #else
 #    error "Invalid architecture"
 #endif
@@ -55,7 +58,7 @@ class SigHandler {
         });
     }
 
-    ::Common::unordered_map<u64, CodeBlockInfo> code_block_infos;
+    ankerl::unordered_dense::map<u64, CodeBlockInfo> code_block_infos;
     std::shared_mutex code_block_infos_mutex;
     struct sigaction old_sa_segv;
     struct sigaction old_sa_bus;
@@ -66,12 +69,16 @@ public:
         auto const stack_size = std::max<size_t>(SIGSTKSZ, 2 * 1024 * 1024);
         signal_stack_memory = std::make_unique<uint8_t[]>(stack_size);
 
+#ifdef __OPENORBIS__
+        fmt::print(stderr, "no fastmem on ps4\n");
+        supports_fast_mem = false;
+#else
         stack_t signal_stack{};
         signal_stack.ss_sp = signal_stack_memory.get();
         signal_stack.ss_size = stack_size;
         signal_stack.ss_flags = 0;
         if (sigaltstack(&signal_stack, nullptr) != 0) {
-            fmt::print(stderr, "dynarmic: POSIX SigHandler: init failure at sigaltstack\n");
+            fmt::print(stderr, "POSIX SigHandler: init failure at sigaltstack\n");
             supports_fast_mem = false;
             return;
         }
@@ -82,16 +89,17 @@ public:
         sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESTART;
         sigemptyset(&sa.sa_mask);
         if (sigaction(SIGSEGV, &sa, &old_sa_segv) != 0) {
-            fmt::print(stderr, "dynarmic: POSIX SigHandler: could not set SIGSEGV handler\n");
+            fmt::print(stderr, "POSIX SigHandler: could not set SIGSEGV handler\n");
             supports_fast_mem = false;
             return;
         }
 #if defined(__APPLE__)
         if (sigaction(SIGBUS, &sa, &old_sa_bus) != 0) {
-            fmt::print(stderr, "dynarmic: POSIX SigHandler: could not set SIGBUS handler\n");
+            fmt::print(stderr, "POSIX SigHandler: could not set SIGBUS handler\n");
             supports_fast_mem = false;
             return;
         }
+#   endif
 #endif
     }
 
@@ -138,13 +146,16 @@ void SigHandler::SigAction(int sig, siginfo_t* info, void* raw_context) {
 #elif defined(ARCHITECTURE_loongarch64)
             CTX_PC = fc.call_pc;
 #else
-            ASSERT(false);
+            DEBUG_ASSERT(false);
 #endif
             return;
         }
     }
     LOG_ERROR(Core, "Unhandled {} at {:#018x}\n", sig == SIGSEGV ? "SIGSEGV" : "SIGBUS", CTX_PC);
 
+#ifdef __OPENORBIS__
+    // No fastmem
+#else
     struct sigaction* retry_sa = sig == SIGSEGV ? &sig_handler->old_sa_segv : &sig_handler->old_sa_bus;
     if (retry_sa->sa_flags & SA_SIGINFO) {
         retry_sa->sa_sigaction(sig, info, raw_context);
@@ -158,6 +169,7 @@ void SigHandler::SigAction(int sig, siginfo_t* info, void* raw_context) {
         return;
     }
     retry_sa->sa_handler(sig);
+#endif
 }
 
 }  // anonymous namespace
@@ -203,6 +215,10 @@ void ExceptionHandler::Register(RV64::CodeBlock& mem, std::size_t size) {
 }
 #elif defined(ARCHITECTURE_loongarch64)
 void ExceptionHandler::Register(LoongArch64::CodeBlock& mem, std::size_t size) {
+    impl = std::make_unique<Impl>(std::bit_cast<u64>(mem.ptr<u64>()), size);
+}
+#elif defined(ARCHITECTURE_powerpc64)
+void ExceptionHandler::Register(PPC64::CodeBlock& mem, std::size_t size) {
     impl = std::make_unique<Impl>(std::bit_cast<u64>(mem.ptr<u64>()), size);
 }
 #else

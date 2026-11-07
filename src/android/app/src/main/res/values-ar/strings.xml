@@ -340,18 +340,22 @@
     <string name="frame_gen_flow_scale_auto_description">قم بتقدير الحركة بناءً على الدقة التي تعرضها اللعبة فعليًّا، بدلاً من الإخراج الذي تم رفع دقته. ولا يؤثر ذلك على الدقة بأي شكل، لأن رفع الدقة لا يضيف أي تفاصيل تتعلق بالحركة.</string>
     <string name="frame_gen_flow_scale">دقة تقدير الحركة</string>
     <string name="frame_gen_flow_scale_description">دقة مسار التدفق البصري، كجزء من الناتج. ويُعد خفض هذه القيمة أرخص طريقة لاستعادة الأداء.</string>
+    <string name="frame_gen_fp16">مُظلِّلات نصف الدقة</string>
+    <string name="frame_gen_fp16_description">استخدم نسخة التظليل 16 بت. يتم التراجع تلقائيًا إلى الخيار البديل في حالة عدم توفرها في برنامج التشغيل أو الملف.</string>
+    <string name="frame_gen_dump_flow">إفراغ الإطار الذي تم إنشاؤه</string>
+    <string name="frame_gen_dump_flow_description">قم بكتابة مستويات MIP للتدفق البصري والإطار المُستكمل إلى مجلد lossless/debug مرة واحدة، لغرض استكشاف الأخطاء وإصلاحها</string>
     <string name="frame_gen_unsupported">توليد الإطار غير متاح</string>
-    <string name="frame_gen_unsupported_description">يفتقر برنامج تشغيل وحدة معالجة الرسومات هذا إلى نموذج ذاكرة Vulkan أو دعم الدقة النصفية (float16) التي تتطلبها برامج التظليل الخاصة بـ «Lossless Scaling».</string>
-    <string name="lossless_scaling_setup_description">اختياري. قم بتوفير ملف Lossless.dll الخاص بك لتفعيل إنشاء الإطارات لاحقًا</string>
+    <string name="frame_gen_unsupported_description">لا يدعم برنامج تشغيل وحدة معالجة الرسومات هذا نموذج ذاكرة Vulkan، الذي تتطلبه برامج التظليل الخاصة بـ«Lossless Scaling».</string>
+    <string name="lossless_scaling_setup_description">اختياري. قم بتوفير ملف Lossless.dll الخاص بك لتمكين إنشاء الإطارات لاحقًا</string>
     <string name="lossless_scaling_install">تثبيت ملف Lossless.dll</string>
     <string name="lossless_scaling_install_description">يتطلب إنشاء الإطارات أن تكون لديك نسخة قانونية خاصة بك من ملف Lossless.dll المأخوذ من برنامج Lossless Scaling</string>
     <string name="lossless_scaling_replace_description">اختر نسخة أخرى من ملف Lossless.dll</string>
     <string name="frame_generation_support">توليد الإطارات</string>
     <string name="frame_generation_supported">مدعوم</string>
-    <string name="frame_generation_unsupported">غير مدعوم (لا يتوفر نموذج ذاكرة Vulkan أو float16)</string>
+    <string name="frame_generation_unsupported">غير مدعوم (لا يتوفر نموذج ذاكرة Vulkan)</string>
     <string name="lossless_scaling">Lossless Scaling</string>
     <string name="lossless_scaling_description">قم بتوفير نسختك الخاصة من ملف Lossless.dll لتفعيل توليد الإطارات</string>
-    <string name="lossless_scaling_installed">مثبت</string>
+    <string name="lossless_scaling_installed">تم التثبيت</string>
     <string name="lossless_scaling_not_installed">غير مثبت</string>
     <string name="lossless_scaling_replace">استبدل</string>
     <string name="lossless_scaling_remove">إزالة</string>
@@ -501,9 +505,9 @@
     <string name="frame_limit_enable_description">يحدد سرعة المحاكاة بنسبة مئوية محددة من السرعة العادية.</string>
     <string name="frame_limit_slider">نسبة الحد الأقصى للسرعة</string>
     <string name="frame_limit_slider_description">يحدد النسبة المئوية للحد من سرعة المحاكاة. %100 هي السرعة الطبيعية. القيم الأعلى أو الأقل ستزيد أو تقلل من الحد الأقصى للسرعة.</string>
-    <string name="turbo_speed_limit">سرعة تيربو</string>
+    <string name="turbo_speed_limit">السرعة الفائقة</string>
     <string name="turbo_speed_limit_description">عند تفعيل وضع التيربو، سيتم تشغيل المحاكاة بهذه السرعة.</string>
-    <string name="slow_speed_limit">سرعة بطيئة</string>
+    <string name="slow_speed_limit">السرعة البطيئة</string>
     <string name="slow_speed_limit_description">عند تفعيل الوضع البطيء، سيتم تشغيل المحاكاة بهذه السرعة.</string>
     <string name="cpu_backend">خلفية وحدة المعالجة المركزية</string>
     <string name="cpu_accuracy">دقة وحدة المعالجة المركزية</string>
@@ -514,7 +518,7 @@
 
     <!-- System settings strings -->
     <string name="device_name">اسم الجهاز</string>
-    <string name="use_docked_mode">وضع الإرساء</string>
+    <string name="use_docked_mode">وضع المنصة</string>
     <string name="use_docked_mode_description">يزيد الدقة ويقلل الأداء. يتم استخدام الوضع المحمول عند تعطيله، مما يقلل الدقة ويزيد الأداء.</string>
     <string name="emulated_region">المنطقة التي تمت محاكاتها</string>
     <string name="emulated_language">لغة المحاكاة</string>
@@ -524,17 +528,6 @@
     <string name="use_custom_rtc_description">يسمح لك بتعيين ساعة مخصصة في الوقت الفعلي منفصلة عن وقت النظام الحالي لديك</string>
     <string name="set_custom_rtc">تعيين ساعة مخصصة في الوقت الحقيقي</string>
 
-    <!-- CPU -->
-    <string name="fast_cpu_time">ترددات وحدة المعالجة المركزية</string>
-    <string name="fast_cpu_time_description">يرفع هذا الإعداد تردد المعالج المُحاكى، مما يُزيل بعض مُحددات معدل الإطارات. قد تُلاحظ المعالجات الأضعف انخفاضًا في الأداء، وقد تعمل بعض الألعاب بشكل غير صحيح.</string>
-    <string name="custom_cpu_ticks">تخصيص دورات المعالج</string>
-    <string name="custom_cpu_ticks_description">قم بتعيين قيمة مخصصة لدورات المعالج. القيم الأعلى يمكن أن تزيد من الأداء، ولكنها قد تتسبب أيضًا في تجميد اللعبة. يوصى باستخدام نطاق 77-21000.</string>
-    <string name="cpu_ticks">دورات</string>
-    <string name="memory_layout">تخطيط الذاكرة</string>
-    <string name="memory_layout_description">(تجريبي) تغيير تخطيط الذاكرة المحاكي. هذا الإعداد لن يزيد من الأداء، ولكن قد يساعد في الألعاب باستخدام قرارات عالية عبر التعديلات. لا تستخدم على الهواتف التي تحتوي على 8GB من ذاكرة الوصول العشوائي أو أقل. يعمل فقط على الواجهة الخلفية الديناميكية (JIT).</string>
-
-    <string name="generate">إنشاء</string>
-
     <!-- Network settings strings -->
     <string name="web_token">رمز الويب</string>
     <string name="web_token_description">رمز الويب المستخدم لإنشاء غرف عامة. وهو سلسلة من 48 حرفًا تحتوي فقط على أحرف صغيرة من a-z.</string>
@@ -543,7 +536,7 @@
     <string name="network">الشبكة</string>
 
     <!-- Graphics settings strings -->
-    <string name="renderer_resolution">الدقة (الإرساء/محمول)</string>
+    <string name="renderer_resolution">الدقة (المنصة/محمول)</string>
     <string name="renderer_vsync">VSync وضع</string>
     <string name="renderer_scaling_filter">مرشح ملائم للنافذة</string>
     <string name="fsr_sharpness">حدة FSR/SGSR</string>
@@ -591,21 +584,8 @@
     <string name="fix_bloom_effects_description">يقلل من ضبابية التوهج في LA/EOW  (Adreno A6XX - A7XX/ Turnip)، ويزيل التوهج في Burnout. تحذير: قد يسبب تشوهات رسومية في ألعاب أخرى.</string>
     <string name="emulate_bgr565">محاكاة BGR565</string>
     <string name="emulate_bgr565_description">يُصلح مشاكل انعكاس الألوان في الألعاب أو ظهور تشوهات غريبة أو ظلال غريبة.</string>
-    <string name="rescale_hack">تفعيل ميزة إعادة التحجيم القديمة</string>
-    <string name="rescale_hack_description">يُمكّن هذا الخيار من التعامل مع عملية إعادة تحجيم الألعاب بطريقة تقليدية باستخدام مسار إعادة التحجيم السريع</string>
     <string name="renderer_asynchronous_shaders">استخدم تظليل غير متزامن</string>
     <string name="renderer_asynchronous_shaders_description">يقوم بتجميع التظليل بشكل غير متزامن. قد يقلل ذلك من التقطعات ولكنه قد يؤدي أيضًا إلى حدوث أخطاء.</string>
-    <string name="gpu_unswizzle_settings">إعدادات إلغاء ترتيب بيانات وحدة معالجة الرسومات</string>
-    <string name="gpu_unswizzle_settings_description">قم بضبط معلمات فكّ تشابك النسيج المستندة إلى وحدة معالجة الرسومات أو تعطيلها تمامًا. اضبط هذه الإعدادات لتحقيق التوازن بين الأداء وجودة تحميل النسيج.</string>
-    <string name="gpu_unswizzle_enable">تفعيل إلغاء ترتيب بيانات وحدة معالجة الرسومات</string>
-    <string name="gpu_unswizzle_disabled">تعطيل</string>
-    <string name="gpu_unswizzle_texture_size">الحد الأقصى لحجم النسيج في وحدة معالجة الرسومات بعد إعادة ترتيب البيانات</string>
-    <string name="gpu_unswizzle_texture_size_description">يُحدد هذا الخيار الحد الأقصى لحجم (ميغابايت) معالجة الصور باستخدام وحدة معالجة الرسومات. مع أن وحدة معالجة الرسومات أسرع في معالجة الصور المتوسطة والكبيرة، إلا أن وحدة المعالجة المركزية قد تكون أكثر كفاءة في معالجة الصور الصغيرة جدًا. اضبط هذا الخيار لتحقيق التوازن الأمثل بين سرعة معالجة الرسومات واستهلاك وحدة المعالجة المركزية.</string>
-    <string name="gpu_unswizzle_stream_size">حجم تدفق إلغاء ترتيب بيانات وحدة معالجة الرسومات</string>
-    <string name="gpu_unswizzle_stream_size_description">يحدد هذا الخيار حد البيانات لكل إطار لمعالجة الصور الكبيرة. القيم الأعلى تُسرّع تحميل الصور على حساب زيادة زمن استجابة الإطارات؛ أما القيم الأقل فتُقلل من الحمل الزائد على وحدة معالجة الرسومات، ولكنها قد تتسبب في ظهور الصور بشكل مفاجئ.</string>
-    <string name="gpu_unswizzle_chunk_size">حجم كتلة إلغاء ترتيب بيانات وحدة معالجة الرسومات</string>
-    <string name="gpu_unswizzle_chunk_size_description">يُحدد هذا الخيار عدد شرائح العمق التي تتم معالجتها لكل دفعة من الصور ثلاثية الأبعاد (3D). زيادة هذا العدد تُحسّن كفاءة الإنتاجية على وحدات معالجة الرسومات القوية، ولكنها قد تُسبب تقطعًا أو انقطاعًا في عمل برنامج التشغيل على الأجهزة ذات المواصفات الأقل قوة.</string>
-    <string name="gpu_unswizzle_default_button">افتراضي</string>
 
 
     <string name="extensions">إضافات</string>
@@ -646,11 +626,6 @@
     <string name="log">السجلات</string>
     <string name="flush_by_line">تفريغ سجلات التصحيح حسب السطر</string>
     <string name="flush_by_line_description">يفرغ سجلات التصحيح عند كتابة كل سطر، مما يجعل التصحيح أسهل في حالات التوقف أو التجميد.</string>
-    <string name="extended_logging">تفعيل التسجيل الموسع</string>
-    <string name="extended_logging_description">يزيد الحد الأقصى لحجم ملف السجل من 100 ميجابايت إلى 1 جيجابايت.</string>
-    <string name="log_filter">مرشح السجلات</string>
-    <string name="log_filter_description">يتحكم في فئات سجلات Eden. مثال: *:Info Service.LM:Debug</string>
-
     <!-- GPU Logging strings -->
     <string name="gpu_logging_header">تسجيل وحدة معالجة الرسومات</string>
     <string name="gpu_log_level">مستوى السجل</string>
@@ -694,7 +669,7 @@
     <string name="control_stick">عصا التحكم</string>
     <string name="right_stick">العصا اليمنى</string>
     <string name="c_stick">عصا-C</string>
-    <string name="pressed">مضغوط</string>
+    <string name="pressed">ضغط العصا</string>
     <string name="range">النطاق</string>
     <string name="deadzone">المنطقة الميتة</string>
     <string name="modifier">معدل</string>
@@ -821,7 +796,7 @@
     <!-- Preferences Screen -->
     <string name="preferences_settings">الإعدادات</string>
     <string name="preferences_system">النظام</string>
-    <string name="preferences_system_description">وضع الإرساء، المنطقة، اللغة</string>
+    <string name="preferences_system_description">وضع المنصة، المنطقة، اللغة</string>
     <string name="preferences_graphics">الرسومات</string>
     <string name="preferences_graphics_description">مستوى دقة المحاكاة، الدقة، ذاكرة التخزين المؤقتة للتظليل</string>
     <string name="quick_settings">الإعدادات السريعة</string>
@@ -869,12 +844,12 @@
     <string name="copy_details">نسخ التفاصيل</string>
     <string name="add_ons">الإضافات</string>
     <string name="add_ons_description">تفعيل/تعطيل التعديلات، التحديثات، المحتوى القابل للتنزيل</string>
-    <string name="playtime">زمن اللعب:</string>
-    <string name="reset_playtime">مسح زمن اللعب</string>
-    <string name="reset_playtime_description">إعادة تعيين زمن اللعب للعبة الحالية إلى 0 ثانية</string>
-    <string name="reset_playtime_warning_description">سيؤدي هذا إلى مسح بيانات زمن اللعب الحالية للعبة. هل أنت متأكد؟</string>
-    <string name="playtime_reset_successfully">تمت إعادة تعيين زمن اللعب</string>
-    <string name="edit_playtime">تعديل زمن اللعب</string>
+    <string name="playtime">وقت اللعب:</string>
+    <string name="reset_playtime">مسح وقت اللعب</string>
+    <string name="reset_playtime_description">إعادة تعيين وقت لعب اللعبة الحالية إلى 0 ثانية</string>
+    <string name="reset_playtime_warning_description">سيؤدي هذا إلى مسح بيانات وقت اللعب للعبة الحالية. هل أنت متأكد؟</string>
+    <string name="playtime_reset_successfully">تمت إعادة تعيين وقت اللعب</string>
+    <string name="edit_playtime">تعديل وقت اللعب</string>
     <string name="hours">ساعات</string>
     <string name="minutes">دقائق</string>
     <string name="hours_abbr">س</string>
@@ -883,7 +858,7 @@
     <string name="hours_must_be_between_0_and_9999">يجب أن تكون الساعات بين 0 و 9999</string>
     <string name="minutes_must_be_between_0_and_59">يجب أن تكون الدقائق بين 0 و 59</string>
     <string name="seconds_must_be_between_0_and_59">يجب أن تكون الثواني بين 0 و 59</string>
-    <string name="playtime_updated_successfully">تم تحديث زمن اللعب بنجاح</string>
+    <string name="playtime_updated_successfully">تم تحديث وقت اللعب بنجاح</string>
     <string name="clear_shader_cache">مسح ذاكرة التخزين المؤقتة للتظليل</string>
     <string name="clear_shader_cache_description">يزيل جميع التظليلات التي تم إنشاؤها أثناء لعب هذه اللعبة</string>
     <string name="clear_shader_cache_warning_description">ستواجه المزيد من التقطع مع إعادة إنشاء ذاكرة التخزين المؤقتة للتظلل</string>
@@ -1046,25 +1021,10 @@
     <string name="fast_gpu_high">كسر السرعة</string>
 
     <!-- GPU swizzle texture size -->
-    <string name="gpu_texturesizeswizzle_verysmall">صغير جدًا (16 ميغابايت)</string>
-    <string name="gpu_texturesizeswizzle_small">صغير (32 ميغابايت)</string>
-    <string name="gpu_texturesizeswizzle_normal">قياسي (128 ميغابايت)</string>
-    <string name="gpu_texturesizeswizzle_large">كبير (256 ميغابايت)</string>
-    <string name="gpu_texturesizeswizzle_verylarge">كبير جدًا (512 ميغابايت)</string>
 
     <!-- GPU swizzle streams -->
-    <string name="gpu_swizzle_verylow">منخفض جدًا (4 ميغابايت)</string>
-    <string name="gpu_swizzle_low">منخفض (8 ميغابايت)</string>
-    <string name="gpu_swizzle_normal">قياسي (16 ميغابايت)</string>
-    <string name="gpu_swizzle_medium">متوسط (32 ميغابايت)</string>
-    <string name="gpu_swizzle_high">عالي (64 ميغابايت)</string>
 
     <!-- GPU swizzle chunks -->
-    <string name="gpu_swizzlechunk_verylow">منخفض جدًا (32)</string>
-    <string name="gpu_swizzlechunk_low">منخفض (64)</string>
-    <string name="gpu_swizzlechunk_normal">قياسي (128)</string>
-    <string name="gpu_swizzlechunk_medium">متوسط (256)</string>
-    <string name="gpu_swizzlechunk_high">عالي (512)</string>
 
     <!-- Temperature Units -->
     <string name="temperature_celsius">مئوية</string>

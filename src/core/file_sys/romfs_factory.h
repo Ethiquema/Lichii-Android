@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <mutex>
 #include <memory>
+#include <vector>
 
 #include "common/common_types.h"
 #include "core/file_sys/vfs/vfs_types.h"
@@ -33,6 +35,12 @@ enum class StorageId : u8 {
     SdCard = 5,
 };
 
+// Add-on content RomFS found next to a loose ExeFS (dlc/<title id>/<version>/romfs). Loose dumps
+// have no AOC NCAs, so these stand in for installed ones in aoc:u and OpenDataStorageByDataId.
+void SetLooseAddOnContent(std::map<u64, VirtualFile> entries);
+VirtualFile GetLooseAddOnContent(u64 title_id);
+std::vector<u64> ListLooseAddOnContent();
+
 /// File system interface to the RomFS archive
 class RomFSFactory {
 public:
@@ -56,6 +64,9 @@ private:
     VirtualFile base;
 
     bool updatable;
+    /// The merged RomFS with LayeredFS mods applied (not updatable: NUP containers).
+    mutable VirtualFile layered_file;
+    mutable std::mutex layered_mutex;
 
     ContentProvider& content_provider;
     Service::FileSystem::FileSystemController& filesystem_controller;

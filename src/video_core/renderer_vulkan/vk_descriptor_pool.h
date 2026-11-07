@@ -9,7 +9,7 @@
 #include <shared_mutex>
 #include <span>
 #include <vector>
-
+#include "common/common_types.h"
 #include "shader_recompiler/shader_info.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -49,7 +49,15 @@ public:
     DescriptorAllocator(const DescriptorAllocator&) = delete;
 
     VkDescriptorSet Commit();
+    // commit + remember when/with what we last updated this set
+    struct DescriptorSetState {
+           VkDescriptorSet set = VK_NULL_HANDLE;
+           u64 last_update_frame = 0;
+           const void* last_data_ptr = nullptr; // fast pointer compare
+    };
 
+    VkDescriptorSet CommitWithTracking(u64 current_frame, const void* descriptor_data);
+    bool NeedsUpdate(VkDescriptorSet set, u64 current_frame, const void* descriptor_data) const;
 private:
     explicit DescriptorAllocator(const Device& device_, MasterSemaphore& master_semaphore_,
                                  DescriptorBank& bank_, VkDescriptorSetLayout layout_);
@@ -63,11 +71,13 @@ private:
     VkDescriptorSetLayout layout{};
 
     std::vector<vk::DescriptorSets> sets;
+    std::vector<std::vector<DescriptorSetState>> set_states;
 };
 
 class DescriptorPool {
 public:
-    explicit DescriptorPool(const Device& device, Scheduler& scheduler);
+
+DescriptorPool();
     ~DescriptorPool();
 
     DescriptorPool& operator=(const DescriptorPool&) = delete;

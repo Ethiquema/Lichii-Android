@@ -4,7 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <atomic>
 #include <cstddef>
+#include <cstdlib>
 #include <limits>
 #include <map>
 #include <memory>
@@ -19,7 +21,6 @@
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/nx2.h"
-#include "video_core/query_cache/frame_trace.h"
 #include "video_core/query_cache/query_cache.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
@@ -39,6 +40,12 @@ using Tegra::Engines::Maxwell3D;
 using VideoCommon::QueryType;
 
 namespace {
+bool LacksQueryWriteBack(const Device& device) {
+    const VkDriverId driver_id = device.GetDriverID();
+    return driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY ||
+           driver_id == VK_DRIVER_ID_ARM_PROPRIETARY || driver_id == VK_DRIVER_ID_MESA_TURNIP;
+}
+
 class SamplesQueryBank : public VideoCommon::BankBase {
 public:
     static constexpr size_t BANK_SIZE = 256;
@@ -92,10 +99,20 @@ public:
         switch (query_result) {
         case VK_SUCCESS:
             return;
+        case VK_TIMEOUT: {
+            LOG_WARNING(Render_Vulkan,
+                        "VK_TIMEOUT pool={} start={} size={}. Attempting to get over...",
+                        index, start, size);
+            std::fill_n(&host_results[start], size, 0ULL);
+            return;
+        }
         case VK_ERROR_DEVICE_LOST:
             device.ReportLoss();
             [[fallthrough]];
         default:
+            LOG_CRITICAL(Render_Vulkan,
+                         "GetQueryResults failed: result={} pool={} start={} size={}",
+                         static_cast<int>(query_result), index, start, size);
             throw vk::Exception(query_result);
         }
     }
@@ -172,7 +189,7 @@ public:
             return;
         }
         // EDEN_NX2_NO_OCCLUSION (on by default for Switch 2 programs, =0 off): record no host
-        // occlusion queries (a game crashed in vkCmdBeginQuery on Adreno). Sample counts then
+        // occlusion queries (DK Bananza crashed in vkCmdBeginQuery on Adreno). Sample counts then
         // read as 0.
         static const bool no_occlusion = Tegra::Nx2EnvDefaultOn("EDEN_NX2_NO_OCCLUSION");
         if (no_occlusion && Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
@@ -182,8 +199,9 @@ public:
         ReserveHostQuery();
 
         scheduler.Record([query_pool = current_query_pool,
-                                 query_index = current_bank_slot](vk::CommandBuffer cmdbuf) {
+                          query_index = current_bank_slot](vk::CommandBuffer cmdbuf) {
             const bool use_precise = Settings::IsGPULevelHigh();
+            cmdbuf.ResetQueryPool(query_pool, static_cast<u32>(query_index), 1);
             cmdbuf.BeginQuery(query_pool, static_cast<u32>(query_index),
                               use_precise ? VK_QUERY_CONTROL_PRECISE_BIT : 0);
         });
@@ -253,11 +271,24 @@ public:
             return;
         }
         PauseCounter();
-        const auto driver_id = device.GetDriverID();
-        if (driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY ||
-            driver_id == VK_DRIVER_ID_ARM_PROPRIETARY || driver_id == VK_DRIVER_ID_MESA_TURNIP) {
+        if (LacksQueryWriteBack(device)) {
             pending_sync.clear();
             sync_values_stash.clear();
+            scheduler.RequestOutsideRenderPassOperationContext();
+            scheduler.Record([buffer = *accumulation_buffer](vk::CommandBuffer cmdbuf) {
+                cmdbuf.FillBuffer(buffer, 0, 8, 0);
+            });
+            std::function<void()> func([this] {
+                amend_value = 0;
+                accumulation_value = 0;
+            });
+            rasterizer->SyncOperation(std::move(func));
+            AbandonCurrentQuery();
+            num_slots_used = 0;
+            first_accumulation_checkpoint = (std::numeric_limits<size_t>::max)();
+            last_accumulation_checkpoint = 0;
+            accumulation_since_last_sync = false;
+            pending_sync.clear();
             return;
         }
         sync_values_stash.clear();
@@ -278,11 +309,13 @@ public:
             scheduler.RequestOutsideRenderPassOperationContext();
             scheduler.Record([start, amount, base_offset, query_pool,
                               buffer = *resolve_buffer](vk::CommandBuffer cmdbuf) {
-                const VkBufferMemoryBarrier copy_query_pool_barrier{
-                    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                const VkBufferMemoryBarrier2 copy_query_pool_barrier{
+                    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
                     .pNext = nullptr,
-                    .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                    .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    .dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT,
                     .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                     .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                     .buffer = buffer,
@@ -294,8 +327,7 @@ public:
                     query_pool, static_cast<u32>(start), static_cast<u32>(amount), buffer,
                     static_cast<u32>(base_offset), SamplesQueryBank::QUERY_SIZE,
                     VK_QUERY_RESULT_WAIT_BIT | VK_QUERY_RESULT_64_BIT);
-                cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, copy_query_pool_barrier);
+                cmdbuf.PipelineBarrier(copy_query_pool_barrier);
             });
             offsets[bank_id] = {start, base_offset};
             base_offset += amount * SamplesQueryBank::QUERY_SIZE;
@@ -432,6 +464,13 @@ public:
     }
 
 private:
+    bool CanResolveHostQueries() const {
+        const auto driver_id = device.GetDriverID();
+        return driver_id != VK_DRIVER_ID_QUALCOMM_PROPRIETARY &&
+               driver_id != VK_DRIVER_ID_ARM_PROPRIETARY &&
+               driver_id != VK_DRIVER_ID_MESA_TURNIP;
+    }
+
     template <typename Func>
     void ApplyBankOp(VideoCommon::HostQueryBase* query, Func&& func) {
         size_t size_slots = query->size_slots;
@@ -678,11 +717,13 @@ public:
         scheduler.RequestOutsideRenderPassOperationContext();
         scheduler.Record([this, dst_buffer = stagging_buffer.buffer, extra_offset, start,
                           size](vk::CommandBuffer cmdbuf) {
-            std::array<VkBufferCopy, 1> copy{VkBufferCopy{
+            const VkBufferCopy2 copy{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2,
+                .pNext = nullptr,
                 .srcOffset = start * QUERY_SIZE,
                 .dstOffset = extra_offset,
                 .size = size * QUERY_SIZE,
-            }};
+            };
             cmdbuf.CopyBuffer(*buffer, dst_buffer, copy);
         });
     }
@@ -751,6 +792,9 @@ public:
         if (!device.IsExtTransformFeedbackSupported()) {
             return;
         }
+        if (!scheduler.IsRenderPassActive()) {
+            return;
+        }
         FlushBeginTFB();
         has_started = true;
     }
@@ -767,6 +811,9 @@ public:
         if (has_flushed_end_pending) {
             if (scheduler.IsRenderPassActive()) {
                 FlushEndTFB();
+            } else {
+                has_flushed_end_pending = false;
+                has_started = false;
             }
         }
         runtime.View3DRegs([this](Maxwell3D& maxwell3d) {
@@ -840,7 +887,7 @@ public:
             new_query->flags |= VideoCommon::QueryFlagBits::IsFinalValueSynced;
             return index;
         }
-
+        
         scheduler.RequestOutsideRenderPassOperationContext();
         CloseCounter();
         auto [bank_slot, data_slot] = ProduceCounterBuffer(slot);
@@ -878,7 +925,7 @@ public:
 
     void PushUnsyncedQueries() override {
         CloseCounter();
-        auto staging_ref = staging_pool.Request(
+        auto staging_ref = staging_pool.Request(device,
             pending_flush_queries.size() * TFBQueryBank::QUERY_SIZE, MemoryUsage::Download, true);
         size_t offset_base = staging_ref.offset;
         for (auto q : pending_flush_queries) {
@@ -888,16 +935,17 @@ public:
             offset_base += TFBQueryBank::QUERY_SIZE;
             bank.CloseReference();
         }
-        static constexpr VkMemoryBarrier WRITE_BARRIER{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+        static constexpr VkMemoryBarrier2 WRITE_BARRIER{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
             .pNext = nullptr,
-            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+            .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            .dstStageMask = vk::PIPELINE_STAGE_HOST,
+            .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
         };
         scheduler.RequestOutsideRenderPassOperationContext();
         scheduler.Record([](vk::CommandBuffer cmdbuf) {
-            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                   vk::PIPELINE_STAGE_HOST, 0, WRITE_BARRIER);
+            cmdbuf.PipelineBarrier(WRITE_BARRIER);
         });
 
         std::scoped_lock lk(flush_guard);
@@ -953,7 +1001,7 @@ private:
             return;
         }
         has_flushed_end_pending = true;
-        // Refresh buffers state before beginning transform feedback so counters are up-to-date
+        scheduler.MarkTransformFeedbackUsed();
         UpdateBuffers();
         if (!has_started || buffers_count == 0) {
             // No counter buffers available: begin without counters
@@ -962,16 +1010,7 @@ private:
             });
             return;
         }
-        static constexpr VkMemoryBarrier COUNTER_RESUME_BARRIER{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-            .pNext = nullptr,
-            .srcAccessMask = VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT,
-            .dstAccessMask = VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT,
-        };
         scheduler.Record([this, total = static_cast<u32>(buffers_count)](vk::CommandBuffer cmdbuf) {
-            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT,
-                                   VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT, 0,
-                                   COUNTER_RESUME_BARRIER);
             cmdbuf.BeginTransformFeedbackEXT(0, total, counter_buffers.data(), offsets.data());
         });
     }
@@ -986,6 +1025,8 @@ private:
         }
         has_flushed_end_pending = false;
 
+        // Refresh buffer state before ending transform feedback to ensure counters_count is up-to-date.
+        UpdateBuffers();
         if (buffers_count == 0) {
             LOG_DEBUG(Render_Vulkan, "EndTransformFeedbackEXT called with no counters (buffers_count=0)");
             scheduler.Record([](vk::CommandBuffer cmdbuf) {
@@ -993,6 +1034,7 @@ private:
             });
         } else {
             LOG_DEBUG(Render_Vulkan, "EndTransformFeedbackEXT called with counters (buffers_count={})", buffers_count);
+            scheduler.MarkRenderPassWrites();
             scheduler.Record([this,
                               total = static_cast<u32>(buffers_count)](vk::CommandBuffer cmdbuf) {
                 cmdbuf.EndTransformFeedbackEXT(0, total, counter_buffers.data(), offsets.data());
@@ -1007,8 +1049,8 @@ private:
         streams_mask = 0; // reset previously recorded streams
         runtime.View3DRegs([this](Maxwell3D& maxwell3d) {
             buffers_count = 0;
-            out_topology = maxwell3d.draw_manager.draw_state.topology;
-            patch_vertices = (std::max)(maxwell3d.regs.patch_vertices, 1U);
+            out_topology = maxwell3d.draw_manager->GetDrawState().topology;
+            patch_vertices = std::max(maxwell3d.regs.patch_vertices, 1U);
             if (out_topology == Maxwell3D::Regs::PrimitiveTopology::Patches) {
                 switch (maxwell3d.regs.tessellation.params.output_primitives.Value()) {
                 case Maxwell3D::Regs::Tessellation::OutputPrimitives::Points:
@@ -1056,33 +1098,37 @@ private:
         const size_t slot = other; // workaround to compile bug.
         current_bank->AddReference();
 
-        static constexpr VkMemoryBarrier READ_BARRIER{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+        static constexpr VkMemoryBarrier2 READ_BARRIER{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
             .pNext = nullptr,
-            .srcAccessMask = VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT,
-            .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+            .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFORM_FEEDBACK_BIT_EXT,
+            .srcAccessMask = VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            .dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT,
         };
-        static constexpr VkMemoryBarrier WRITE_BARRIER{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+        static constexpr VkMemoryBarrier2 WRITE_BARRIER{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
             .pNext = nullptr,
-            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT,
+            .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            .dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT,
         };
         scheduler.RequestOutsideRenderPassOperationContext();
         scheduler.Record([dst_buffer = current_bank->GetBuffer(),
                           src_buffer = counter_buffers[slot_index],
                           src_offset = offsets[slot_index],
                           slot](vk::CommandBuffer cmdbuf) {
-            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT,
-                                   VK_PIPELINE_STAGE_TRANSFER_BIT, 0, READ_BARRIER);
-            std::array<VkBufferCopy, 1> copy{VkBufferCopy{
+            cmdbuf.PipelineBarrier(READ_BARRIER);
+            const VkBufferCopy2 copy{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2,
+                .pNext = nullptr,
                 .srcOffset = src_offset,
                 .dstOffset = slot * TFBQueryBank::QUERY_SIZE,
                 .size = TFBQueryBank::QUERY_SIZE,
-            }};
+            };
             cmdbuf.CopyBuffer(src_buffer, dst_buffer, copy);
-            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                   0, WRITE_BARRIER);
+            cmdbuf.PipelineBarrier(WRITE_BARRIER);
         });
         return {current_bank_id, slot};
     }
@@ -1202,7 +1248,7 @@ public:
             }
             new_query->stride = 1;
             runtime.View3DRegs([new_query, subreport](Maxwell3D& maxwell3d) {
-                new_query->patch_vertices = (std::max)(maxwell3d.regs.patch_vertices, 1U);
+                new_query->patch_vertices = std::max(maxwell3d.regs.patch_vertices, 1U);
                 for (size_t i = 0; i < Maxwell3D::Regs::NumTransformFeedbackBuffers; i++) {
                     const auto& tf = maxwell3d.regs.transform_feedback;
                     if (tf.buffers[i].enable == 0) {
@@ -1337,9 +1383,15 @@ struct QueryCacheRuntimeImpl {
         hcr_setup.pNext = nullptr;
         hcr_setup.flags = 0;
 
-        VkBufferUsageFlags hcr_buffer_usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        if (device.IsExtConditionalRendering()) {
-            conditional_resolve_pass.emplace(device, scheduler, descriptor_pool, compute_pass_descriptor_queue);
+        const bool has_conditional_rendering = device.IsExtConditionalRendering();
+        if (has_conditional_rendering) {
+            conditional_resolve_pass = std::make_unique<ConditionalRenderingResolvePass>(
+                device, scheduler, descriptor_pool, compute_pass_descriptor_queue);
+        }
+
+        VkBufferUsageFlags hcr_buffer_usage =
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        if (has_conditional_rendering) {
             hcr_buffer_usage |= VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT;
         }
 
@@ -1375,7 +1427,7 @@ struct QueryCacheRuntimeImpl {
     std::vector<std::pair<DAddr, DAddr>> little_cache;
     std::vector<std::pair<VkBuffer, VkDeviceSize>> buffers_to_upload_to;
     std::vector<size_t> redirect_cache;
-    std::vector<std::vector<VkBufferCopy>> copies_setup;
+    std::vector<std::vector<VkBufferCopy2>> copies_setup;
 
     // Host conditional rendering data
     std::optional<ConditionalRenderingResolvePass> conditional_resolve_pass;
@@ -1438,6 +1490,10 @@ void QueryCacheRuntime::ResumeHostConditionalRendering() {
     impl->is_hcr_running = true;
 }
 
+bool QueryCacheRuntime::IsHostConditionalRenderingSet() const noexcept {
+    return impl->hcr_is_set;
+}
+
 void QueryCacheRuntime::HostConditionalRenderingCompareValueImpl(VideoCommon::LookupData object,
                                                                  bool is_equal) {
     {
@@ -1449,24 +1505,19 @@ void QueryCacheRuntime::HostConditionalRenderingCompareValueImpl(VideoCommon::Lo
         impl->hcr_buffer = buffer->Handle();
         impl->hcr_offset = offset;
     }
-    if (impl->hcr_is_set) {
-        if (impl->hcr_setup.buffer == impl->hcr_buffer &&
-            impl->hcr_setup.offset == impl->hcr_offset) {
-            return;
-        }
+    VkConditionalRenderingFlagsEXT flags = 0;
+    if (is_equal) {
+        flags = VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT;
     }
-    bool was_running = impl->is_hcr_running;
-    if (was_running) {
-        PauseHostConditionalRendering();
+    if (impl->hcr_is_set && impl->hcr_setup.buffer == impl->hcr_buffer &&
+        impl->hcr_setup.offset == impl->hcr_offset && impl->hcr_setup.flags == flags) {
+        return;
     }
+    PauseHostConditionalRendering();
     impl->hcr_setup.buffer = impl->hcr_buffer;
     impl->hcr_setup.offset = impl->hcr_offset;
-    impl->hcr_setup.flags = is_equal ? VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT : 0;
+    impl->hcr_setup.flags = flags;
     impl->hcr_is_set = true;
-    impl->is_hcr_running = false;
-    if (was_running) {
-        ResumeHostConditionalRendering();
-    }
 }
 
 void QueryCacheRuntime::HostConditionalRenderingCompareBCImpl(DAddr address, bool is_equal,
@@ -1483,37 +1534,16 @@ void QueryCacheRuntime::HostConditionalRenderingCompareBCImpl(DAddr address, boo
         to_resolve = buffer->Handle();
         to_resolve_offset = static_cast<u32>(offset);
     }
-    bool was_running = impl->is_hcr_running;
-    if (was_running) {
-        PauseHostConditionalRendering();
-    }
+    PauseHostConditionalRendering();
     impl->conditional_resolve_pass->Resolve(*impl->hcr_resolve_buffer, to_resolve,
                                             to_resolve_offset, compare_to_zero);
     impl->hcr_setup.buffer = *impl->hcr_resolve_buffer;
     impl->hcr_setup.offset = 0;
-    impl->hcr_setup.flags = is_equal ? 0 : VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT;
+    impl->hcr_setup.flags = 0;
+    if (!is_equal) {
+        impl->hcr_setup.flags = VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT;
+    }
     impl->hcr_is_set = true;
-    impl->is_hcr_running = false;
-    if (was_running) {
-        ResumeHostConditionalRendering();
-    }
-}
-
-void QueryCacheRuntime::TraceConditionalRendering(const char* path, bool handled, DAddr address,
-                                                 DAddr address_2) {
-    if (const u64 trace =
-            VideoCommon::QueryTrace::Sample(VideoCommon::QueryTrace::Event::VulkanCondition)) {
-        const auto* engine = impl->maxwell3d;
-        LOG_INFO(Render_Vulkan,
-                 "DKB_CONDITION vulkan n={} gpu={:#x} mode={} device={:#x}/{:#x} path={} "
-                 "handled={} hcr_set={} decision={} predicate=unknown inverted={}",
-                 trace, engine ? engine->regs.render_enable.Address() : 0,
-                 engine ? static_cast<u32>(engine->regs.render_enable.mode) : 0, address, address_2,
-                 path, handled, impl->hcr_is_set,
-                 !handled ? "cpu-fallback" : impl->hcr_is_set ? "GPU-deferred" : "execute-bypass",
-                 impl->hcr_is_set &&
-                     (impl->hcr_setup.flags & VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT) != 0);
-    }
 }
 
 bool QueryCacheRuntime::HostConditionalRenderingCompareValue(VideoCommon::LookupData object_1,
@@ -1522,8 +1552,11 @@ bool QueryCacheRuntime::HostConditionalRenderingCompareValue(VideoCommon::Lookup
         TraceConditionalRendering("extension-unavailable", false, object_1.address);
         return false;
     }
+    if (LacksQueryWriteBack(impl->device)) {
+        EndHostConditionalRendering();
+        return true;
+    }
     HostConditionalRenderingCompareBCImpl(object_1.address, true, true);
-    TraceConditionalRendering("resolve-zero", true, object_1.address);
     return true;
 }
 
@@ -1572,12 +1605,12 @@ bool QueryCacheRuntime::HostConditionalRenderingCompareValues(VideoCommon::Looku
         return false;
     }
 
-    auto driver_id = impl->device.GetDriverID();
+    const auto driver_id = impl->device.GetDriverID();
     const bool is_gpu_high = Settings::IsGPULevelHigh();
 
-    if ((!is_gpu_high && driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS) || driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY || driver_id == VK_DRIVER_ID_ARM_PROPRIETARY || driver_id == VK_DRIVER_ID_MESA_TURNIP) {
+    if ((!is_gpu_high && driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS) ||
+        LacksQueryWriteBack(impl->device)) {
         EndHostConditionalRendering();
-        TraceConditionalRendering("driver-bypass", true, object_1.address, object_2.address);
         return true;
     }
 
@@ -1597,13 +1630,11 @@ bool QueryCacheRuntime::HostConditionalRenderingCompareValues(VideoCommon::Looku
 
     if (!is_gpu_high) {
         EndHostConditionalRendering();
-        TraceConditionalRendering("accuracy-bypass", true, object_1.address, object_2.address);
         return true;
     }
 
     if (!is_in_bc[0] && !is_in_bc[1]) {
         EndHostConditionalRendering();
-        TraceConditionalRendering("query-cache-bypass", true, object_1.address, object_2.address);
         return true;
     }
     HostConditionalRenderingCompareBCImpl(object_1.address, equal_check);
@@ -1633,30 +1664,24 @@ VideoCommon::StreamerInterface* QueryCacheRuntime::GetStreamerInterface(QueryTyp
 }
 
 void QueryCacheRuntime::Barriers(bool is_prebarrier) {
-    static constexpr VkMemoryBarrier READ_BARRIER{
-        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+    VkMemoryBarrier2 barrier{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
         .pNext = nullptr,
-        .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
-        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+        .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+        .dstStageMask = impl->device.GetBufferConsumerStages(),
+        .dstAccessMask = impl->device.GetBufferConsumerAccess(),
     };
-    static constexpr VkMemoryBarrier WRITE_BARRIER{
-        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-        .pNext = nullptr,
-        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-        .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
-    };
-    impl->scheduler.RequestOutsideRenderPassOperationContext();
     if (is_prebarrier) {
-        impl->scheduler.Record([](vk::CommandBuffer cmdbuf) {
-            cmdbuf.PipelineBarrier(vk::PIPELINE_STAGE_GRAPHICS_COMPUTE_TRANSFER,
-                                   VK_PIPELINE_STAGE_TRANSFER_BIT, 0, READ_BARRIER);
-        });
-    } else {
-        impl->scheduler.Record([](vk::CommandBuffer cmdbuf) {
-            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                   vk::PIPELINE_STAGE_GRAPHICS_COMPUTE_TRANSFER_HOST, 0, WRITE_BARRIER);
-        });
+        barrier.srcStageMask = impl->device.GetBufferUserStages();
+        barrier.srcAccessMask = vk::ACCESS_BUFFER_WRITES;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        barrier.dstAccessMask = vk::ACCESS_TRANSFER;
     }
+    impl->scheduler.RequestOutsideRenderPassOperationContext();
+    impl->scheduler.Record([barrier](vk::CommandBuffer cmdbuf) {
+        cmdbuf.PipelineBarrier(barrier);
+    });
 }
 
 template <typename SyncValuesType>
@@ -1708,6 +1733,7 @@ void QueryCacheRuntime::SyncValues(std::span<SyncValuesType> values, VkBuffer ba
             const auto post_op = VideoCommon::ObtainBufferOperation::DoNothing;
             const auto [buffer, offset] = impl->buffer_cache.ObtainCPUBuffer(
                 pair.first, static_cast<u32>(pair.second - pair.first), sync_info, post_op);
+            buffer->MarkContentModified();
             impl->buffers_to_upload_to.emplace_back(buffer->Handle(), offset);
         }
     });
@@ -1717,12 +1743,14 @@ void QueryCacheRuntime::SyncValues(std::span<SyncValuesType> values, VkBuffer ba
     impl->copies_setup.clear();
     impl->copies_setup.resize(impl->little_cache.size());
     if constexpr (SyncValuesType::GeneratesBaseBuffer) {
-        ref = impl->staging_pool.Request(total_size, MemoryUsage::Upload);
+        ref = impl->staging_pool.Request(impl->device, total_size, MemoryUsage::Upload);
         size_t current_offset = ref.offset;
         size_t accumulated_size = 0;
         for (size_t i = 0; i < values.size(); i++) {
             size_t which_copy = impl->redirect_cache[i];
-            impl->copies_setup[which_copy].emplace_back(VkBufferCopy{
+            impl->copies_setup[which_copy].emplace_back(VkBufferCopy2{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2,
+                .pNext = nullptr,
                 .srcOffset = current_offset + accumulated_size,
                 .dstOffset = impl->buffers_to_upload_to[which_copy].second + values[i].address -
                              impl->little_cache[which_copy].first,
@@ -1736,7 +1764,9 @@ void QueryCacheRuntime::SyncValues(std::span<SyncValuesType> values, VkBuffer ba
     } else {
         for (size_t i = 0; i < values.size(); i++) {
             size_t which_copy = impl->redirect_cache[i];
-            impl->copies_setup[which_copy].emplace_back(VkBufferCopy{
+            impl->copies_setup[which_copy].emplace_back(VkBufferCopy2{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2,
+                .pNext = nullptr,
                 .srcOffset = values[i].offset,
                 .dstOffset = impl->buffers_to_upload_to[which_copy].second + values[i].address -
                              impl->little_cache[which_copy].first,

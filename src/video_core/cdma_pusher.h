@@ -128,7 +128,8 @@ protected:
     ThiRegisters thi_regs{};
     std::deque<ChCommandHeaderList> command_lists;
     std::condition_variable_any command_cv;
-    Host1x::Control host_processor;
+    std::jthread thread;
+    std::unique_ptr<Host1x::Control> host_processor;
     std::mutex command_mutex;
     Host1x::Host1x& host1x;
     ChClassId current_class;

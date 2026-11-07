@@ -8,6 +8,7 @@
 #include <limits>
 #include <random>
 #include <regex>
+#include <boost/algorithm/string/case_conv.hpp>
 #include <openssl/evp.h>
 #include "common/assert.h"
 #include "common/fs/path_util.h"
@@ -1447,12 +1448,10 @@ void ExternalContentProvider::ScanDirectory(const VirtualDir& dir) {
             continue;
         }
 
-        const auto extension = Common::ToLower(filename.substr(dot_pos + 1));
-        // .xcz is an XCI container, but its updates only work through the NSP/PFS0 path
-        // (DecompressNCZ), not ProcessXCI. So route .xcz here on purpose.
-        if (extension == "nsp" || extension == "nsz" || extension == "xcz") {
+        const auto ext = boost::to_lower_copy(filename.substr(dot_pos + 1));
+        if (ext == "nsp") {
             ProcessNSP(file);
-        } else if (extension == "xci") {
+        } else if (ext == "xci") {
             ProcessXCI(file);
         }
     }

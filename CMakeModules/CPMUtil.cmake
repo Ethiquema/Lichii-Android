@@ -656,12 +656,9 @@ function(AddJsonPackage)
 
     set(multiValueArgs OPTIONS)
 
-    set(optionArgs MODULE_PATH DOWNLOAD_ONLY)
+    set(optionArgs MODULE)
 
-    cmake_parse_arguments(JSON
-        "${optionArgs}"
-        "${oneValueArgs}"
-        "${multiValueArgs}"
+    cmake_parse_arguments(JSON "${optionArgs}" "${oneValueArgs}" "${multiValueArgs}"
         "${ARGN}")
 
     list(LENGTH ARGN argnLength)
@@ -683,17 +680,21 @@ function(AddJsonPackage)
         list(APPEND EXTRA_ARGS DOWNLOAD_ONLY)
     endif()
 
+    parse_object(${object})
+
+    if (JSON_MODULE)
+        set(EXTRA_ARGS MODULE)
+    endif()
+
     if(ci)
         AddCIPackage(
-            VERSION "${version}"
-            NAME "${name}"
-            REPO "${repo}"
-            PACKAGE "${package}"
-            EXTENSION "${extension}"
-            DISABLED_PLATFORMS "${disabled_platforms}"
-
-            GIT_HOST "${git_host}"
-
+            VERSION ${version}
+            NAME ${name}
+            REPO ${repo}
+            PACKAGE ${package}
+            EXTENSION ${extension}
+            MIN_VERSION ${min_version}
+            DISABLED_PLATFORMS ${disabled_platforms}
             ${EXTRA_ARGS})
     else()
         if (NOT DEFINED JSON_FORCE_BUNDLED_PACKAGE)
@@ -714,10 +715,11 @@ function(AddJsonPackage)
             FORCE_BUNDLED_PACKAGE "${JSON_FORCE_BUNDLED_PACKAGE}"
             SOURCE_SUBDIR "${source_subdir}"
 
+            GIT_VERSION "${git_version}"
             GIT_HOST "${git_host}"
 
             ARTIFACT "${artifact}"
-
+            TAG "${tag}"
             ${EXTRA_ARGS})
     endif()
 
@@ -730,8 +732,25 @@ endfunction()
 
 # Internal function
 function(AddPackage)
+    cpm_set_policies()
     set(EXTRA_ARGS "")
 
+    #[[
+        URL configurations, descending order of precedence:
+        - URL [+ GIT_URL] -> bare URL fetch
+        - REPO + TAG + ARTIFACT -> github release artifact
+        - REPO + TAG -> github release archive
+        - REPO + SHA -> github commit archive
+        - REPO + BRANCH -> github branch
+
+        Hash configurations, descending order of precedence:
+        - HASH -> bare sha512sum
+        - HASH_SUFFIX -> hash grabbed from the URL + this suffix
+        - HASH_URL -> hash grabbed from a URL
+          * technically this is unsafe since a hacker can attack that url
+
+        NOTE: hash algo defaults to sha512
+    #]]
     set(oneValueArgs
         NAME
         MIN_VERSION
@@ -753,12 +772,9 @@ function(AddPackage)
 
     set(multiValueArgs OPTIONS PATCHES)
 
-    set(optionArgs MODULE_PATH DOWNLOAD_ONLY)
+    set(optionArgs MODULE)
 
-    cmake_parse_arguments(PKG_ARGS
-        "${optionArgs}"
-        "${oneValueArgs}"
-        "${multiValueArgs}"
+    cmake_parse_arguments(PKG_ARGS "${optionArgs}" "${oneValueArgs}" "${multiValueArgs}"
         "${ARGN}")
 
     if(NOT DEFINED PKG_ARGS_NAME)
@@ -910,6 +926,12 @@ function(AddPackage)
         set(source_dir "${${PKG_ARGS_NAME}_CUSTOM_DIR}")
     endif()
 
+    if (PKG_ARGS_MODULE)
+        set(PKG_ARGS_DOWNLOAD_ONLY ON)
+    elseif (NOT DEFINED PKG_ARGS_DOWNLOAD_ONLY)
+        set(PKG_ARGS_DOWNLOAD_ONLY OFF)
+    endif()
+
     CPMAddPackage(
         NAME ${PKG_ARGS_NAME}
         VERSION ${PKG_ARGS_VERSION}
@@ -925,11 +947,12 @@ function(AddPackage)
         ${pkg_git_url}
         ${PKG_ARGS_VERSION})
 
-    set(${PKG_ARGS_NAME}_ADDED YES PARENT_SCOPE)
+    # pass stuff to parent scope
+    Propagate(${PKG_ARGS_NAME}_ADDED)
     Propagate(${PKG_ARGS_NAME}_SOURCE_DIR)
     Propagate(${PKG_ARGS_NAME}_BINARY_DIR)
 
-    if (PKG_ARGS_MODULE_PATH)
+    if (PKG_ARGS_MODULE)
         list(PREPEND CMAKE_PREFIX_PATH "${${ARTIFACT_PACKAGE}_SOURCE_DIR}")
         Propagate(CMAKE_PREFIX_PATH)
     endif()
@@ -995,43 +1018,30 @@ function(AddCIPackage)
     set(ARTIFACT_REPO ${PKG_ARGS_REPO})
     set(ARTIFACT_PACKAGE ${PKG_ARGS_PACKAGE})
 
-    # plat/archname
-    if (DEFINED PKG_ARGS_PKGNAME)
-        set(pkgname ${PKG_ARGS_PKGNAME})
-    else()
-        if (MSVC)
-            set(platname windows)
-        elseif(MINGW)
-            set(platname mingw)
-        elseif(ANDROID)
-            set(platname android)
-        elseif(LINUX)
-            set(platname linux)
-        elseif(IOS)
-            set(platname ios)
-        elseif(APPLE)
-            set(platname macos)
-        else()
-            cpm_utils_message(WARNING
-                "Unsupported platform ${CMAKE_SYSTEM_NAME} for CI packages")
-        endif()
-
-        if (CPMUTIL_AMD64)
-            set(archname amd64)
-        elseif(CPMUTIL_ARM64)
-            set(archname aarch64)
-        elseif(CPMUTIL_RISCV64)
-            set(archname riscv64)
-        endif()
-
-        if (APPLE AND NOT CPMUTIL_ARM64)
-            cpm_utils_message(WARNING
-                "Unsupported platform/arch combo for CI packages")
-        endif()
-
-        if (DEFINED platname AND DEFINED archname)
-            set(pkgname ${platname}-${archname})
-        endif()
+    if(MSVC AND ARCHITECTURE_x86_64)
+        set(pkgname windows-amd64)
+    elseif(MSVC AND ARCHITECTURE_arm64)
+        set(pkgname windows-arm64)
+    elseif(MINGW AND ARCHITECTURE_x86_64)
+        set(pkgname mingw-amd64)
+    elseif(MINGW AND ARCHITECTURE_arm64)
+        set(pkgname mingw-arm64)
+    elseif(ANDROID AND ARCHITECTURE_x86_64)
+        set(pkgname android-x86_64)
+    elseif(ANDROID AND ARCHITECTURE_arm64)
+        set(pkgname android-aarch64)
+    elseif(PLATFORM_SUN)
+        set(pkgname solaris-amd64)
+    elseif(PLATFORM_FREEBSD)
+        set(pkgname freebsd-amd64)
+    elseif(PLATFORM_LINUX AND ARCHITECTURE_x86_64)
+        set(pkgname linux-amd64)
+    elseif(PLATFORM_LINUX AND ARCHITECTURE_arm64)
+        set(pkgname linux-aarch64)
+    elseif(APPLE AND NOT IOS)
+        set(pkgname macos-universal)
+    elseif(IOS AND ARCHITECTURE_arm64)
+        set(pkgname ios-aarch64)
     endif()
 
     if (DEFINED pkgname
@@ -1039,29 +1049,9 @@ function(AddCIPackage)
         set(ARTIFACT
             "${ARTIFACT_NAME}-${pkgname}-${ARTIFACT_VERSION}.${ARTIFACT_EXT}")
 
-        if (PKG_ARGS_MODULE_PATH)
-            set(EXTRA_ARGS MODULE_PATH)
+        if (PKG_ARGS_MODULE)
+            set(EXTRA_ARGS MODULE)
         endif()
-
-        # download sha512sum file
-        # TODO: CI pkgs
-        set(sha512sum_url
-            "https://${ARTIFACT_GIT_HOST}/${ARTIFACT_REPO}/releases/download/${ARTIFACT_VERSION}/${ARTIFACT}.sha512sum")
-        set(sha512sum_file
-            "${CMAKE_CURRENT_BINARY_DIR}/.cpmutil_${ARTIFACT}_sha512sum")
-
-        file(DOWNLOAD "${sha512sum_url}" "${sha512sum_file}"
-            STATUS sha512sum_status)
-        list(GET sha512sum_status 0 sha512sum_error)
-
-        if(sha512sum_error)
-            message(FATAL_ERROR "[CPMUtil] Failed to download sha512sum "
-                "for ${ARTIFACT_NAME} from ${sha512sum_url}")
-        endif()
-
-        file(READ "${sha512sum_file}" sha512sum_hash)
-        string(STRIP "${sha512sum_hash}" sha512sum_hash)
-        file(REMOVE "${sha512sum_file}")
 
         AddPackage(
             NAME ${ARTIFACT_PACKAGE}
@@ -1133,6 +1123,7 @@ function(AddQt repo version)
         NAME qt
         PACKAGE Qt6
         VERSION ${version}
+        MIN_VERSION 6
         REPO ${repo}
         DISABLED_PLATFORMS
             android-x86_64 android-aarch64

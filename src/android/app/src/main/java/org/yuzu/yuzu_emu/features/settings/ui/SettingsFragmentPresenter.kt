@@ -110,12 +110,7 @@ class SettingsFragmentPresenter(
 
             add(BooleanSetting.RENDERER_FRAME_GEN.key)
             add(IntSetting.RENDERER_FRAME_GEN_TARGET_RATE.key)
-            if (IntSetting.RENDERER_FRAME_GEN_TARGET_RATE.getInt(
-                    getNeedsGlobalForKey(IntSetting.RENDERER_FRAME_GEN_TARGET_RATE.key)
-                ) == 0
-            ) {
-                add(IntSetting.RENDERER_FRAME_GEN_MULTIPLIER.key)
-            }
+            add(IntSetting.RENDERER_FRAME_GEN_MULTIPLIER.key)
             add(IntSetting.RENDERER_FRAME_GEN_QUEUE_TARGET.key)
             add(BooleanSetting.RENDERER_FRAME_GEN_FLOW_SCALE_AUTO.key)
             if (!BooleanSetting.RENDERER_FRAME_GEN_FLOW_SCALE_AUTO.getBoolean(
@@ -124,6 +119,7 @@ class SettingsFragmentPresenter(
             ) {
                 add(IntSetting.RENDERER_FRAME_GEN_FLOW_SCALE.key)
             }
+            add(BooleanSetting.RENDERER_FRAME_GEN_FP16.key)
         }
     }
 
@@ -173,7 +169,6 @@ class SettingsFragmentPresenter(
             MenuTag.SECTION_SYSTEM -> addSystemSettings(sl)
             MenuTag.SECTION_RENDERER -> addGraphicsSettings(sl)
             MenuTag.SECTION_FRAME_GEN -> addFrameGenSettings(sl)
-            MenuTag.SECTION_POST_PROCESSING -> addPostProcessingSettings(sl)
             MenuTag.SECTION_PERFORMANCE_STATS -> addPerformanceOverlaySettings(sl)
             MenuTag.SECTION_SOC_OVERLAY -> addSocOverlaySettings(sl)
             MenuTag.SECTION_INPUT_OVERLAY -> addInputOverlaySettings(sl)
@@ -511,6 +506,7 @@ class SettingsFragmentPresenter(
             add(IntSetting.FAST_CPU_TIME.key)
             add(IntSetting.FAST_GPU_TIME.key)
             add(BooleanSetting.CORE_SYNC_CORE_SPEED.key)
+            add(BooleanSetting.ENABLE_CHEATS_BY_DEFAULT.key)
 
             add(IntSetting.MEMORY_LAYOUT.key)
             add(BooleanSetting.USE_CUSTOM_CPU_TICKS.key)
@@ -546,10 +542,14 @@ class SettingsFragmentPresenter(
             add(IntSetting.RENDERER_NVDEC_EMULATION.key)
 
             add(BooleanSetting.SYNC_MEMORY_OPERATIONS.key)
+            add(BooleanSetting.STALL_ON_GPU_FENCE_WAIT.key)
             add(BooleanSetting.RENDERER_USE_DISK_SHADER_CACHE.key)
             add(BooleanSetting.RENDERER_FORCE_MAX_CLOCK.key)
             add(BooleanSetting.RENDERER_REACTIVE_FLUSHING.key)
+            add(BooleanSetting.RENDERER_BARRIER_FEEDBACK_LOOPS.key)
             add(BooleanSetting.ENABLE_BUFFER_HISTORY.key)
+            add(BooleanSetting.ENABLE_GPU_BUFFER_READBACK.key)
+            add(BooleanSetting.USE_UNIFIED_MEMORY.key)
             add(BooleanSetting.USE_OPTIMIZED_VERTEX_BUFFERS.key)
 
             add(HeaderSetting(R.string.hacks))
@@ -558,14 +558,16 @@ class SettingsFragmentPresenter(
             add(BooleanSetting.FIX_BLOOM_EFFECTS.key)
             add(BooleanSetting.EMULATE_BGR565.key)
             add(BooleanSetting.RENDERER_ASYNCHRONOUS_SHADERS.key)
+            add(BooleanSetting.RENDERER_UNIFIED_MEMORY.key)
             add(IntSetting.ANDROID_PIPELINE_WORKERS.key)
             add(BooleanSetting.RENDERER_ASYNCHRONOUS_GPU_EMULATION.key)
-            add(SettingsItem.GPU_UNSWIZZLE_COMBINED)
 
             add(HeaderSetting(R.string.extensions))
 
             add(IntSetting.RENDERER_DYNA_STATE.key)
             add(BooleanSetting.RENDERER_VERTEX_INPUT_DYNAMIC_STATE.key)
+            add(BooleanSetting.RENDERER_DYNAMIC_RENDERING.key)
+            add(BooleanSetting.RENDERER_WORKGROUP_MEMORY_EXPLICIT_LAYOUT.key)
             add(IntSetting.RENDERER_SAMPLE_SHADING.key)
 
             add(HeaderSetting(R.string.display))
@@ -1344,10 +1346,8 @@ class SettingsFragmentPresenter(
                 }
             }
 
-            add(HeaderSetting(R.string.app_settings))
-            add(IntSetting.APP_LANGUAGE.key)
-
             if (NativeLibrary.isUpdateCheckerEnabled()) {
+                add(HeaderSetting(R.string.app_settings))
                 add(BooleanSetting.ENABLE_UPDATE_CHECKS.key)
             }
 
@@ -1526,6 +1526,7 @@ class SettingsFragmentPresenter(
             add(HeaderSetting(R.string.cpu))
 
             add(IntSetting.CPU_BACKEND.key)
+            add(BooleanSetting.RELOCATE_36BIT_ADDRESS_SPACE.key)
             add(IntSetting.CPU_ACCURACY.key)
             add(BooleanSetting.USE_AUTO_STUB.key)
             add(SettingsItem.FASTMEM_COMBINED)
@@ -1551,6 +1552,7 @@ class SettingsFragmentPresenter(
                 add(BooleanSetting.DUMP_GUEST_SHADERS.key)
                 add(BooleanSetting.GPU_LOG_SHADER_DUMPS.key)
                 add(BooleanSetting.DUMP_MACROS.key)
+                add(BooleanSetting.RENDERER_FRAME_GEN_DUMP_FLOW.key)
                 add(BooleanSetting.GPU_LOG_MEMORY_TRACKING.key)
                 add(BooleanSetting.GPU_LOG_DRIVER_DEBUG.key)
                 add(IntSetting.GPU_LOG_RING_BUFFER_SIZE.key)

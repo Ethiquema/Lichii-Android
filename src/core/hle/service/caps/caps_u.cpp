@@ -13,33 +13,29 @@
 
 namespace Service::Capture {
 
+std::optional<ServiceFrameworkBase::FunctionInfoBase> IAlbumApplicationService::FindRequest(u32 key) {
+    static constexpr auto functions = CreateStaticMap(
+        FunctionInfo{32, C<&IAlbumApplicationService::SetShimLibraryVersion>, "SetShimLibraryVersion"},
+        FunctionInfo{102, C<&IAlbumApplicationService::GetAlbumFileList0AafeAruidDeprecated>, "GetAlbumFileList0AafeAruidDeprecated"},
+        FunctionInfo{103, nullptr, "DeleteAlbumFileByAruid"},
+        FunctionInfo{104, nullptr, "GetAlbumFileSizeByAruid"},
+        FunctionInfo{105, nullptr, "DeleteAlbumFileByAruidForDebug"},
+        FunctionInfo{110, nullptr, "LoadAlbumScreenShotImageByAruid"},
+        FunctionInfo{120, nullptr, "LoadAlbumScreenShotThumbnailImageByAruid"},
+        FunctionInfo{130, nullptr, "PrecheckToCreateContentsByAruid"},
+        FunctionInfo{140, nullptr, "GetAlbumFileList1AafeAruidDeprecated"},
+        FunctionInfo{141, nullptr, "GetAlbumFileList2AafeUidAruidDeprecated"},
+        FunctionInfo{142, C<&IAlbumApplicationService::GetAlbumFileList3AaeAruid>, "GetAlbumFileList3AaeAruid"},
+        FunctionInfo{143, nullptr, "GetAlbumFileList4AaeUidAruid"},
+        FunctionInfo{144, nullptr, "GetAllAlbumFileList3AaeAruid"},
+        FunctionInfo{60002, nullptr, "OpenAccessorSessionForApplication"}
+    );
+    return HandlerTableGenerateWithFind(key, functions);
+}
+
 IAlbumApplicationService::IAlbumApplicationService(Core::System& system_,
                                                    std::shared_ptr<AlbumManager> album_manager)
     : ServiceFramework{system_, "caps:u"}, manager{album_manager} {
-    // clang-format off
-    static const FunctionInfo functions[] = {
-        {32, C<&IAlbumApplicationService::SetShimLibraryVersion>, "SetShimLibraryVersion"},
-        {102, C<&IAlbumApplicationService::GetAlbumFileList0AafeAruidDeprecated>, "GetAlbumFileList0AafeAruidDeprecated"},
-        {103, &IAlbumApplicationService::StubReplyZeroed, "DeleteAlbumFileByAruid"},
-        {104, &IAlbumApplicationService::StubReplyZeroed, "GetAlbumFileSizeByAruid"},
-        {105, &IAlbumApplicationService::StubReplyZeroed, "DeleteAlbumFileByAruidForDebug"},
-        {110, &IAlbumApplicationService::StubReplyZeroed, "LoadAlbumScreenShotImageByAruid"},
-        {120, &IAlbumApplicationService::StubReplyZeroed, "LoadAlbumScreenShotThumbnailImageByAruid"},
-        {130, &IAlbumApplicationService::StubReplyZeroed, "PrecheckToCreateContentsByAruid"},
-        {140, &IAlbumApplicationService::StubReplyZeroed, "GetAlbumFileList1AafeAruidDeprecated"},
-        {141, &IAlbumApplicationService::StubReplyZeroed, "GetAlbumFileList2AafeUidAruidDeprecated"},
-        {142, C<&IAlbumApplicationService::GetAlbumFileList3AaeAruid>, "GetAlbumFileList3AaeAruid"},
-        {143, &IAlbumApplicationService::StubReplyZeroed, "GetAlbumFileList4AaeUidAruid"},
-        {144, &IAlbumApplicationService::StubReplyZeroed, "GetAllAlbumFileList3AaeAruid"},
-        {145, &IAlbumApplicationService::StubReplyZeroed, "Unknown145"},
-        {146, &IAlbumApplicationService::StubReplyZeroed, "Unknown146"},
-        {147, &IAlbumApplicationService::StubReplyZeroed, "Unknown147"},
-        {148, &IAlbumApplicationService::StubReplyZeroed, "Unknown148"},
-        {60002, nullptr, "OpenAccessorSessionForApplication"},
-    };
-    // clang-format on
-
-    RegisterHandlers(functions);
 }
 
 IAlbumApplicationService::~IAlbumApplicationService() = default;

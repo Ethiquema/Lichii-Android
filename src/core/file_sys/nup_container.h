@@ -4,7 +4,6 @@
 #pragma once
 
 #include <array>
-#include <filesystem>
 #include <functional>
 #include <list>
 #include <memory>
@@ -15,36 +14,19 @@
 #include <vector>
 
 #include "common/common_types.h"
-#include "common/fs/file.h"
 #include "core/file_sys/vfs/vfs_types.h"
 #include "core/file_sys/vfs/vfs_vector.h"
 #include "core/loader/loader.h"
 
 namespace FileSys {
 
-/// A zstd member too large for the in-memory cache, decompressed once into a temporary file.
-struct NupSpillFile {
-    ~NupSpillFile();
-
-    std::mutex mutex;
-    std::filesystem::path path;
-    Common::FS::IOFile file;
-    bool attempted{};
-};
-
 /// LRU over decompressed zstd extents, shared by the files of one container.
 struct NupDecompressCache {
-    static constexpr std::size_t DefaultCap = 512 * 1024 * 1024;
-
-    using Entry = std::pair<std::size_t, std::vector<u8>>;
-
     std::mutex mutex;
-    std::list<Entry> lru;
-    std::unordered_map<std::size_t, std::list<Entry>::iterator> index;
+    std::list<std::pair<std::size_t, std::vector<u8>>> lru;
+    std::unordered_map<std::size_t, std::list<std::pair<std::size_t, std::vector<u8>>>::iterator>
+        index;
     std::size_t bytes{};
-    std::size_t cap{DefaultCap};
-    std::filesystem::path spill_dir;
-    std::unordered_map<std::size_t, std::shared_ptr<NupSpillFile>> spills;
 
     std::vector<u8>* Find(std::size_t file_index) {
         const auto it = index.find(file_index);
@@ -55,31 +37,21 @@ struct NupDecompressCache {
         return &it->second->second;
     }
 
-    /// Takes ownership of `data` only when it is inserted.
     void Insert(std::size_t file_index, std::vector<u8>& data) {
-        if (index.contains(file_index)) {
-            return;
-        }
-        while (bytes + data.size() > cap && !lru.empty()) {
+        while (bytes + data.size() > DecompressCacheCap && !lru.empty()) {
             bytes -= lru.back().second.size();
             index.erase(lru.back().first);
             lru.pop_back();
         }
-        if (bytes + data.size() > cap) {
+        if (bytes + data.size() > DecompressCacheCap) {
             return;
         }
-        bytes += data.size();
-        lru.emplace_front(file_index, std::move(data));
+        lru.emplace_front(file_index, data);
         index.emplace(file_index, lru.begin());
+        bytes += data.size();
     }
 
-    std::shared_ptr<NupSpillFile> GetSpill(std::size_t file_index) {
-        auto& spill = spills[file_index];
-        if (!spill) {
-            spill = std::make_shared<NupSpillFile>();
-        }
-        return spill;
-    }
+    static constexpr std::size_t DecompressCacheCap = 512 * 1024 * 1024;
 };
 
 /**
@@ -117,8 +89,6 @@ public:
 
         std::vector<u8> npdm;
         std::string title_name;
-        std::string publisher;
-        std::string source_dump;
         std::vector<std::pair<std::string, std::string>> localized_titles;
         std::vector<u8> icon;
         std::vector<std::pair<std::string, std::vector<u8>>> localized_icons;
@@ -131,11 +101,7 @@ public:
     /// Recursively merges overlay into a copy of base; overlay paths win.
     static VirtualDir MergeShadowDirs(const VirtualDir& base, const VirtualDir& overlay);
 
-    /// Zstd members larger than half of `memory_cache_cap` are decompressed to a temporary file
-    /// in `spill_dir` (the cache directory by default) instead of being held in memory.
-    explicit NupContainer(VirtualFile file_,
-                          std::size_t memory_cache_cap = NupDecompressCache::DefaultCap,
-                          std::filesystem::path spill_dir_ = {});
+    explicit NupContainer(VirtualFile file_);
     ~NupContainer();
 
     Loader::ResultStatus GetStatus() const {
@@ -153,13 +119,11 @@ public:
     std::optional<std::size_t> FindBestUpdatePackage() const;
 
     /// Opens a member file by node index; raw extents are zero-copy views into
-    /// the container, zstd extents are lazily decompressed, cached in memory
-    /// or, when large, in a temporary file.
+    /// the container, zstd extents are lazily decompressed and cached.
     VirtualFile OpenFile(std::size_t file_index);
 
     VirtualDir GetExeFSDir(std::size_t package_index);
     VirtualDir GetRomFSDir(std::size_t package_index);
-    VirtualDir GetPackageDir(std::size_t package_index);
 
     /// Stream-hashes every member file against its stored SHA-256.
     Loader::ResultStatus VerifyIntegrity(
@@ -187,7 +151,6 @@ private:
 
     bool Parse();
     bool ParseMeta(PackageInfo& package);
-    bool ValidateDirTree() const;
     void BuildDirTree(u32 dir_index, VectorVfsDirectory& out);
     VirtualDir BuildPackageDir(u32 dir_index);
     std::vector<u8> ReadExtentRaw(const FileNode& node) const;

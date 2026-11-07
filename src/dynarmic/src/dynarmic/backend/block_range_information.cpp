@@ -18,28 +18,38 @@ namespace Dynarmic::Backend {
 
 template<typename P>
 void BlockRangeInformation<P>::AddRange(boost::icl::discrete_interval<P> range, IR::LocationDescriptor location) {
-    if (!boost::icl::is_empty(range)) {
-        ranges.push_back({boost::icl::first(range), boost::icl::last(range), location});
+    if (boost::icl::is_empty(range)) {
+        return;
     }
+    const P first = boost::icl::first(range);
+    const P last = boost::icl::last(range);
+    ranges.emplace(first, Range{last, location});
+    max_span = (std::max)(max_span, P(last - first));
 }
 
 template<typename P>
 void BlockRangeInformation<P>::ClearCache() {
     ranges.clear();
+    max_span = 0;
 }
 
 template<typename P>
 ::Common::unordered_set<IR::LocationDescriptor> BlockRangeInformation<P>::InvalidateRanges(const boost::icl::interval_set<P>& invalidated) {
     ::Common::unordered_set<IR::LocationDescriptor> erase_locations;
-    std::erase_if(ranges, [&](const Range& range) {
-        for (const auto& interval : invalidated) {
-            if (range.first <= boost::icl::last(interval) && boost::icl::first(interval) <= range.last) {
-                erase_locations.insert(range.location);
-                return true;
+    for (const auto& interval : invalidated) {
+        const P first = boost::icl::first(interval);
+        const P last = boost::icl::last(interval);
+        const P search_begin = first > max_span ? P(first - max_span) : P(0);
+        auto it = ranges.lower_bound(search_begin);
+        while (it != ranges.end() && it->first <= last) {
+            if (it->second.last < first) {
+                ++it;
+                continue;
             }
+            erase_locations.insert(it->second.location);
+            it = ranges.erase(it);
         }
-        return false;
-    });
+    }
     return erase_locations;
 }
 

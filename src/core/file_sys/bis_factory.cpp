@@ -35,6 +35,10 @@ VirtualDir BISFactory::GetUserNANDContentDirectory() const {
     return GetOrCreateDirectoryRelative(nand_root, "/user/Contents");
 }
 
+VirtualDir BISFactory::GetSystem0NANDContentDirectory() const {
+    return GetOrCreateDirectoryRelative(nand_root, "/system0/Contents");
+}
+
 RegisteredCache* BISFactory::GetSystemNANDContents() const {
     return sysnand_cache.get();
 }

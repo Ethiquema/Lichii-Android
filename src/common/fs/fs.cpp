@@ -174,11 +174,14 @@ bool CreateDir(const fs::path& path) {
         return false;
     }
 
+    // TODO: Maybe this is what causes death?
+#ifndef __OPENORBIS__
     if (!Exists(path.parent_path())) {
         LOG_ERROR(Common_Filesystem, "Parent directory of path={} does not exist",
                   PathToUTF8String(path));
         return false;
     }
+#endif
 
     if (IsDir(path)) {
         LOG_DEBUG(Common_Filesystem, "Filesystem object at path={} exists and is a directory",
@@ -425,11 +428,17 @@ void IterateDirEntries(const std::filesystem::path& path, const DirEntryCallable
 
     std::error_code ec;
     bool callback_error = false;
-    for (auto const& entry : fs::directory_iterator(path, ec)) {
-        if ((True(filter & DirEntryFilter::File) && entry.status().type() == fs::file_type::regular)
-        || (True(filter & DirEntryFilter::Directory) && entry.status().type() == fs::file_type::directory)) {
-            if (!callback(entry)) {
+    // Range-for and status() use the throwing overloads, and nothing above the callers catches a
+    // filesystem_error (the game list worker runs on a thread pool thread), so step with ec.
+    for (fs::directory_iterator it(path, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code status_ec;
+        const auto type = it->status(status_ec).type();
+        if ((True(filter & DirEntryFilter::File) && type == fs::file_type::regular)
+        || (True(filter & DirEntryFilter::Directory) && type == fs::file_type::directory)) {
+            if (!callback(*it)) {
+                // The callback asks to stop (e.g. the game list worker is being stopped).
                 callback_error = true;
+                break;
             }
         }
     }
@@ -458,11 +467,17 @@ void IterateDirEntriesRecursively(const std::filesystem::path& path, const DirEn
     std::error_code ec;
     bool callback_error = false;
     // MSVC should now be fixed... right... right?!?!?!
-    for (const auto& entry : fs::recursive_directory_iterator(path, ec)) {
-        if ((True(filter & DirEntryFilter::File) && entry.status().type() == fs::file_type::regular)
-        || (True(filter & DirEntryFilter::Directory) && entry.status().type() == fs::file_type::directory)) {
-            if (!callback(entry)) {
+    // Skip directories we may not open (C:\System Volume Information and the like) instead of
+    // throwing from the range-for increment when the iterator descends into one.
+    for (fs::recursive_directory_iterator it(path, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code status_ec;
+        const auto type = it->status(status_ec).type();
+        if ((True(filter & DirEntryFilter::File) && type == fs::file_type::regular)
+        || (True(filter & DirEntryFilter::Directory) && type == fs::file_type::directory)) {
+            if (!callback(*it)) {
+                // The callback asks to stop (e.g. the game list worker is being stopped).
                 callback_error = true;
+                break;
             }
         }
     }

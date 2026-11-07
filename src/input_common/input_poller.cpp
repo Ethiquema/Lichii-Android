@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -556,10 +559,15 @@ private:
 
 class InputFromMotion final : public Common::Input::InputDevice {
 public:
-    explicit InputFromMotion(PadIdentifier identifier_, int motion_sensor_, float gyro_threshold_,
-                             InputEngine* input_engine_)
-        : identifier(identifier_), motion_sensor(motion_sensor_), gyro_threshold(gyro_threshold_),
-          input_engine(input_engine_) {
+    explicit InputFromMotion(PadIdentifier identifier_, int motion_sensor_, float gyro_threshold_, bool invert_x_, bool invert_y_, bool invert_z_, InputEngine* input_engine_)
+        : identifier(identifier_)
+        , motion_sensor(motion_sensor_)
+        , gyro_threshold(gyro_threshold_)
+        , input_engine(input_engine_)
+        , invert_x{invert_x_}
+        , invert_y{invert_y_}
+        , invert_z{invert_z_}
+    {
         UpdateCallback engine_callback{[this]() { OnChange(); }};
         const InputIdentifier input_identifier{
             .identifier = identifier,
@@ -575,7 +583,19 @@ public:
     }
 
     Common::Input::MotionStatus GetStatus() const {
-        const auto basic_motion = input_engine->GetMotion(identifier, motion_sensor);
+        auto basic_motion = input_engine->GetMotion(identifier, motion_sensor);
+        if (invert_x) {
+            basic_motion.accel_x = -basic_motion.accel_x;
+            basic_motion.gyro_x = -basic_motion.gyro_x;
+        }
+        if (invert_y) {
+            basic_motion.accel_y = -basic_motion.accel_y;
+            basic_motion.gyro_y = -basic_motion.gyro_y;
+        }
+        if (invert_z) {
+            basic_motion.accel_z = -basic_motion.accel_z;
+            basic_motion.gyro_z = -basic_motion.gyro_z;
+        }
         Common::Input::MotionStatus status{};
         const Common::Input::AnalogProperties properties = {
             .deadzone = 0.0f,
@@ -608,6 +628,9 @@ private:
     const float gyro_threshold;
     int callback_key;
     InputEngine* input_engine;
+    bool invert_x : 1;
+    bool invert_y : 1;
+    bool invert_z : 1;
 };
 
 class InputFromAxisMotion final : public Common::Input::InputDevice {
@@ -1066,13 +1089,15 @@ std::unique_ptr<Common::Input::InputDevice> InputFactory::CreateMotionDevice(
         .pad = static_cast<std::size_t>(params.Get("pad", 0)),
     };
 
+    auto const invert_x = params.Get("invert_x", "+") == "-";
+    auto const invert_y = params.Get("invert_y", "+") != "+";
+    auto const invert_z = params.Get("invert_z", "+") != "+";
     if (params.Has("motion")) {
         const auto motion_sensor = params.Get("motion", 0);
         const auto gyro_threshold = params.Get("threshold", 0.007f);
         input_engine->PreSetController(identifier);
         input_engine->PreSetMotion(identifier, motion_sensor);
-        return std::make_unique<InputFromMotion>(identifier, motion_sensor, gyro_threshold,
-                                                 input_engine.get());
+        return std::make_unique<InputFromMotion>(identifier, motion_sensor, gyro_threshold, invert_x, invert_y, invert_z, input_engine.get());
     }
 
     const auto deadzone = std::clamp(params.Get("deadzone", 0.15f), 0.0f, 1.0f);
@@ -1085,7 +1110,7 @@ std::unique_ptr<Common::Input::InputDevice> InputFactory::CreateMotionDevice(
         .range = range,
         .threshold = threshold,
         .offset = std::clamp(params.Get("offset_x", 0.0f), -1.0f, 1.0f),
-        .inverted = params.Get("invert_x", "+") == "-",
+        .inverted = invert_x,
     };
 
     const auto axis_y = params.Get("axis_y", 1);
@@ -1094,7 +1119,7 @@ std::unique_ptr<Common::Input::InputDevice> InputFactory::CreateMotionDevice(
         .range = range,
         .threshold = threshold,
         .offset = std::clamp(params.Get("offset_y", 0.0f), -1.0f, 1.0f),
-        .inverted = params.Get("invert_y", "+") != "+",
+        .inverted = invert_y,
     };
 
     const auto axis_z = params.Get("axis_z", 1);
@@ -1103,14 +1128,13 @@ std::unique_ptr<Common::Input::InputDevice> InputFactory::CreateMotionDevice(
         .range = range,
         .threshold = threshold,
         .offset = std::clamp(params.Get("offset_z", 0.0f), -1.0f, 1.0f),
-        .inverted = params.Get("invert_z", "+") != "+",
+        .inverted = invert_z,
     };
     input_engine->PreSetController(identifier);
     input_engine->PreSetAxis(identifier, axis_x);
     input_engine->PreSetAxis(identifier, axis_y);
     input_engine->PreSetAxis(identifier, axis_z);
-    return std::make_unique<InputFromAxisMotion>(identifier, axis_x, axis_y, axis_z, properties_x,
-                                                 properties_y, properties_z, input_engine.get());
+    return std::make_unique<InputFromAxisMotion>(identifier, axis_x, axis_y, axis_z, properties_x, properties_y, properties_z, input_engine.get());
 }
 
 std::unique_ptr<Common::Input::InputDevice> InputFactory::CreateCameraDevice(

@@ -155,6 +155,12 @@ void NPad::ControllerUpdate(Kernel::KernelCore& kernel, Core::HID::ControllerTri
         ControllerUpdate(kernel, Core::HID::ControllerTriggerType::Battery, controller_idx);
         return;
     }
+    // Controllers report connection and battery changes from the input thread as soon as they
+    // are set up, which can be before the HID service activated its applet resource.
+    const auto applet_resource = applet_resource_holder.applet_resource;
+    if (applet_resource == nullptr) {
+        return;
+    }
 
     for (std::size_t aruid_index = 0; aruid_index < AruidIndexMax; aruid_index++) {
         if (controller_idx >= controller_data[aruid_index].size()) {

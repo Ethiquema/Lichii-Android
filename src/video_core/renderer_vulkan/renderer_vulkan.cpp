@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <utility>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -55,23 +57,6 @@ constexpr VkExtent2D CaptureImageSize{
     .width = VideoCore::Capture::LinearWidth,
     .height = VideoCore::Capture::LinearHeight,
 };
-
-#ifdef HAS_LSFG
-[[nodiscard]] VkExtent2D GuestExtent(std::span<const Tegra::FramebufferConfig> framebuffers) {
-    if (framebuffers.empty()) {
-        return VkExtent2D{};
-    }
-
-    const auto& framebuffer = framebuffers.front();
-    if (framebuffer.crop_rect.IsEmpty()) {
-        return VkExtent2D{.width = framebuffer.width, .height = framebuffer.height};
-    }
-    return VkExtent2D{
-        .width = static_cast<u32>(framebuffer.crop_rect.GetWidth()),
-        .height = static_cast<u32>(framebuffer.crop_rect.GetHeight()),
-    };
-}
-#endif
 
 constexpr VkExtent3D CaptureImageExtent{
     .width = VideoCore::Capture::LinearWidth,
@@ -183,10 +168,7 @@ try
                   scheduler,
                   PresentFiltersForAppletCapture)
     , rasterizer(render_window, gpu, device_memory, device, memory_allocator, state_tracker, scheduler)
-#ifdef HAS_LSFG
-    , frame_gen(memory_allocator, scheduler)
-#endif
-{
+    , frame_gen(memory_allocator, scheduler) {
 
     if (Settings::values.renderer_force_max_clock.GetValue() && device.ShouldBoostClocks()) {
         turbo_mode.emplace(instance, dld);
@@ -205,16 +187,35 @@ try
 
 RendererVulkan::~RendererVulkan() {
     scheduler.RegisterOnSubmit([] {});
-    void(device.GetLogical().WaitIdle());
+    scheduler.Finish();
+    {
+        std::scoped_lock lock{scheduler.submit_mutex};
+        void(device.GetLogical().WaitIdle());
+    }
 }
 
 void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebuffers) {
-    const bool trace = Common::DkbFrameTrace::Enabled();
-    const auto entered = trace ? std::chrono::steady_clock::now()
-                               : std::chrono::steady_clock::time_point{};
+    u32 pace_index = 0;
     SCOPE_EXIT {
-        render_window.OnFrameDisplayed();
+        render_window.OnFrameDisplayed(pace_index + 1);
     };
+
+    // Swapchain::Create leaves the format undefined while the surface has a zero extent (for
+    // example a minimized window). Creating the present frame image with VK_FORMAT_UNDEFINED
+    // makes the NVIDIA driver divide by zero, and there is no swapchain to present to anyway.
+    // This also covers the applet capture frame, which is allocated through the same present
+    // manager.
+    if (swapchain.GetImageFormat() == VK_FORMAT_UNDEFINED) {
+        static bool logged = false;
+        if (!std::exchange(logged, true)) {
+            LOG_WARNING(Render_Vulkan, "Skipping composite while the swapchain has no format");
+        }
+        // Still end the frame so fences and caches advance as they would after a presented frame.
+        gpu.RendererFrameEndNotify();
+        rasterizer.TickFrame();
+        scheduler.Flush();
+        return;
+    }
 
     RenderAppletCaptureLayer(framebuffers);
 
@@ -235,35 +236,39 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
                                present_manager.SwapchainImageCount(),
                                swapchain.GetImageViewFormat());
 
+    std::chrono::nanoseconds pace_step{};
 #ifdef HAS_LSFG
     void(frame_gen.WantedGenerations(present_manager.MaxExtraFrames()));
 
-    frame_gen.Process(device, frame, present_manager.SwapchainImageFormat(),
-                      GuestExtent(framebuffers));
+    const FrameGenSource source = blit_swapchain.GenerationSource();
+    frame_gen.Process(device, source.view, source.extent);
 
+    const Layout::FramebufferLayout layout = render_window.GetFramebufferLayout();
     const size_t generated_frames = frame_gen.GeneratedFrameCount();
+    const std::chrono::nanoseconds generated_step = frame_gen.PaceStep();
     for (size_t generation = 0; generation < generated_frames; ++generation) {
-        Frame* generated = present_manager.GetRenderFrame();
-        blit_swapchain.PrepareFrame(device, generated, render_window.GetFramebufferLayout());
-        frame_gen.GenerateInto(device, generated, generation);
+        if (!blit_swapchain.IsGenerationFree(generation)) {
+            break;
+        }
+        Frame* const generated = present_manager.TryGetRenderFrame();
+        if (generated == nullptr) {
+            break;
+        }
+        blit_swapchain.PrepareFrame(device, generated, layout);
+        const LsfgImage& output = frame_gen.Generate(device, generation);
+        blit_swapchain.DrawGenerated(device, generated, layout, generation, output.Handle(),
+                                     output.View());
         scheduler.Flush(*generated->render_ready);
-        present_manager.Present(generated);
+        present_manager.Present(generated, static_cast<u32>(generation), generated_step);
+        pace_index = static_cast<u32>(generation + 1);
+        pace_step = generated_step;
     }
-#endif
 
-    if (trace) {
-        scheduler.MarkFrameEnd(++trace_frame);
-    }
     scheduler.Flush(*frame->render_ready);
 
-    const auto presenting = trace ? std::chrono::steady_clock::now()
-                                  : std::chrono::steady_clock::time_point{};
-    present_manager.Present(frame);
-    const auto presented = trace ? std::chrono::steady_clock::now()
-                                 : std::chrono::steady_clock::time_point{};
+    present_manager.Present(frame, pace_index, pace_step);
 #ifdef HAS_LSFG
     scheduler.DispatchWork();
-#endif
 
     gpu.RendererFrameEndNotify();
     rasterizer.TickFrame();
@@ -326,7 +331,6 @@ vk::Buffer RendererVulkan::RenderToBuffer(std::span<const Tegra::FramebufferConf
         f.image =
             CreateWrappedImage(memory_allocator, VkExtent2D{layout.width, layout.height}, format);
         f.image_view = CreateWrappedImageView(device, f.image, format);
-        f.framebuffer = blit_capture.CreateFramebuffer(device, layout, *f.image_view, format);
         return f;
     }();
 
@@ -404,13 +408,15 @@ void RendererVulkan::RenderAppletCaptureLayer(
     if (!applet_frame.image) {
         applet_frame.image = CreateWrappedImage(memory_allocator, CaptureImageSize, CaptureFormat);
         applet_frame.image_view = CreateWrappedImageView(device, applet_frame.image, CaptureFormat);
-        applet_frame.framebuffer = blit_applet.CreateFramebuffer(device,
-            VideoCore::Capture::Layout, *applet_frame.image_view, CaptureFormat);
     }
 
+    // The capture is drawn every frame. With one set of layer resources each frame waited for
+    // the host GPU to finish the previous one; rotating through three lets the GPU thread stay
+    // ahead like the swapchain blit does.
+    constexpr size_t CaptureResourceSets = 3;
     scheduler.RequestOutsideRenderPassOperationContext();
-    blit_applet.DrawToFrame(device, rasterizer, &applet_frame, capture_layers, VideoCore::Capture::Layout, 1,
-                            CaptureFormat);
+    blit_applet.DrawToFrame(device, rasterizer, &applet_frame, capture_layers, VideoCore::Capture::Layout,
+                            CaptureResourceSets, CaptureFormat);
 }
 
 } // namespace Vulkan

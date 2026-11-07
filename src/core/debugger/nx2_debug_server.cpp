@@ -54,8 +54,8 @@ private:
         boost::system::error_code error;
         socket.non_blocking(true, error);
         std::array<char, 1> byte;
-        const size_t length = socket.receive(boost::asio::buffer(byte),
-                                             tcp::socket::message_peek, error);
+        const size_t length =
+            socket.receive(boost::asio::buffer(byte), tcp::socket::message_peek, error);
         return error ? error != boost::asio::error::would_block : length == 0;
     }
 
@@ -91,8 +91,8 @@ std::optional<Endpoint> ParseEndpoint(std::string_view text, std::string& error)
         host = "127.0.0.1";
     }
     if (host != "127.0.0.1" && host != "::1") {
-        error = fmt::format("host {} is not loopback; only 127.0.0.1, ::1 and localhost are allowed",
-                            host);
+        error = fmt::format(
+            "host {} is not loopback; only 127.0.0.1, ::1 and localhost are allowed", host);
         return std::nullopt;
     }
     unsigned port = 0;

@@ -11,19 +11,30 @@ constexpr u64 NativeAddressMapMagic = 0x50414d4e4544454eULL;
 inline bool HasNativeAddressMap(std::span<const u64> code) {
     return code.size() >= 2 && code.back() == NativeAddressMapMagic;
 }
-inline void AppendNativeAddressMap(std::vector<u64>& code, std::span<const u32> offsets) {
+inline void AppendNativeAddressMap(std::vector<u64>& code, std::span<const u32> offsets,
+                                   std::optional<u32> end_address = std::nullopt) {
     if (offsets.empty()) return;
     for (u32 index : offsets) code.push_back(0x50U + index * 8 + ((index + 1) / 3) * 8);
-    code.push_back(offsets.size());
+    if (end_address) code.push_back(*end_address);
+    code.push_back(offsets.size() + static_cast<size_t>(end_address.has_value()));
     code.push_back(NativeAddressMapMagic);
 }
-inline std::optional<u32> NativeProgramAddress(std::span<const u64> code, u32 address) {
-    if (!HasNativeAddressMap(code) || address % 16) return {};
+inline std::optional<u32> NativeProgramAddress(std::span<const u64> code, u32 address,
+                                               u32 source_base = 0) {
+    if (!HasNativeAddressMap(code) || address < source_base) return {};
+    address -= source_base;
+    if (address % 16) return {};
     const u64 count = code[code.size() - 2];
     if (!count || count > 65536 || count + 2 > code.size() || address / 16 >= count) return {};
     const size_t start = code.size() - static_cast<size_t>(count) - 2;
     const u64 target = code[start + address / 16];
     if (target < 0x50 || target >= start * 8 || target % 8 || target % 32 == 0) return {};
+    // A computed entry at this barrier would bypass its required outer SYNC.
+    if (address >= 16 && code[target / 8] == 0xef98000000070100ULL) {
+        const u64 previous = code[start + address / 16 - 1];
+        if (previous >= 0x50 && previous < start * 8 && previous % 8 == 0 &&
+            code[previous / 8] == 0xf0f800000007000fULL) return {};
+    }
     return static_cast<u32>(target);
 }
 } // namespace Shader::Ampere

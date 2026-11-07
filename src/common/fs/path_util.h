@@ -26,8 +26,6 @@ enum class EdenPath {
     LosslessDir,    // Where the user-supplied Lossless Scaling library is stored.
     NANDDir,        // Where the emulated NAND is stored.
     PlayTimeDir,    // Where play time data is stored.
-    PostPresetDir,
-    PostShaderDir,  // Where user post-processing shaders are stored.
     SaveDir,        // Where save data is stored.
     ScreenshotsDir, // Where yuzu screenshots are stored.
     SDMCDir,        // Where the emulated SDMC is stored.
@@ -39,6 +37,10 @@ enum class EdenPath {
 
 // migration/compat dirs
 enum EmuPath {
+    LegacyEdenDir,
+    LegacyEdenConfigDir,
+    LegacyEdenCacheDir,
+
     CitronDir,
     CitronConfigDir,
     CitronCacheDir,
@@ -369,7 +371,8 @@ enum class DirectorySeparator {
 }
 
 // Gets the extension of the filename
-[[nodiscard]] inline std::string_view GetExtensionFromFilename(const std::string_view name) noexcept {
+[[nodiscard]] inline std::string_view GetExtensionFromFilename(
+    const std::string_view name) noexcept {
     if (auto const index = name.rfind('.'); index != std::string_view::npos)
         return name.substr(index + 1);
     return {};

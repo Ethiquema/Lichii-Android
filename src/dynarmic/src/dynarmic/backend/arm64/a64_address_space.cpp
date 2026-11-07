@@ -338,12 +338,9 @@ static void* EmitExclusiveWrite128CallTrampoline(oaknut::CodeGenerator& code, co
     oaknut::Label l_addr, l_this;
 
     auto fn = [](const A64::UserConfig& conf, A64::VAddr vaddr, Vector value) -> u32 {
-        return conf.global_monitor->DoExclusiveOperation<Vector>(conf.processor_id, vaddr,
-                                                                 [&](Vector expected) -> bool {
-                                                                     return conf.callbacks->MemoryWriteExclusive128(vaddr, value, expected);
-                                                                 })
-                 ? 0
-                 : 1;
+        return conf.global_monitor->DoExclusiveOperation<Vector>(conf.processor_id, vaddr, [&](Vector expected) -> bool {
+            return conf.callbacks->MemoryWriteExclusive128(vaddr, value, expected);
+        }) ? 0 : 1;
     };
 
     void* target = code.xptr<void*>();
@@ -371,7 +368,11 @@ A64AddressSpace::A64AddressSpace(const A64::UserConfig& conf)
 void A64AddressSpace::GenerateIR(IR::Block& ir_block, IR::LocationDescriptor descriptor) const {
     ir_block.Reset(descriptor);
     const auto get_code = [this](u64 vaddr) { return conf.callbacks->MemoryReadCode(vaddr); };
-    A64::Translate(ir_block, A64::LocationDescriptor{descriptor}, get_code, {conf.define_unpredictable_behaviour, conf.wall_clock_cntpct});
+    A64::Translate(ir_block, A64::LocationDescriptor{descriptor}, get_code,
+                   {.define_unpredictable_behaviour = conf.define_unpredictable_behaviour,
+                    .wall_clock_cntpct = conf.wall_clock_cntpct,
+                    .enable_pauth_returns = conf.enable_pauth_returns,
+                    .address_space_bits = conf.page_table_address_space_bits});
     Optimization::Optimize(ir_block, conf, {});
 }
 
@@ -583,10 +584,8 @@ EmitConfig A64AddressSpace::GetEmitConfig() {
 
         .page_table_pointer = std::bit_cast<u64>(conf.page_table),
         .page_table_address_space_bits = conf.page_table_address_space_bits,
-        .page_table_pointer_mask = conf.page_table_pointer_mask,
+        .page_table_pointer_mask_bits = conf.page_table_pointer_mask_bits,
         .page_table_log2_stride = conf.page_table_log2_stride,
-        .page_table_marked_bit = conf.page_table_marked_bit,
-        .page_table_sign_extension = conf.page_table_sign_extension,
         .silently_mirror_page_table = conf.silently_mirror_page_table,
         .absolute_offset_page_table = conf.absolute_offset_page_table,
         .detect_misaligned_access_via_page_table = conf.detect_misaligned_access_via_page_table,

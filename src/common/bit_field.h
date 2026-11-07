@@ -159,7 +159,7 @@ private:
     StorageTypeWithEndian storage;
 
     static_assert(bits + position <= CHAR_BIT * sizeof(T), "Bitfield out of range");
-    // And, you know, just in case people specify something stupid like bits=position=0x80000000
+    // And, you know, just in case people specify something odd like bits=position=0x80000000
     static_assert(position < CHAR_BIT * sizeof(T), "Invalid position");
     static_assert(bits <= CHAR_BIT * sizeof(T), "Invalid number of bits");
     static_assert(bits > 0, "Invalid number of bits");

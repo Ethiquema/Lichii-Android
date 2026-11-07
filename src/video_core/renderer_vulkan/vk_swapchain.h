@@ -36,8 +36,7 @@ public:
         u32 width,
         u32 height);
 
-    /// Acquires the next image in the swapchain, waits as needed. Returns true when no image was
-    /// acquired (out of date) and the swapchain has to be recreated first.
+    /// Acquires the next image in the swapchain, waits as needed.
     /// `may_flush`: false on the async present thread (see Scheduler::Wait).
     bool AcquireNextImage(bool may_flush = true);
 
@@ -51,11 +50,6 @@ public:
 
     bool IsCreated() const {
         return static_cast<bool>(swapchain);
-    }
-
-    /// Returns true when the swapchain is outdated.
-    bool IsOutDated() const {
-        return is_outdated;
     }
 
     /// Returns true when the swapchain is suboptimal.
@@ -73,10 +67,6 @@ public:
 
     std::size_t GetImageIndex() const {
         return image_index;
-    }
-
-    std::size_t GetFrameIndex() const {
-        return frame_index;
     }
 
     VkImage GetImageIndex(std::size_t index) const {
@@ -118,7 +108,6 @@ public:
 private:
     void CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities);
     void CreateSemaphores();
-    void CreateImageViews();
 
     void Destroy();
 

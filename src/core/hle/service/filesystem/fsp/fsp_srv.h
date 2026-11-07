@@ -7,6 +7,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include "core/file_sys/fs_save_data_types.h"
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/filesystem/fsp/fsp_types.h"
@@ -115,6 +116,7 @@ private:
                                     s64 available_size, s64 journal_size);
     Result GetCacheStorageSize(s32 index, Out<s64> out_data_size, Out<s64> out_journal_size);
 
+    std::optional<FunctionInfoBase> FindRequest(u32 key) override;
     FileSystemController& fsc;
     const FileSys::ContentProvider& content_provider;
     const Core::Reporter& reporter;
@@ -124,6 +126,7 @@ private:
     u32 access_log_program_index = 0;
     AccessLogMode access_log_mode = AccessLogMode::None;
     u64 program_id = 0;
+    std::string homebrew_initial_cwd;
     std::shared_ptr<SaveDataController> save_data_controller;
     std::shared_ptr<RomFsController> romfs_controller;
 };

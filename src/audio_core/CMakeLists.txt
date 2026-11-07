@@ -15,10 +15,6 @@ add_library(audio_core STATIC
     adsp/apps/audio_renderer/command_list_processor.h
     adsp/apps/opus/opus_decoder.cpp
     adsp/apps/opus/opus_decoder.h
-    adsp/apps/opus/opus_decode_object.cpp
-    adsp/apps/opus/opus_decode_object.h
-    adsp/apps/opus/opus_multistream_decode_object.cpp
-    adsp/apps/opus/opus_multistream_decode_object.h
     adsp/apps/opus/shared_memory.h
     audio_core.cpp
     audio_core.h
@@ -225,27 +221,27 @@ if (MSVC)
     )
 else()
     target_compile_options(audio_core PRIVATE
-        $<$<COMPILE_LANGUAGE:C,CXX>:-Wconversion>
+        $<$<COMPILE_LANGUAGE:C,CXX>:-Werror=conversion>
         $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-sign-conversion>)
 endif()
 
-target_include_directories(audio_core PRIVATE ${OPUS_INCLUDE_DIRS})
-target_link_libraries(audio_core PUBLIC common core Opus::opus)
-
-if (ENABLE_CUBEB)
-    target_sources(audio_core PRIVATE
-        sink/cubeb_sink.cpp
-        sink/cubeb_sink.h)
-
-    target_link_libraries(audio_core PRIVATE cubeb::cubeb)
-    target_compile_definitions(audio_core PRIVATE HAVE_CUBEB=1)
+if (YUZU_USE_EXTERNAL_FFMPEG)
+    add_dependencies(audio_core ffmpeg-build)
 endif()
+target_include_directories(audio_core PUBLIC ${FFmpeg_INCLUDE_DIR})
+target_link_libraries(audio_core PRIVATE ${FFmpeg_LIBRARIES})
+target_link_options(audio_core PRIVATE ${FFmpeg_LDFLAGS})
+
+target_link_libraries(audio_core PUBLIC common core)
 
 target_sources(audio_core PRIVATE
     sink/sdl3_sink.cpp
     sink/sdl3_sink.h)
-
 target_link_libraries(audio_core PRIVATE SDL3::SDL3)
 target_compile_definitions(audio_core PRIVATE HAVE_SDL3)
+
+if (ANDROID)
+    target_link_libraries(audio_core PRIVATE OpenSLES)
+endif()
 
 create_target_directory_groups(audio_core)

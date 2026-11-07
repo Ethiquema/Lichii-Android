@@ -10,7 +10,6 @@
 #include <array>
 #include <map>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -251,7 +250,7 @@ struct Values {
 
     // Cpu
     SwitchableSetting<CpuBackend, true> cpu_backend{linkage,
-#ifdef HAS_NCE
+#if defined(HAS_NCE) && !defined(__ANDROID__)
                                                     CpuBackend::Nce,
 #else
                                                     CpuBackend::Dynarmic,
@@ -346,7 +345,12 @@ struct Values {
 
     // Graphics Settings
     ResolutionScalingInfo resolution_info{};
-    SwitchableSetting<ResolutionSetup> resolution_setup{linkage, ResolutionSetup::Res1X,
+    SwitchableSetting<ResolutionSetup> resolution_setup{linkage,
+#ifdef __ANDROID__
+                                                        ResolutionSetup::Res1_2X,
+#else
+                                                        ResolutionSetup::Res1X,
+#endif
                                                         "resolution_setup", Category::Renderer};
 
     SwitchableSetting<VSyncMode, true> vsync_mode{linkage,
@@ -358,16 +362,12 @@ struct Values {
                                                   true};
 
     SwitchableSetting<ScalingFilter> scaling_filter{linkage,
-                                                    ScalingFilter::ScaleForce,
+                                                    ScalingFilter::NearestNeighbor,
                                                     "scaling_filter",
                                                     Category::Renderer,
                                                     Specialization::Default,
                                                     true,
                                                     true};
-    // A Switch 2 game's own DLSS network (translated) in place of AMD FSR 3.1, where it runs and
-    // its output passes the checks.
-    SwitchableSetting<bool> game_dlss_network{linkage, false, "game_dlss_network",
-                                              Category::Renderer};
     SwitchableSetting<int, true> fsr_sharpening_slider{linkage,
 #ifdef __ANDROID__
                                                        0,
@@ -382,8 +382,6 @@ struct Values {
                                                            Specialization::Percentage,
                                                        true,
                                                        true};
-    // NVIDIA DLSS (through NVIDIA Streamline) in place of a game's DLSS.
-    SwitchableSetting<bool> nvidia_dlss{linkage, false, "nvidia_dlss", Category::Renderer};
     SwitchableSetting<AspectRatio, true> aspect_ratio{linkage,
                                                       AspectRatio::R16_9,
                                                       "aspect_ratio",
@@ -393,7 +391,7 @@ struct Values {
                                                       true};
 
     SwitchableSetting<AntiAliasing> anti_aliasing{linkage,
-                                                  AntiAliasing::Fxaa,
+                                                  AntiAliasing::None,
                                                   "anti_aliasing",
                                                   Category::Renderer,
                                                   Specialization::Default,
@@ -579,10 +577,8 @@ struct Values {
                                                                true,
                                                                true};
 
-    // BC3 by default: GPUs without ASTC otherwise keep ASTC textures as RGBA8, four times the
-    // VRAM (Mario Kart World: 7.3-7.8 GB of an 8 GB card, the rest paged into system RAM).
     SwitchableSetting<AstcRecompression, true> astc_recompression{linkage,
-                                                                  AstcRecompression::Bc3,
+                                                                  AstcRecompression::Uncompressed,
                                                                   "astc_recompression",
                                                                   Category::RendererAdvanced};
 
@@ -610,11 +606,6 @@ struct Values {
 
     SwitchableSetting<bool> use_video_framerate{linkage, false, "use_video_framerate",
                                                 Category::RendererAdvanced};
-
-    // Mario Kart World: select a fixed or dynamic in-game frame-rate mode (loader/nso.cpp).
-    SwitchableSetting<bool> mkw_30fps{linkage, false, "mkw_30fps", Category::RendererAdvanced};
-    SwitchableSetting<bool> mkw_dynamic_fps{linkage, false, "mkw_dynamic_fps",
-                                            Category::RendererAdvanced};
 
     SwitchableSetting<bool> use_reactive_flushing{linkage,
 #ifdef __ANDROID__
@@ -662,13 +653,8 @@ struct Values {
                                                         Specialization::Default,
                                                         true,
                                                         true};
-    SwitchableSetting<bool> async_presentation{linkage,
-#ifdef __ANDROID__
-                                               true,
-#else
-                                               false,
-#endif
-                                               "async_presentation", Category::RendererHacks};
+    SwitchableSetting<bool> async_presentation{linkage, false, "async_presentation",
+                                               Category::RendererHacks};
 
     SwitchableSetting<bool> fix_bloom_effects{linkage, false, "fix_bloom_effects",
                                                      Category::RendererHacks};
@@ -676,7 +662,13 @@ struct Values {
     SwitchableSetting<bool> emulate_bgr565{linkage, false, "emulate_bgr565",
                                             Category::RendererHacks};
 
-    SwitchableSetting<bool> use_asynchronous_shaders{linkage, false, "use_asynchronous_shaders",
+    SwitchableSetting<bool> use_asynchronous_shaders{linkage,
+#ifdef __ANDROID__
+                                                     true,
+#else
+                                                     false,
+#endif
+                                                     "use_asynchronous_shaders",
                                                      Category::RendererHacks};
 
     SwitchableSetting<GpuUnswizzleSize> gpu_unswizzle_texture_size{linkage,
@@ -781,7 +773,11 @@ struct Values {
     Setting<s32> current_user{linkage, 0, "current_user", Category::System};
 
     SwitchableSetting<ConsoleMode> use_docked_mode{linkage,
+#ifdef __ANDROID__
                                                    ConsoleMode::Handheld,
+#else
+                                                   ConsoleMode::Docked,
+#endif
                                                    "use_docked_mode",
                                                    Category::System,
                                                    Specialization::Radio,
@@ -999,11 +995,6 @@ u64 GetCurrentProgramID();
 // Whether the program being loaded is a Switch 2 one (set by the core before the GPU starts).
 void SetCurrentProgramIsSwitch2(bool is_switch2);
 bool CurrentProgramIsSwitch2();
-
-// The ASTC recompression in effect: astc_recompression, unless the renderer picked another one
-// for the running program (the configuration is left as is). The core clears it on load.
-AstcRecompression GetAstcRecompression();
-void SetAstcRecompressionOverride(std::optional<AstcRecompression> recompression);
 
 bool IsOpenGL();
 

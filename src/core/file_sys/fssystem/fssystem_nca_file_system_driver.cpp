@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
@@ -93,6 +93,11 @@ Result NcaFileSystemDriver::OpenStorageImpl(VirtualFile* out, NcaFsHeaderReader*
     // Initialize our header reader for the fs index.
     R_TRY(out_header_reader->Initialize(*m_reader, fs_index));
 
+    // NCZ files serve already-decrypted body data (CTR sections are stored decrypted).
+    // Skip the AES layers so we don't decrypt plaintext twice.
+    const bool is_pre_decrypted =
+        m_reader->GetStorage() && m_reader->GetStorage()->HasDecryptedSections();
+
     // Declare the storage we're opening.
     VirtualFile storage;
 
@@ -158,7 +163,7 @@ Result NcaFileSystemDriver::OpenStorageImpl(VirtualFile* out, NcaFsHeaderReader*
             out_header_reader->GetPatchMetaDataHashDataInfo()));
     }
 
-    if (patch_info.HasAesCtrExTable()) {
+    if (patch_info.HasAesCtrExTable() && !is_pre_decrypted) {
         // Check the encryption type.
         ASSERT(out_header_reader->GetEncryptionType() == NcaFsHeader::EncryptionType::None ||
                out_header_reader->GetEncryptionType() == NcaFsHeader::EncryptionType::AesCtrEx ||
@@ -196,32 +201,34 @@ Result NcaFileSystemDriver::OpenStorageImpl(VirtualFile* out, NcaFsHeaderReader*
         }
     } else {
         // Create the appropriate storage for the encryption type.
-        switch (out_header_reader->GetEncryptionType()) {
-        case NcaFsHeader::EncryptionType::None:
-            // If there's no encryption, use the base storage we made previously.
-            break;
-        case NcaFsHeader::EncryptionType::AesXts:
-            R_TRY(this->CreateAesXtsStorage(std::addressof(storage), std::move(storage),
-                                            fs_data_offset));
-            break;
-        case NcaFsHeader::EncryptionType::AesCtr:
-            R_TRY(this->CreateAesCtrStorage(std::addressof(storage), std::move(storage),
-                                            fs_data_offset, out_header_reader->GetAesCtrUpperIv(),
-                                            AlignmentStorageRequirement::None));
-            break;
-        case NcaFsHeader::EncryptionType::AesCtrSkipLayerHash: {
-            // Create the aes ctr storage.
-            VirtualFile aes_ctr_storage;
-            R_TRY(this->CreateAesCtrStorage(std::addressof(aes_ctr_storage), storage,
-                                            fs_data_offset, out_header_reader->GetAesCtrUpperIv(),
-                                            AlignmentStorageRequirement::None));
+        if (!is_pre_decrypted) {
+            switch (out_header_reader->GetEncryptionType()) {
+            case NcaFsHeader::EncryptionType::None:
+                // If there's no encryption, use the base storage we made previously.
+                break;
+            case NcaFsHeader::EncryptionType::AesXts:
+                R_TRY(this->CreateAesXtsStorage(std::addressof(storage), std::move(storage),
+                                                fs_data_offset));
+                break;
+            case NcaFsHeader::EncryptionType::AesCtr:
+                R_TRY(this->CreateAesCtrStorage(std::addressof(storage), std::move(storage),
+                                                fs_data_offset, out_header_reader->GetAesCtrUpperIv(),
+                                                AlignmentStorageRequirement::None));
+                break;
+            case NcaFsHeader::EncryptionType::AesCtrSkipLayerHash: {
+                // Create the aes ctr storage.
+                VirtualFile aes_ctr_storage;
+                R_TRY(this->CreateAesCtrStorage(std::addressof(aes_ctr_storage), storage,
+                                                fs_data_offset, out_header_reader->GetAesCtrUpperIv(),
+                                                AlignmentStorageRequirement::None));
 
-            // Create region switch storage.
-            R_TRY(this->CreateRegionSwitchStorage(std::addressof(storage), out_header_reader,
-                                                  std::move(storage), std::move(aes_ctr_storage)));
-        } break;
-        default:
-            R_THROW(ResultInvalidNcaFsHeaderEncryptionType);
+                // Create region switch storage.
+                R_TRY(this->CreateRegionSwitchStorage(std::addressof(storage), out_header_reader,
+                                                      std::move(storage), std::move(aes_ctr_storage)));
+            } break;
+            default:
+                R_THROW(ResultInvalidNcaFsHeaderEncryptionType);
+            }
         }
 
         // Potentially save storages to our context.
@@ -382,21 +389,25 @@ Result NcaFileSystemDriver::OpenIndirectableStorageAsOriginal(
     }
 
     // Create the appropriate storage for the encryption type.
-    switch (header_reader->GetEncryptionType()) {
-    case NcaFsHeader::EncryptionType::None:
-        // If there's no encryption, use the base storage we made previously.
-        break;
-    case NcaFsHeader::EncryptionType::AesXts:
-        R_TRY(
-            this->CreateAesXtsStorage(std::addressof(storage), std::move(storage), fs_data_offset));
-        break;
-    case NcaFsHeader::EncryptionType::AesCtr:
-        R_TRY(this->CreateAesCtrStorage(std::addressof(storage), std::move(storage), fs_data_offset,
-                                        header_reader->GetAesCtrUpperIv(),
-                                        AlignmentStorageRequirement::CacheBlockSize));
-        break;
-    default:
-        R_THROW(ResultInvalidNcaFsHeaderEncryptionType);
+    const bool is_pre_decrypted =
+        m_reader->GetStorage() && m_reader->GetStorage()->HasDecryptedSections();
+    if (!is_pre_decrypted) {
+        switch (header_reader->GetEncryptionType()) {
+        case NcaFsHeader::EncryptionType::None:
+            // If there's no encryption, use the base storage we made previously.
+            break;
+        case NcaFsHeader::EncryptionType::AesXts:
+            R_TRY(this->CreateAesXtsStorage(std::addressof(storage), std::move(storage),
+                                            fs_data_offset));
+            break;
+        case NcaFsHeader::EncryptionType::AesCtr:
+            R_TRY(this->CreateAesCtrStorage(std::addressof(storage), std::move(storage),
+                                            fs_data_offset, header_reader->GetAesCtrUpperIv(),
+                                            AlignmentStorageRequirement::CacheBlockSize));
+            break;
+        default:
+            R_THROW(ResultInvalidNcaFsHeaderEncryptionType);
+        }
     }
 
     // Set output storage.
@@ -431,6 +442,11 @@ Result NcaFileSystemDriver::CreateAesCtrStorage(
     // Check pre-conditions.
     ASSERT(out != nullptr);
     ASSERT(base_storage != nullptr);
+
+    if (m_reader->GetStorage() && m_reader->GetStorage()->HasDecryptedSections()) {
+        *out = std::move(base_storage);
+        R_SUCCEED();
+    }
 
     // Create the iv.
     std::array<u8, AesCtrStorage::IvSize> iv{};
@@ -468,6 +484,11 @@ Result NcaFileSystemDriver::CreateAesXtsStorage(VirtualFile* out, VirtualFile ba
     // Check pre-conditions.
     ASSERT(out != nullptr);
     ASSERT(base_storage != nullptr);
+
+    if (m_reader->GetStorage() && m_reader->GetStorage()->HasDecryptedSections()) {
+        *out = std::move(base_storage);
+        R_SUCCEED();
+    }
 
     // Create the iv.
     std::array<u8, AesXtsStorage::IvSize> iv{};
@@ -809,6 +830,12 @@ Result NcaFileSystemDriver::CreateAesCtrExStorageMetaStorage(
     // Validate preconditions.
     ASSERT(out != nullptr);
     ASSERT(base_storage != nullptr);
+
+    if (m_reader->GetStorage() && m_reader->GetStorage()->HasDecryptedSections()) {
+        *out = std::move(base_storage);
+        R_SUCCEED();
+    }
+
     ASSERT(encryption_type == NcaFsHeader::EncryptionType::None ||
            encryption_type == NcaFsHeader::EncryptionType::AesCtrEx ||
            encryption_type == NcaFsHeader::EncryptionType::AesCtrExSkipLayerHash);
@@ -870,6 +897,11 @@ Result NcaFileSystemDriver::CreateAesCtrExStorage(
     ASSERT(base_storage != nullptr);
     ASSERT(meta_storage != nullptr);
     ASSERT(patch_info.HasAesCtrExTable());
+
+    if (m_reader->GetStorage() && m_reader->GetStorage()->HasDecryptedSections()) {
+        *out = std::move(base_storage);
+        R_SUCCEED();
+    }
 
     // Read the bucket tree header.
     BucketTree::Header header;
@@ -964,7 +996,7 @@ Result NcaFileSystemDriver::CreateIndirectStorageMetaStorage(VirtualFile* out,
 
     // Check that we're within range.
     R_UNLESS(patch_info.indirect_offset + patch_info.indirect_size <= base_size,
-             ResultNcaBaseStorageOutOfRangeE);
+             ResultInvalidNcaPatchInfoIndirectOffset);
 
     // Create the meta storage.
     auto meta_storage = std::make_shared<OffsetVfsFile>(base_storage, patch_info.indirect_size,
@@ -1001,7 +1033,7 @@ Result NcaFileSystemDriver::CreateIndirectStorage(
     const auto node_size = IndirectStorage::QueryNodeStorageSize(header.entry_count);
     const auto entry_size = IndirectStorage::QueryEntryStorageSize(header.entry_count);
     R_UNLESS(node_size + entry_size <= patch_info.indirect_size,
-             ResultInvalidNcaIndirectStorageOutOfRange);
+             ResultNcaIndirectStorageOutOfRange);
 
     // Get the indirect data size.
     const s64 indirect_data_size = patch_info.indirect_offset;
@@ -1065,7 +1097,7 @@ Result NcaFileSystemDriver::CreatePatchMetaStorage(
 
     // Check that extents remain within range.
     R_UNLESS(patch_info.indirect_offset + patch_info.indirect_size <= base_size,
-             ResultNcaBaseStorageOutOfRangeE);
+             ResultInvalidNcaPatchInfoIndirectOffset);
     R_UNLESS(patch_info.aes_ctr_ex_offset + patch_info.aes_ctr_ex_size <= base_size,
              ResultNcaBaseStorageOutOfRangeB);
 
@@ -1303,9 +1335,9 @@ Result NcaFileSystemDriver::CreateIntegrityVerificationStorageImpl(
                 sizeof(level_hash_info));
 
     R_UNLESS(IntegrityMinLayerCount <= level_hash_info.max_layers,
-             ResultInvalidNcaHierarchicalIntegrityVerificationLayerCount);
+             ResultInvalidHierarchicalIntegrityVerificationLayerCount);
     R_UNLESS(level_hash_info.max_layers <= IntegrityMaxLayerCount,
-             ResultInvalidNcaHierarchicalIntegrityVerificationLayerCount);
+             ResultInvalidHierarchicalIntegrityVerificationLayerCount);
 
     // Get the base storage size.
     s64 base_storage_size = base_storage->GetSize();
@@ -1315,7 +1347,7 @@ Result NcaFileSystemDriver::CreateIntegrityVerificationStorageImpl(
     for (s32 i = 0; i < static_cast<s32>(level_hash_info.max_layers - 2); ++i) {
         const auto& layer_info = level_hash_info.info[i];
         R_UNLESS(layer_info_offset + layer_info.offset + layer_info.size <= base_storage_size,
-                 ResultNcaBaseStorageOutOfRangeD);
+                 ResultNcaFileSystemCorrupted);
 
         storage_info[i + 1] = std::make_shared<OffsetVfsFile>(base_storage,
                                                               layer_info.size,
@@ -1326,35 +1358,15 @@ Result NcaFileSystemDriver::CreateIntegrityVerificationStorageImpl(
     const auto& layer_info = level_hash_info.info[level_hash_info.max_layers - 2];
     const s64 last_layer_info_offset = layer_info_offset > 0 ? 0LL : layer_info.offset.Get();
     R_UNLESS(last_layer_info_offset + layer_info.size <= base_storage_size,
-             ResultNcaBaseStorageOutOfRangeD);
+             ResultNcaFileSystemCorrupted);
     if (layer_info_offset > 0) {
         R_UNLESS(last_layer_info_offset + layer_info.size <= layer_info_offset,
                  ResultRomNcaInvalidIntegrityLayerInfoOffset);
     }
-
-    switch (level_hash_info.max_layers - 1) {
-        case FileSys::HierarchicalIntegrityVerificationStorage::HierarchicalStorageInformation::MasterStorage:
-            storage_info.SetMasterHashStorage(std::make_shared<OffsetVfsFile>(std::move(base_storage), layer_info.size, last_layer_info_offset));
-            break;
-        case FileSys::HierarchicalIntegrityVerificationStorage::HierarchicalStorageInformation::Layer1Storage:
-            storage_info.SetLayer1HashStorage(std::make_shared<OffsetVfsFile>(std::move(base_storage), layer_info.size, last_layer_info_offset));
-            break;
-        case FileSys::HierarchicalIntegrityVerificationStorage::HierarchicalStorageInformation::Layer2Storage:
-            storage_info.SetLayer2HashStorage(std::make_shared<OffsetVfsFile>(std::move(base_storage), layer_info.size, last_layer_info_offset));
-            break;
-        case FileSys::HierarchicalIntegrityVerificationStorage::HierarchicalStorageInformation::Layer3Storage:
-            storage_info.SetLayer3HashStorage(std::make_shared<OffsetVfsFile>(std::move(base_storage), layer_info.size, last_layer_info_offset));
-            break;
-        case FileSys::HierarchicalIntegrityVerificationStorage::HierarchicalStorageInformation::Layer4Storage:
-            storage_info.SetLayer4HashStorage(std::make_shared<OffsetVfsFile>(std::move(base_storage), layer_info.size, last_layer_info_offset));
-            break;
-        case FileSys::HierarchicalIntegrityVerificationStorage::HierarchicalStorageInformation::Layer5Storage:
-            storage_info.SetLayer5HashStorage(std::make_shared<OffsetVfsFile>(std::move(base_storage), layer_info.size, last_layer_info_offset));
-            break;
-        case FileSys::HierarchicalIntegrityVerificationStorage::HierarchicalStorageInformation::DataStorage:
-            storage_info.SetDataStorage(std::make_shared<OffsetVfsFile>(std::move(base_storage), layer_info.size, last_layer_info_offset));
-            break;
-    }
+    storage_info[level_hash_info.max_layers - 1]
+        = std::make_shared<OffsetVfsFile>(std::move(base_storage),
+                                          layer_info.size,
+                                          last_layer_info_offset);
 
     // Make the integrity romfs storage.
     auto integrity_storage = std::make_shared<IntegrityRomFsStorage>();
@@ -1422,7 +1434,7 @@ Result NcaFileSystemDriver::CreateCompressedStorage(VirtualFile* out,
     const auto table_size = compression_info.bucket.size;
     const auto node_size = CompressedStorage::QueryNodeStorageSize(header.entry_count);
     const auto entry_size = CompressedStorage::QueryEntryStorageSize(header.entry_count);
-    R_UNLESS(node_size + entry_size <= table_size, ResultInvalidCompressedStorageSize);
+    R_UNLESS(node_size + entry_size <= table_size, ResultNcaInvalidCompressionInfo);
 
     // If we should, set the output meta storage.
     if (out_meta != nullptr) {

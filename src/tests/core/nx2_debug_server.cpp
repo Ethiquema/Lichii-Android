@@ -32,13 +32,15 @@ using nlohmann::json;
 Handlers EchoHandlers() {
     return {
         {"echo", [](const json& params, const ClientGone&) { return params; }},
-        {"fail", [](const json&, const ClientGone&) -> json { throw std::runtime_error{"broken"}; }},
+        {"fail",
+         [](const json&, const ClientGone&) -> json { throw std::runtime_error{"broken"}; }},
     };
 }
 
 void MapPage(Common::PageTable& table, u64 page, u8* host, Common::PageType type) {
     auto& entry = table.entries.GetAndFault(page);
-    entry.Store(false, Common::PageType::Memory, 1, reinterpret_cast<uintptr_t>(host) - (page << 12));
+    entry.Store(false, Common::PageType::Memory, 1,
+                reinterpret_cast<uintptr_t>(host) - (page << 12));
     if (type == Common::PageType::RasterizerCachedMemory) {
         entry.MarkRasterizerCached();
     }
@@ -100,14 +102,15 @@ TEST_CASE("Debug server requests map to handlers", "[core][nx2_debug_server]") {
             json{{"id", "x"}, {"result", json::object()}});
     REQUIRE(json::parse(Core::Nx2Debug::HandleRequest(handlers, R"({"id":1,"method":"fail"})")) ==
             json{{"id", 1}, {"error", "broken"}});
-    const json unknown = json::parse(Core::Nx2Debug::HandleRequest(handlers, R"({"id":2,"method":"nope"})"));
+    const json unknown =
+        json::parse(Core::Nx2Debug::HandleRequest(handlers, R"({"id":2,"method":"nope"})"));
     REQUIRE(unknown["id"] == 2);
     REQUIRE(unknown["error"].get<std::string>().find("unknown method") != std::string::npos);
     const json garbage = json::parse(Core::Nx2Debug::HandleRequest(handlers, "{not json"));
     REQUIRE(garbage["id"].is_null());
     REQUIRE(garbage.contains("error"));
-    const json bad_params =
-        json::parse(Core::Nx2Debug::HandleRequest(handlers, R"({"id":3,"method":"echo","params":[1]})"));
+    const json bad_params = json::parse(
+        Core::Nx2Debug::HandleRequest(handlers, R"({"id":3,"method":"echo","params":[1]})"));
     REQUIRE(bad_params.contains("error"));
 }
 
@@ -128,8 +131,7 @@ TEST_CASE("Debug server shader hashes need all 16 hex digits", "[core][nx2_debug
 
 TEST_CASE("Debug server base64 pads like RFC 4648", "[core][nx2_debug_server]") {
     const auto encode = [](std::string_view text) {
-        return Core::Nx2Debug::Base64(
-            {reinterpret_cast<const u8*>(text.data()), text.size()});
+        return Core::Nx2Debug::Base64({reinterpret_cast<const u8*>(text.data()), text.size()});
     };
     REQUIRE(encode("") == "");
     REQUIRE(encode("f") == "Zg==");
@@ -144,12 +146,13 @@ TEST_CASE("Debug server answers over loopback TCP", "[core][nx2_debug_server]") 
     boost::asio::io_context io;
     boost::asio::ip::tcp::socket socket{io};
     socket.connect({boost::asio::ip::make_address("127.0.0.1"), server.Port()});
-    const std::string requests =
-        "{\"id\":1,\"method\":\"echo\",\"params\":{\"n\":1}}\n\r\n{\"id\":2,\"method\":\"fail\"}\r\n";
+    const std::string requests = "{\"id\":1,\"method\":\"echo\",\"params\":{\"n\":1}}\n\r\n{\"id\":"
+                                 "2,\"method\":\"fail\"}\r\n";
     boost::asio::write(socket, boost::asio::buffer(requests));
     std::string input;
     for (int line = 0; line < 2; ++line) {
-        const size_t length = boost::asio::read_until(socket, boost::asio::dynamic_buffer(input), '\n');
+        const size_t length =
+            boost::asio::read_until(socket, boost::asio::dynamic_buffer(input), '\n');
         const json response = json::parse(input.substr(0, length - 1));
         input.erase(0, length);
         if (line == 0) {
@@ -163,7 +166,8 @@ TEST_CASE("Debug server answers over loopback TCP", "[core][nx2_debug_server]") 
 TEST_CASE("Debug control hands captures to the rasterizer once", "[core][nx2_debug_server]") {
     VideoCore::Nx2Debug::BeginSession();
     REQUIRE_FALSE(VideoCore::Nx2Debug::HasRequests());
-    VideoCore::Nx2Debug::RequestCapture({.id = 5, .directory = "dir", .sampled = true, .buffers = true});
+    VideoCore::Nx2Debug::RequestCapture(
+        {.id = 5, .directory = "dir", .sampled = true, .buffers = true});
     REQUIRE(VideoCore::Nx2Debug::HasRequests());
     const auto request = VideoCore::Nx2Debug::TakeCapture();
     REQUIRE(request);
@@ -179,7 +183,8 @@ TEST_CASE("Debug control hands captures to the rasterizer once", "[core][nx2_deb
     REQUIRE(result);
     REQUIRE(result->error == "disk full");
 
-    VideoCore::Nx2Debug::RequestCapture({.id = 6, .directory = "dir", .sampled = false, .buffers = false});
+    VideoCore::Nx2Debug::RequestCapture(
+        {.id = 6, .directory = "dir", .sampled = false, .buffers = false});
     VideoCore::Nx2Debug::CancelCapture(6);
     REQUIRE_FALSE(VideoCore::Nx2Debug::HasRequests());
 
@@ -215,7 +220,8 @@ TEST_CASE("Debug control counts reject generations", "[core][nx2_debug_server]")
     VideoCore::Nx2Debug::EndSession();
 }
 
-TEST_CASE("Debug memory reads guest pages and names the first unmapped byte", "[core][nx2_debug_server]") {
+TEST_CASE("Debug memory reads guest pages and names the first unmapped byte",
+          "[core][nx2_debug_server]") {
     GuestPages guest;
     for (u32 i = 0; i < 0x4000; ++i) {
         guest.backing[i] = static_cast<u8>(i * 7 + (i >> 12));
@@ -235,7 +241,8 @@ TEST_CASE("Debug memory reads guest pages and names the first unmapped byte", "[
             ((1ULL << 48) | 0x4000));
 }
 
-TEST_CASE("Debug memory search spans mapped pages, stops at limits and resumes", "[core][nx2_debug_server]") {
+TEST_CASE("Debug memory search spans mapped pages, stops at limits and resumes",
+          "[core][nx2_debug_server]") {
     GuestPages guest;
     constexpr std::array<u8, 5> pattern{0xde, 0xad, 0xbe, 0xef, 0x11};
     const auto plant = [&](u8* host, size_t first, size_t count) {
@@ -250,19 +257,23 @@ TEST_CASE("Debug memory search spans mapped pages, stops at limits and resumes",
     auto& memory = guest.process.GetMemory();
     const auto later = std::chrono::steady_clock::now() + 60s;
 
-    const auto all = Core::Nx2Debug::SearchGuestMemory(memory, pattern, 0x1000, 0x20000, 256, later);
+    const auto all =
+        Core::Nx2Debug::SearchGuestMemory(memory, pattern, 0x1000, 0x20000, 256, later);
     REQUIRE(all.hits == std::vector<u64>{0x4ffe, 0x7010, 0x8000, 0x8100});
     REQUIRE(all.complete);
     REQUIRE(all.scanned == 0x4000);
 
-    const auto first = Core::Nx2Debug::SearchGuestMemory(memory, pattern, 0x1000, 0x20000, 2, later);
+    const auto first =
+        Core::Nx2Debug::SearchGuestMemory(memory, pattern, 0x1000, 0x20000, 2, later);
     REQUIRE(first.hits == std::vector<u64>{0x4ffe, 0x7010});
     REQUIRE_FALSE(first.complete);
     REQUIRE(first.next == 0x7011);
-    const auto rest = Core::Nx2Debug::SearchGuestMemory(memory, pattern, first.next, 0x20000, 2, later);
+    const auto rest =
+        Core::Nx2Debug::SearchGuestMemory(memory, pattern, first.next, 0x20000, 2, later);
     REQUIRE(rest.hits == std::vector<u64>{0x8000, 0x8100});
 
-    const auto inside = Core::Nx2Debug::SearchGuestMemory(memory, pattern, 0x4fff, 0x8004, 256, later);
+    const auto inside =
+        Core::Nx2Debug::SearchGuestMemory(memory, pattern, 0x4fff, 0x8004, 256, later);
     REQUIRE(inside.hits == std::vector<u64>{0x7010});
 
     const auto expired = Core::Nx2Debug::SearchGuestMemory(memory, pattern, 0x4000, 0x9000, 256,
@@ -347,7 +358,8 @@ TEST_CASE("Debug server tells a waiting handler that its client left", "[core][n
         boost::asio::io_context io;
         boost::asio::ip::tcp::socket socket{io};
         socket.connect({boost::asio::ip::make_address("127.0.0.1"), server.Port()});
-        boost::asio::write(socket, boost::asio::buffer(std::string{"{\"id\":1,\"method\":\"wait\"}\n"}));
+        boost::asio::write(socket,
+                           boost::asio::buffer(std::string{"{\"id\":1,\"method\":\"wait\"}\n"}));
         std::this_thread::sleep_for(50ms);
     }
     const auto deadline = std::chrono::steady_clock::now() + 10s;
@@ -367,11 +379,11 @@ TEST_CASE("Debug input steps parse buttons, sticks and frames", "[core][nx2_debu
     REQUIRE_FALSE(step.input.right);
     const auto idle = Core::Nx2Debug::ParseInputStep(json{{"frames", 1}});
     REQUIRE(idle.input.buttons == Core::HID::NpadButton::None);
-    for (const json& bad : {json{{"buttons", {"A"}}}, json{{"frames", 0}}, json{{"frames", 36001}},
-                            json{{"frames", 1}, {"buttons", {"Home"}}},
-                            json{{"frames", 1}, {"stick_l", {0, 0}}},
-                            json{{"frames", 1}, {"left_stick", {1.5, 0}}},
-                            json{{"frames", 1}, {"right_stick", {0}}}, json::array()}) {
+    for (const json& bad :
+         {json{{"buttons", {"A"}}}, json{{"frames", 0}}, json{{"frames", 36001}},
+          json{{"frames", 1}, {"buttons", {"Home"}}}, json{{"frames", 1}, {"stick_l", {0, 0}}},
+          json{{"frames", 1}, {"left_stick", {1.5, 0}}}, json{{"frames", 1}, {"right_stick", {0}}},
+          json::array()}) {
         CAPTURE(bad.dump());
         REQUIRE_THROWS_AS(Core::Nx2Debug::ParseInputStep(bad), std::exception);
     }
@@ -379,9 +391,11 @@ TEST_CASE("Debug input steps parse buttons, sticks and frames", "[core][nx2_debu
 
 TEST_CASE("Debug input steps follow the present count exactly", "[core][nx2_debug_server]") {
     std::vector<Core::Nx2Debug::InputStep> steps(3);
-    steps[0] = {.input = {.buttons = Core::HID::NpadButton::A, .left = {}, .right = {}}, .frames = 2};
+    steps[0] = {.input = {.buttons = Core::HID::NpadButton::A, .left = {}, .right = {}},
+                .frames = 2};
     steps[1] = {.input = {}, .frames = 1};
-    steps[2] = {.input = {.buttons = Core::HID::NpadButton::B, .left = {}, .right = {}}, .frames = 1};
+    steps[2] = {.input = {.buttons = Core::HID::NpadButton::B, .left = {}, .right = {}},
+                .frames = 1};
     REQUIRE_FALSE(Core::Nx2Debug::InputAt(steps, 10, 9));
     REQUIRE(Core::Nx2Debug::InputAt(steps, 10, 10)->buttons == Core::HID::NpadButton::A);
     REQUIRE(Core::Nx2Debug::InputAt(steps, 10, 11)->buttons == Core::HID::NpadButton::A);
@@ -390,7 +404,8 @@ TEST_CASE("Debug input steps follow the present count exactly", "[core][nx2_debu
     REQUIRE_FALSE(Core::Nx2Debug::InputAt(steps, 10, 14));
 }
 
-TEST_CASE("Injected input merges buttons and replaces sticks while installed", "[core][nx2_debug_server]") {
+TEST_CASE("Injected input merges buttons and replaces sticks while installed",
+          "[core][nx2_debug_server]") {
     Core::HID::EmulatedController controller{Core::HID::NpadIdType::Player1};
     REQUIRE(controller.GetNpadButtons().raw == Core::HID::NpadButton::None);
     Core::HID::InjectedInput input{.buttons = Core::HID::NpadButton::A | Core::HID::NpadButton::ZR,

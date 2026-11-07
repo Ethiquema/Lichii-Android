@@ -45,21 +45,7 @@ enum class ImageFlagBits : u32 {
 
     AsynchronousDecode = 1 << 16,
     IsDecoding = 1 << 17, ///< Is currently being decoded asynchronously.
-    Unbacked = 1 << 18,   ///< Host image has no memory (too big to back); never upload/download.
-    /// The host image keeps only mip levels >= host_level_offset (its decoded copy would not fit
-    /// in VRAM); uploads skip the rest, downloads are never done.
-    TrimmedLevels = 1 << 19,
-    ZeroFilled = 1 << 20, ///< Cleared to zero blocks before its first asynchronous decode.
-    /// Over Switch 2 sparse blocks nobody wrote: all zeros, so the host image has no memory
-    /// (Unbacked) until the first write, which makes a backed image replace it.
-    UnwrittenSparse = 1 << 21,
-    /// A large array over Switch 2 sparse blocks: unbacked, each layer gets device memory when
-    /// something is written to it (Image::BindLayers) and only those layers are uploaded.
-    SparseLayers = 1 << 22,
-    /// A large single image over Switch 2 sparse blocks: unbacked, each host sparse block gets
-    /// device memory when the guest memory under it can hold data (Image::BindTiles), and only
-    /// the parts written are uploaded.
-    SparseTiles = 1 << 23,
+    ReorderableUpload = 1 << 18,
 };
 DECLARE_ENUM_FLAG_OPERATORS(ImageFlagBits)
 
@@ -109,14 +95,9 @@ struct ImageBase {
     u32 converted_size_bytes = 0;
     u32 scale_rating = 0;
     u32 host_level_offset = 0; ///< Guest mip level held by host mip 0 (see TrimmedLevels).
-    /// Large layered images uploaded by layer: one bit per layer written since the last upload
-    /// while CpuModified. Empty while CpuModified means the whole image.
-    std::vector<u64> dirty_layers;
-    /// SparseTiles images: the guest byte ranges (offset, size) written since the last upload while
-    /// CpuModified. Empty while CpuModified means all of it that can hold data.
-    std::vector<std::pair<u64, u64>> dirty_ranges;
     u64 scale_tick = 0;
     bool has_scaled = false;
+    u32 guest_data_checks = 0;
 
     size_t channel = 0;
 
@@ -127,6 +108,7 @@ struct ImageBase {
     VAddr cpu_addr_end = 0;
 
     u64 modification_tick = 0;
+    u64 guest_data_hash = 0;
     size_t lru_index = SIZE_MAX;
 
     std::array<u32, MAX_MIP_LEVELS> mip_level_offsets{};

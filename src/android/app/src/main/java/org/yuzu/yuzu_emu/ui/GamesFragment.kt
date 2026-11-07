@@ -3,586 +3,470 @@
 
 package org.yuzu.yuzu_emu.ui
 
-import android.annotation.SuppressLint
-import android.content.Context
-import android.content.Intent
-import android.content.res.Configuration
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.inputmethod.InputMethodManager
-import android.widget.PopupMenu
-import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.doOnPreDraw
-import androidx.core.view.updatePadding
-import androidx.core.widget.doOnTextChanged
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.compose.ui.unit.dp
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.navigation.fragment.findNavController
+import java.util.Locale
 import androidx.preference.PreferenceManager
-import androidx.recyclerview.widget.RecyclerView
-import androidx.recyclerview.widget.GridLayoutManager
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
-import org.yuzu.yuzu_emu.HomeNavigationDirections
+import kotlinx.coroutines.delay
 import org.yuzu.yuzu_emu.NativeLibrary
 import org.yuzu.yuzu_emu.R
-import org.yuzu.yuzu_emu.YuzuApplication
-import org.yuzu.yuzu_emu.adapters.GameAdapter
-import org.yuzu.yuzu_emu.databinding.FragmentGamesBinding
-import org.yuzu.yuzu_emu.features.settings.model.BooleanSetting
-import org.yuzu.yuzu_emu.model.AppletInfo
-import org.yuzu.yuzu_emu.model.Game
+import org.yuzu.yuzu_emu.activities.EmulationActivity
 import org.yuzu.yuzu_emu.model.GamesViewModel
 import org.yuzu.yuzu_emu.model.HomeViewModel
-import org.yuzu.yuzu_emu.ui.main.MainActivity
-import org.yuzu.yuzu_emu.utils.ViewUtils.setVisible
-import org.yuzu.yuzu_emu.utils.collect
-import info.debatty.java.stringsimilarity.Jaccard
-import info.debatty.java.stringsimilarity.JaroWinkler
-import java.util.Locale
-import androidx.core.content.edit
+import dev.eden.emu.ui.background.RetroGridBackground
+import dev.eden.emu.ui.components.FooterAction
+import dev.eden.emu.ui.components.FooterButton
+import dev.eden.emu.ui.components.GameCarousel
+import dev.eden.emu.ui.components.GameGrid
+import dev.eden.emu.ui.components.GameTile
+import dev.eden.emu.ui.components.HeaderFocusRequesters
+import dev.eden.emu.ui.components.HomeFooter
+import dev.eden.emu.ui.components.HomeHeader
+import dev.eden.emu.ui.components.LayoutMode
+import dev.eden.emu.ui.components.LayoutSelectionDialog
+import dev.eden.emu.ui.components.SortMode
+import dev.eden.emu.ui.components.SortSelectionDialog
+import dev.eden.emu.ui.navigation.HomeNavigationManager
+import dev.eden.emu.ui.navigation.NavigationZone
+import dev.eden.emu.ui.navigation.handleHomeNavigation
+import dev.eden.emu.ui.theme.EdenTheme
+import org.yuzu.yuzu_emu.HomeNavigationDirections
+import org.yuzu.yuzu_emu.model.Game
 
+private const val PREF_LAYOUT_MODE = "home_layout_mode"
+private const val PREF_SORT_MODE = "home_sort_mode"
+private const val PREF_LAST_FOCUSED_INDEX = "home_last_focused_index"
+private const val PREF_GAME_WAS_LAUNCHED = "home_game_was_launched"
+
+/**
+ * Compose-based Games Fragment with Header/Footer navigation
+ */
 class GamesFragment : Fragment() {
-    private var _binding: FragmentGamesBinding? = null
-    private val binding get() = _binding!!
-
-    private var originalHeaderTopMargin: Int? = null
-    private var originalHeaderBottomMargin: Int? = null
-    private var originalHeaderRightMargin: Int? = null
-    private var originalHeaderLeftMargin: Int? = null
-
-    private var lastViewType: Int = GameAdapter.VIEW_TYPE_GRID
-    private var pendingPostReloadListSettle = false
-    private var pendingPostReloadListSettleGeneration = 0
-    private var gameListSubmitGeneration = 0
-    private var committedGameListSubmitGeneration = 0
-
-    companion object {
-        private const val SEARCH_TEXT = "SearchText"
-        private const val PREF_SORT_TYPE = "GamesSortType"
-    }
-
     private val gamesViewModel: GamesViewModel by activityViewModels()
     private val homeViewModel: HomeViewModel by activityViewModels()
-    private lateinit var gameAdapter: GameAdapter
 
-    private val preferences =
-        PreferenceManager.getDefaultSharedPreferences(YuzuApplication.appContext)
-
-    private lateinit var mainActivity: MainActivity
-    private val getGamesDirectory =
-        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { result ->
-            if (result != null) {
-                mainActivity.processGamesDir(result, true)
-            }
-        }
-
-    private fun getCurrentViewType(): Int {
-        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        val key = if (isLandscape) CarouselRecyclerView.CAROUSEL_VIEW_TYPE_LANDSCAPE else CarouselRecyclerView.CAROUSEL_VIEW_TYPE_PORTRAIT
-        val fallback = if (isLandscape) GameAdapter.VIEW_TYPE_CAROUSEL else GameAdapter.VIEW_TYPE_GRID
-        return preferences.getInt(key, fallback)
-    }
-
-    private fun setCurrentViewType(type: Int) {
-        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        val key = if (isLandscape) CarouselRecyclerView.CAROUSEL_VIEW_TYPE_LANDSCAPE else CarouselRecyclerView.CAROUSEL_VIEW_TYPE_PORTRAIT
-        preferences.edit { putInt(key, type) }
-    }
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View {
-        _binding = FragmentGamesBinding.inflate(inflater)
-        return binding.root
+        return ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                EdenTheme {
+                    HomeScreen(
+                        gamesViewModel = gamesViewModel,
+                        onGameLaunch = { path: String ->
+                            val game = gamesViewModel.games.value.find { it.path == path }
+                            if (game != null) {
+                                // Save last played time for sorting
+                                PreferenceManager.getDefaultSharedPreferences(requireContext())
+                                    .edit()
+                                    .putLong(game.keyLastPlayedTime, System.currentTimeMillis())
+                                    .putBoolean(PREF_GAME_WAS_LAUNCHED, true)
+                                    .apply()
+
+                                EmulationActivity.launch(
+                                    requireActivity() as androidx.appcompat.app.AppCompatActivity,
+                                    game
+                                )
+                            }
+                        },
+                        onNavigateToSettings = {
+                            findNavController().navigate(R.id.action_gamesFragment_to_homeSettingsFragment)
+                        },
+                        onNavigateToUserManagement = {
+                            findNavController().navigate(R.id.action_gamesFragment_to_profileManagerFragment)
+                        },
+                        onShowGameInfo = { game: Game ->
+                            val action = HomeNavigationDirections.actionGlobalPerGamePropertiesFragment(game)
+                            findNavController().navigate(action)
+                        }
+                    )
+                }
+            }
+        }
     }
 
-    @SuppressLint("NotifyDataSetChanged")
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         homeViewModel.setStatusBarShadeVisibility(true)
-        mainActivity = requireActivity() as MainActivity
-
-        if (savedInstanceState != null) {
-            binding.searchText.setText(savedInstanceState.getString(SEARCH_TEXT))
-        }
-
-        gameAdapter = GameAdapter(
-            requireActivity() as AppCompatActivity
-        )
-
-        applyGridGamesBinding()
-
-        binding.swipeRefresh.apply {
-            (binding.swipeRefresh as? SwipeRefreshLayout)?.setOnRefreshListener {
-                gamesViewModel.reloadGames(false)
-            }
-            (binding.swipeRefresh as? SwipeRefreshLayout)?.setProgressBackgroundColorSchemeColor(
-                com.google.android.material.color.MaterialColors.getColor(
-                    binding.swipeRefresh,
-                    com.google.android.material.R.attr.colorPrimary
-                )
-            )
-            (binding.swipeRefresh as? SwipeRefreshLayout)?.setColorSchemeColors(
-                com.google.android.material.color.MaterialColors.getColor(
-                    binding.swipeRefresh,
-                    com.google.android.material.R.attr.colorOnPrimary
-                )
-            )
-            post {
-                if (_binding == null) {
-                    return@post
-                }
-                (binding.swipeRefresh as? SwipeRefreshLayout)?.isRefreshing = gamesViewModel.isReloading.value
-            }
-        }
-
-        gamesViewModel.isReloading.collect(viewLifecycleOwner) {
-            (binding.swipeRefresh as? SwipeRefreshLayout)?.isRefreshing = it
-            binding.noticeText.setVisible(
-                visible = gamesViewModel.games.value.isEmpty() && !it,
-                gone = false
-            )
-        }
-        gamesViewModel.games.collect(viewLifecycleOwner) {
-            if (it.isNotEmpty()) {
-                setAdapter(it)
-            }
-        }
-        gamesViewModel.shouldSwapData.collect(
-            viewLifecycleOwner,
-            resetState = { gamesViewModel.setShouldSwapData(false) }
-        ) {
-            if (it) {
-                setAdapter(gamesViewModel.games.value)
-            }
-        }
-        gamesViewModel.shouldScrollToTop.collect(
-            viewLifecycleOwner,
-            resetState = { gamesViewModel.setShouldScrollToTop(false) }
-        ) { if (it) scrollToTop() }
-
-        gamesViewModel.shouldScrollAfterReload.collect(viewLifecycleOwner) { shouldScroll ->
-            if (shouldScroll) {
-                pendingPostReloadListSettle = true
-                pendingPostReloadListSettleGeneration = gameListSubmitGeneration
-                schedulePostReloadListSettle()
-                gamesViewModel.setShouldScrollAfterReload(false)
-            }
-        }
-
-        setupTopView()
-
-        updateButtonsVisibility()
-
-        binding.addDirectory.setOnClickListener {
-            getGamesDirectory.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).data)
-        }
-
-        binding.launchQlaunch?.setOnClickListener {
-            launchQLaunch()
-        }
-
-        setInsets()
-    }
-
-    val applyGridGamesBinding = {
-        (binding.gridGames as? RecyclerView)?.apply {
-            val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-            val currentViewType = getCurrentViewType()
-            val savedViewType = if (isLandscape || currentViewType != GameAdapter.VIEW_TYPE_CAROUSEL) currentViewType else GameAdapter.VIEW_TYPE_GRID
-
-            //This prevents Grid/List views from reusing scaled or otherwise modified ViewHolders left over from the carousel.
-            adapter = null
-            recycledViewPool.clear()
-
-            gameAdapter.setViewType(savedViewType)
-            currentFilter = preferences.getInt(PREF_SORT_TYPE, View.NO_ID)
-
-            // Set the correct layout manager
-            layoutManager = when (savedViewType) {
-                GameAdapter.VIEW_TYPE_GRID -> {
-                    val columns = resources.getInteger(R.integer.game_columns_grid)
-                    GridLayoutManager(context, columns)
-                }
-                GameAdapter.VIEW_TYPE_GRID_COMPACT -> {
-                    val columns = resources.getInteger(R.integer.game_columns_grid)
-                    GridLayoutManager(context, columns)
-                }
-                GameAdapter.VIEW_TYPE_LIST -> {
-                    val columns = resources.getInteger(R.integer.game_columns_list)
-                    GridLayoutManager(context, columns)
-                }
-                GameAdapter.VIEW_TYPE_CAROUSEL -> {
-                    LinearLayoutManager(context, RecyclerView.HORIZONTAL, false)
-                }
-                else -> throw IllegalArgumentException("Invalid view type: $savedViewType")
-            }
-            if (savedViewType != GameAdapter.VIEW_TYPE_CAROUSEL) {
-                (this as? CarouselRecyclerView)?.setupCarousel(false)
-            }
-            adapter = gameAdapter
-            lastViewType = savedViewType
-        }
-    }
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        if (_binding != null) {
-            outState.putString(SEARCH_TEXT, binding.searchText.text.toString())
-        }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        if (getCurrentViewType() == GameAdapter.VIEW_TYPE_CAROUSEL) {
-            gamesViewModel.lastScrollPosition = (binding.gridGames as? CarouselRecyclerView)?.getClosestChildPosition() ?: 0
-        }
     }
 
     override fun onResume() {
         super.onResume()
-        if (getCurrentViewType() == GameAdapter.VIEW_TYPE_CAROUSEL) {
-            (binding.gridGames as? CarouselRecyclerView)?.setupCarousel(true)
-            (binding.gridGames as? CarouselRecyclerView)?.restoreScrollState(gamesViewModel.lastScrollPosition)
+        // Only resort games if a game was actually launched (not when coming back from settings)
+        val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
+        if (prefs.getBoolean(PREF_GAME_WAS_LAUNCHED, false)) {
+            prefs.edit().putBoolean(PREF_GAME_WAS_LAUNCHED, false).apply()
+            gamesViewModel.resortGames()
         }
     }
+}
 
-    private var lastSearchText: String = ""
-    private var lastFilter: Int = preferences.getInt(PREF_SORT_TYPE, View.NO_ID)
+@Composable
+private fun HomeScreen(
+    gamesViewModel: GamesViewModel,
+    onGameLaunch: (String) -> Unit,
+    onNavigateToSettings: () -> Unit,
+    onNavigateToUserManagement: () -> Unit,
+    onShowGameInfo: (Game) -> Unit,
+) {
+    val context = LocalContext.current
+    val games by gamesViewModel.games.collectAsState()
+    val isLoading by gamesViewModel.isReloading.collectAsState()
+    val shouldScrollToTop by gamesViewModel.shouldScrollToTop.collectAsState()
 
-    private fun setAdapter(games: List<Game>) {
-        val currentSearchText = binding.searchText.text.toString()
-        val currentFilter = binding.filterButton.id
-
-        val searchChanged = currentSearchText != lastSearchText
-        val filterChanged = currentFilter != lastFilter
-
-        if (searchChanged || filterChanged) {
-            filterAndSearch(games)
-            lastSearchText = currentSearchText
-            lastFilter = currentFilter
-        } else {
-            submitGameList(games)
-            gamesViewModel.setFilteredGames(games)
-        }
-    }
-
-    private fun submitGameList(games: List<Game>) {
-        val adapter = (binding.gridGames as? RecyclerView)?.adapter as? GameAdapter
-        if (adapter == null) {
-            schedulePostReloadListSettle()
-            return
-        }
-
-        val submitGeneration = ++gameListSubmitGeneration
-        adapter.submitList(games) {
-            if (committedGameListSubmitGeneration < submitGeneration) {
-                committedGameListSubmitGeneration = submitGeneration
-            }
-            schedulePostReloadListSettle()
-        }
-    }
-
-
-    private fun schedulePostReloadListSettle() {
-        if (!pendingPostReloadListSettle || _binding == null) return
-
-        binding.gridGames.doOnPreDraw {
-            if (!pendingPostReloadListSettle || _binding == null) return@doOnPreDraw
-            if (committedGameListSubmitGeneration < pendingPostReloadListSettleGeneration) {
-                schedulePostReloadListSettle()
-                return@doOnPreDraw
-            }
-            pendingPostReloadListSettle = false
-
-            (binding.gridGames as? CarouselRecyclerView)?.refreshView()
-        }
-    }
-    private fun setupTopView() {
-        binding.searchText.doOnTextChanged() { text: CharSequence?, _: Int, _: Int, _: Int ->
-            if (text.toString().isNotEmpty()) {
-                binding.clearButton.visibility = View.VISIBLE
-            } else {
-                binding.clearButton.visibility = View.INVISIBLE
-            }
-            filterAndSearch()
-        }
-
-        binding.clearButton.setOnClickListener { binding.searchText.setText("") }
-        binding.searchBackground.setOnClickListener { focusSearch() }
-
-        // Setup view button
-        binding.viewButton.setOnClickListener { showViewMenu(it) }
-
-        // Setup filter button
-        binding.filterButton.setOnClickListener { view ->
-            showFilterMenu(view)
-        }
-
-        // Setup settings button
-        binding.settingsButton.setOnClickListener { navigateToSettings() }
-    }
-
-    private fun navigateToSettings() {
-        val navController = findNavController()
-        navController.navigate(R.id.action_gamesFragment_to_homeSettingsFragment)
-    }
-
-    private fun showViewMenu(anchor: View) {
-        val popup = PopupMenu(requireContext(), anchor)
-        popup.menuInflater.inflate(R.menu.menu_game_views, popup.menu)
-        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        if (!isLandscape) {
-            popup.menu.findItem(R.id.view_carousel)?.isVisible = false
-        }
-
-        val currentViewType = getCurrentViewType()
-        when (currentViewType) {
-            GameAdapter.VIEW_TYPE_LIST -> popup.menu.findItem(R.id.view_list).isChecked = true
-            GameAdapter.VIEW_TYPE_GRID_COMPACT -> popup.menu.findItem(R.id.view_grid_compact).isChecked = true
-            GameAdapter.VIEW_TYPE_GRID -> popup.menu.findItem(R.id.view_grid).isChecked = true
-            GameAdapter.VIEW_TYPE_CAROUSEL -> popup.menu.findItem(R.id.view_carousel).isChecked = true
-        }
-
-        popup.setOnMenuItemClickListener { item ->
-            when (item.itemId) {
-                R.id.view_grid -> {
-                    if (getCurrentViewType() == GameAdapter.VIEW_TYPE_CAROUSEL) onPause()
-                    setCurrentViewType(GameAdapter.VIEW_TYPE_GRID)
-                    applyGridGamesBinding()
-                    item.isChecked = true
-                    true
-                }
-
-                R.id.view_grid_compact -> {
-                    if (getCurrentViewType() == GameAdapter.VIEW_TYPE_CAROUSEL) onPause()
-                    setCurrentViewType(GameAdapter.VIEW_TYPE_GRID_COMPACT)
-                    applyGridGamesBinding()
-                    item.isChecked = true
-                    true
-                }
-
-                R.id.view_list -> {
-                    if (getCurrentViewType() == GameAdapter.VIEW_TYPE_CAROUSEL) onPause()
-                    setCurrentViewType(GameAdapter.VIEW_TYPE_LIST)
-                    applyGridGamesBinding()
-                    item.isChecked = true
-                    true
-                }
-
-                R.id.view_carousel -> {
-                    if (!item.isChecked || getCurrentViewType() != GameAdapter.VIEW_TYPE_CAROUSEL) {
-                        setCurrentViewType(GameAdapter.VIEW_TYPE_CAROUSEL)
-                        applyGridGamesBinding()
-                        item.isChecked = true
-                        onResume()
-                    }
-                    true
-                }
-
-                else -> false
-            }
-        }
-
-        popup.show()
-    }
-
-    private fun showFilterMenu(anchor: View) {
-        val popup = PopupMenu(requireContext(), anchor)
-        popup.menuInflater.inflate(R.menu.menu_game_filters, popup.menu)
-
-        // Set checked state based on current filter
-        when (currentFilter) {
-            R.id.alphabetical -> popup.menu.findItem(R.id.alphabetical).isChecked = true
-            R.id.filter_recently_played -> popup.menu.findItem(R.id.filter_recently_played).isChecked =
-                true
-
-            R.id.filter_recently_added -> popup.menu.findItem(R.id.filter_recently_added).isChecked =
-                true
-        }
-
-        popup.setOnMenuItemClickListener { item ->
-            currentFilter = item.itemId
-            preferences.edit { putInt(PREF_SORT_TYPE, currentFilter) }
-            filterAndSearch()
-            true
-        }
-
-        popup.show()
-    }
-
-    // Track current filter
-    private var currentFilter = View.NO_ID
-
-    private fun filterAndSearch(baseList: List<Game> = gamesViewModel.games.value) {
-        val filteredList: List<Game> = when (currentFilter) {
-            R.id.alphabetical -> baseList.sortedBy { it.title }
-            R.id.filter_recently_played -> {
-                baseList.filter {
-                    val lastPlayedTime = preferences.getLong(it.keyLastPlayedTime, 0L)
-                    lastPlayedTime > (System.currentTimeMillis() - 24 * 60 * 60 * 1000)
-                }.sortedByDescending { preferences.getLong(it.keyLastPlayedTime, 0L) }
-            }
-            R.id.filter_recently_added -> {
-                baseList.filter {
-                    val addedTime = preferences.getLong(it.keyAddedToLibraryTime, 0L)
-                    addedTime > (System.currentTimeMillis() - 24 * 60 * 60 * 1000)
-                }.sortedByDescending { preferences.getLong(it.keyAddedToLibraryTime, 0L) }
-            }
-            else -> baseList
-        }
-
-        val searchTerm = binding.searchText.text.toString().lowercase(Locale.getDefault())
-        if (searchTerm.isEmpty()) {
-            submitGameList(filteredList)
-            gamesViewModel.setFilteredGames(filteredList)
-            return
-        }
-
-        val searchAlgorithm = if (searchTerm.length > 1) Jaccard(2) else JaroWinkler()
-        val sortedList = filteredList.mapNotNull { game ->
-            val title = game.title.lowercase(Locale.getDefault())
-            val score = searchAlgorithm.similarity(searchTerm, title)
-            if (score > 0.03) {
-                ScoredGame(score, game)
-            } else {
-                null
-            }
-        }.sortedByDescending { it.score }.map { it.item }
-
-        submitGameList(sortedList)
-        gamesViewModel.setFilteredGames(sortedList)
-    }
-
-    private inner class ScoredGame(val score: Double, val item: Game)
-
-    private fun focusSearch() {
-        binding.searchText.requestFocus()
-        val imm = requireActivity()
-            .getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager?
-        imm?.showSoftInput(binding.searchText, InputMethodManager.SHOW_IMPLICIT)
-    }
-
-    override fun onDestroyView() {
-        super.onDestroyView()
-        _binding = null
-    }
-
-    private fun scrollToTop() {
-        if (_binding != null) {
-            (binding.gridGames as? CarouselRecyclerView)?.smoothScrollToPosition(0)
-        }
-    }
-
-    private fun launchQLaunch() {
+    val preferences = remember { PreferenceManager.getDefaultSharedPreferences(context) }
+    val savedLayoutMode = remember {
+        val savedValue = preferences.getString(PREF_LAYOUT_MODE, LayoutMode.CAROUSEL.name)
         try {
-            val appletPath = NativeLibrary.getAppletLaunchPath(AppletInfo.QLaunch.entryId)
-            if (appletPath.isEmpty()) {
-                Toast.makeText(
-                    requireContext(),
-                    R.string.applets_error_applet,
-                    Toast.LENGTH_SHORT
-                ).show()
-                return
-            }
-
-            NativeLibrary.setCurrentAppletId(AppletInfo.QLaunch.appletId)
-
-            val qlaunchGame = Game(
-                title = getString(R.string.qlaunch_applet),
-                path = appletPath
-            )
-
-            val action = HomeNavigationDirections.actionGlobalEmulationActivity(qlaunchGame)
-            findNavController().navigate(action)
-        } catch (e: Exception) {
-            Toast.makeText(
-                requireContext(),
-                "Failed to launch QLaunch: ${e.message}",
-                Toast.LENGTH_SHORT
-            ).show()
+            LayoutMode.valueOf(savedValue ?: LayoutMode.CAROUSEL.name)
+        } catch (_: Exception) {
+            LayoutMode.CAROUSEL
         }
     }
 
-    private fun updateButtonsVisibility() {
-        val showQLaunch = BooleanSetting.ENABLE_QLAUNCH_BUTTON.getBoolean()
-        val showFolder = BooleanSetting.ENABLE_FOLDER_BUTTON.getBoolean()
-        val isFirmwareAvailable = NativeLibrary.isFirmwareAvailable()
+    // Layout mode state (Grid or Carousel)
+    var layoutMode by remember { mutableStateOf(savedLayoutMode) }
+    var showLayoutDialog by remember { mutableStateOf(false) }
+    var showSortDialog by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var isSearchExpanded by remember { mutableStateOf(false) }
 
-        val shouldShowQLaunch = showQLaunch && isFirmwareAvailable
-        binding.launchQlaunch.visibility = if (shouldShowQLaunch) View.VISIBLE else View.GONE
+    // Game properties screen state
+    var selectedGameTile by remember { mutableStateOf<GameTile?>(null) }
 
-        binding.addDirectory.visibility = if (showFolder) View.VISIBLE else View.GONE
+    // Sort mode state
+    val savedSortMode = remember {
+        val savedValue = preferences.getString(PREF_SORT_MODE, SortMode.LAST_PLAYED.name)
+        try {
+            SortMode.valueOf(savedValue ?: SortMode.LAST_PLAYED.name)
+        } catch (_: Exception) {
+            SortMode.LAST_PLAYED
+        }
+    }
+    var sortMode by remember { mutableStateOf(savedSortMode) }
+
+    // Save sort mode when it changes
+    LaunchedEffect(sortMode) {
+        preferences.edit().putString(PREF_SORT_MODE, sortMode.name).apply()
     }
 
-    private fun setInsets() =
-        ViewCompat.setOnApplyWindowInsetsListener(
-            binding.root
-        ) { _: View, windowInsets: WindowInsetsCompat ->
-            val barInsets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
-            val cutoutInsets = windowInsets.getInsets(WindowInsetsCompat.Type.displayCutout())
-            val spacingNavigation = resources.getDimensionPixelSize(R.dimen.spacing_navigation)
-            resources.getDimensionPixelSize(R.dimen.spacing_navigation_rail)
+    // Save layout mode when it changes
+    LaunchedEffect(layoutMode) {
+        preferences.edit().putString(PREF_LAYOUT_MODE, layoutMode.name).apply()
+    }
 
-            (binding.swipeRefresh as? SwipeRefreshLayout)?.setProgressViewEndTarget(
-                false,
-                barInsets.top + resources.getDimensionPixelSize(R.dimen.spacing_refresh_end)
-            )
+    // Remember last focused index across layout changes - load from preferences
+    val savedFocusedIndex = remember {
+        preferences.getInt(PREF_LAST_FOCUSED_INDEX, 0)
+    }
+    var lastFocusedIndex by remember { mutableStateOf(savedFocusedIndex) }
 
-            val leftInset = barInsets.left + cutoutInsets.left
-            val rightInset = barInsets.right + cutoutInsets.right
-            val topInset = maxOf(barInsets.top, cutoutInsets.top)
+    LaunchedEffect(lastFocusedIndex) {
+        preferences.edit().putInt(PREF_LAST_FOCUSED_INDEX, lastFocusedIndex).apply()
+    }
 
-            val mlpSwipe = binding.swipeRefresh.layoutParams as ViewGroup.MarginLayoutParams
-            mlpSwipe.leftMargin = leftInset
-            mlpSwipe.rightMargin = rightInset
-            binding.swipeRefresh.layoutParams = mlpSwipe
+    var listVersion by remember { mutableStateOf(0) }
 
-            val mlpHeader = binding.header.layoutParams as ViewGroup.MarginLayoutParams
+    LaunchedEffect(sortMode) {
+        lastFocusedIndex = 0
+        listVersion++
+    }
 
-            // Store original margins only once
-            if (originalHeaderTopMargin == null) {
-                originalHeaderTopMargin = mlpHeader.topMargin
-                originalHeaderRightMargin = mlpHeader.rightMargin
-                originalHeaderLeftMargin = mlpHeader.leftMargin
-            }
-
-            // Always set margin as original + insets
-            mlpHeader.leftMargin = (originalHeaderLeftMargin ?: 0) + leftInset
-            mlpHeader.rightMargin = (originalHeaderRightMargin ?: 0) + rightInset
-            mlpHeader.topMargin = (originalHeaderTopMargin ?: 0) + topInset + resources.getDimensionPixelSize(
-                R.dimen.spacing_med
-            )
-            binding.header.layoutParams = mlpHeader
-
-            binding.noticeText.updatePadding(bottom = spacingNavigation)
-
-            binding.gridGames.updatePadding(
-                top = resources.getDimensionPixelSize(R.dimen.spacing_med)
-            )
-
-            val mlpFab = binding.addDirectory.layoutParams as ViewGroup.MarginLayoutParams
-            val fabPadding = resources.getDimensionPixelSize(R.dimen.spacing_large)
-            mlpFab.leftMargin = leftInset + fabPadding
-            mlpFab.bottomMargin = barInsets.bottom + fabPadding
-            mlpFab.rightMargin = rightInset + fabPadding
-            binding.addDirectory.layoutParams = mlpFab
-
-            binding.launchQlaunch?.let { qlaunchButton ->
-                val mlpQLaunch = qlaunchButton.layoutParams as ViewGroup.MarginLayoutParams
-                mlpQLaunch.leftMargin = leftInset + fabPadding
-                mlpQLaunch.bottomMargin = barInsets.bottom + fabPadding
-                qlaunchButton.layoutParams = mlpQLaunch
-            }
-
-            windowInsets
+    // Reset to first item when games are resorted (e.g. after playing a game)
+    // Else the sorting only takes effect after relaunch
+    LaunchedEffect(shouldScrollToTop) {
+        if (shouldScrollToTop) {
+            lastFocusedIndex = 0
+            listVersion++ // Force complete recomposition
+            gamesViewModel.setShouldScrollToTop(false)
         }
+    }
+
+    // Load current user UUID
+    var currentUserUuid by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        currentUserUuid = NativeLibrary.getCurrentUser() ?: ""
+    }
+
+    val headerFocusRequesters = remember {
+        HeaderFocusRequesters(
+            userButton = FocusRequester(),
+            searchButton = FocusRequester(),
+            sortButton = FocusRequester(),
+            filterButton = FocusRequester(),
+            settingsButton = FocusRequester(),
+        )
+    }
+    // Don't recreate on layoutMode change - this causes zones state loss
+    val contentFocusRequester = remember { FocusRequester() }
+
+    val navigationManager = remember {
+        HomeNavigationManager(
+            headerFocusRequesters = headerFocusRequesters,
+            contentFocusRequester = contentFocusRequester,
+        )
+    }
+
+    // Request initial focus
+    LaunchedEffect(Unit) {
+        delay(200)
+        navigationManager.requestInitialFocus()
+    }
+
+    // Filter and sort games based on search query and sort mode
+    val filteredGames = remember(games, searchQuery, sortMode) {
+        val filtered = if (searchQuery.isBlank()) {
+            games
+        } else {
+            games.filter { game ->
+                game.title.lowercase(Locale.getDefault())
+                    .contains(searchQuery.lowercase(Locale.getDefault()))
+            }
+        }
+
+        // Apply sorting
+        when (sortMode) {
+            SortMode.LAST_PLAYED -> {
+                filtered.sortedByDescending { game ->
+                    preferences.getLong(game.keyLastPlayedTime, 0L)
+                }
+            }
+
+            SortMode.ALPHABETICAL -> {
+                filtered.sortedBy { it.title.lowercase(Locale.getDefault()) }
+            }
+        }
+    }
+
+    val gameTiles = remember(filteredGames) {
+        filteredGames.map { game ->
+            GameTile.fromGame(game)
+        }
+    }
+
+    // NO key handling at top level
+    Box(modifier = Modifier.fillMaxSize()) {
+        RetroGridBackground()
+
+        val contentOffset = 24.dp
+        key(listVersion, layoutMode) {
+            when (layoutMode) {
+                LayoutMode.TWO_ROW -> {
+                    GameGrid(
+                        gameTiles = gameTiles,
+                        onGameClick = { tile: GameTile ->
+                            val path = tile.uri ?: return@GameGrid
+                            onGameLaunch(path)
+                        },
+                        onGameLongClick = { tile: GameTile ->
+                            val game = filteredGames.firstOrNull { it.path == tile.uri }
+                            if (game != null) {
+                                onShowGameInfo(game)
+                            }
+                        },
+                        onNavigateToSettings = {},
+                        focusRequester = contentFocusRequester,
+                        onNavigateUp = {
+                            navigationManager.navigateUp()
+                        },
+                        rowCount = 2,
+                        tileIconSize = 120.dp,
+                        isLoading = isLoading,
+                        emptyMessage = if (games.isEmpty() && !isLoading) context.getString(R.string.empty_gamelist) else null,
+                        initialFocusedIndex = lastFocusedIndex,
+                        onFocusedIndexChanged = { newIndex ->
+                            lastFocusedIndex = newIndex
+                        },
+                        onShowGameInfo = { tile: GameTile ->
+                            val game = filteredGames.firstOrNull { it.path == tile.uri }
+                            if (game != null) {
+                                onShowGameInfo(game)
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = contentOffset),
+                    )
+                }
+
+                LayoutMode.CAROUSEL -> {
+                    GameCarousel(
+                        gameTiles = gameTiles,
+                        onGameClick = { tile: GameTile ->
+                            val path = tile.uri ?: return@GameCarousel
+                            onGameLaunch(path)
+                        },
+                        onGameLongClick = { tile: GameTile ->
+                            val game = filteredGames.firstOrNull { it.path == tile.uri }
+                            if (game != null) {
+                                onShowGameInfo(game)
+                            }
+                        },
+                        focusRequester = contentFocusRequester,
+                        onNavigateUp = {
+                            navigationManager.navigateUp()
+                        },
+                        initialFocusedIndex = lastFocusedIndex,
+                        onFocusedIndexChanged = { newIndex ->
+                            lastFocusedIndex = newIndex
+                        },
+                        onShowGameInfo = { tile: GameTile ->
+                            val game = filteredGames.firstOrNull { it.path == tile.uri }
+                            if (game != null) {
+                                onShowGameInfo(game)
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = contentOffset),
+                    )
+                }
+
+                else -> {
+                    // Default to Grid
+                    GameGrid(
+                        gameTiles = gameTiles,
+                        onGameClick = { tile: GameTile ->
+                            val path = tile.uri ?: return@GameGrid
+                            onGameLaunch(path)
+                        },
+                        onNavigateToSettings = {},
+                        focusRequester = contentFocusRequester,
+                        onNavigateUp = {
+                            navigationManager.navigateUp()
+                        },
+                        rowCount = 2,
+                        tileIconSize = 120.dp,
+                        isLoading = isLoading,
+                        emptyMessage = if (games.isEmpty() && !isLoading) context.getString(R.string.empty_gamelist) else null,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = contentOffset),
+                    )
+                }
+            }
+
+            // Refocus content when layout mode changes
+            LaunchedEffect(layoutMode) {
+                delay(200)
+                contentFocusRequester.requestFocus()
+                navigationManager.resetToContent()
+            }
+
+            // Refocus content when sort mode changes
+            LaunchedEffect(sortMode) {
+                delay(200)
+                contentFocusRequester.requestFocus()
+                navigationManager.resetToContent()
+            }
+
+            // Header
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .onPreviewKeyEvent { keyEvent ->
+                        if (navigationManager.currentZone == NavigationZone.HEADER) {
+                            handleHomeNavigation(keyEvent, navigationManager)
+                        } else {
+                            false
+                        }
+                    }
+            ) {
+                HomeHeader(
+                    currentUser = currentUserUuid,
+                    onUserClick = onNavigateToUserManagement,
+                    searchQuery = searchQuery,
+                    onSearchQueryChange = { query -> searchQuery = query },
+                    isSearchExpanded = isSearchExpanded,
+                    onSearchExpandedChange = { expanded -> isSearchExpanded = expanded },
+                    onSortClick = {
+                        showSortDialog = true
+                    },
+                    onFilterClick = {
+                        showLayoutDialog = true
+                    },
+                    onSettingsClick = onNavigateToSettings,
+                    focusRequesters = headerFocusRequesters,
+                )
+            }
+
+            val currentZone by navigationManager.currentZoneState
+            val headerIdx by navigationManager.headerIndexState
+            val footerActions = when (currentZone) {
+                NavigationZone.HEADER -> {
+                    val headerText = when (headerIdx) {
+                        0 -> context.getString(R.string.footer_open) // User profile
+                        1 -> context.getString(R.string.home_search) // Search
+                        else -> context.getString(R.string.footer_open) // Sort, Filter, Settings
+                    }
+                    listOf(FooterAction(FooterButton.A, headerText))
+                }
+                NavigationZone.CONTENT -> {
+                    listOf(
+                        FooterAction(FooterButton.A, context.getString(R.string.home_start)),
+                        FooterAction(FooterButton.X, context.getString(R.string.footer_game_info)),
+                    )
+                }
+            }
+            HomeFooter(
+                actions = footerActions,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
+
+        // Layout selection dialog
+        if (showLayoutDialog) {
+            LayoutSelectionDialog(
+                onDismiss = { showLayoutDialog = false },
+                onSelectGrid = { layoutMode = LayoutMode.TWO_ROW },
+                onSelectCarousel = { layoutMode = LayoutMode.CAROUSEL },
+            )
+        }
+
+        // Sort selection dialog
+        if (showSortDialog) {
+            SortSelectionDialog(
+                currentSortMode = sortMode,
+                onDismiss = { showSortDialog = false },
+                onSelectSort = { selectedSortMode ->
+                    sortMode = selectedSortMode
+                    gamesViewModel.resortGames()
+                },
+            )
+        }
+    }
 }

@@ -13,7 +13,6 @@
 #include <dynarmic/interface/A64/a64.h>
 #include <dynarmic/interface/code_page.h>
 #include "common/common_types.h"
-#include "common/hash.h"
 #include "core/arm/arm_interface.h"
 #include "core/arm/dynarmic/dynarmic_exclusive_monitor.h"
 #include "dynarmic/interface/A64/config.h"
@@ -70,7 +69,6 @@ public:
     u64 m_tpidrro_el0{};
     u64 m_tpidr_el0{};
     u64 m_last_cntpct{}; ///< The previous counter read (GetCNTPCT spin detection)
-    u64 m_spin_ticks{32}; ///< Reads closer than this (~1.7 us) count as a polling loop
     Kernel::KProcess* m_process{};
     std::shared_ptr<WindowTrace::Session> m_window_trace;
     const bool m_debugger_enabled{};

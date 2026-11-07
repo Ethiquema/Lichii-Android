@@ -4,46 +4,34 @@
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <bit>
-
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
+#include "shader_recompiler/backend/spirv/ssbo_align_gate.h"
 
 namespace Shader::Backend::SPIRV {
 namespace {
-Id StorageIndex(EmitContext& ctx, const IR::Value& offset, size_t element_size,
-                u32 index_offset = 0) {
-    if (offset.IsImmediate()) {
-        const u32 imm_offset{static_cast<u32>(offset.U32() / element_size) + index_offset};
-        return ctx.Const(imm_offset);
-    }
-    const u32 shift{static_cast<u32>(std::countr_zero(element_size))};
-    Id index{ctx.Def(offset)};
-    if (shift != 0) {
-        const Id shift_id{ctx.Const(shift)};
-        index = ctx.OpShiftRightLogical(ctx.U32[1], index, shift_id);
-    }
+Id StorageByteOffset(EmitContext& ctx, const IR::Value& offset, size_t element_size, u32 index_offset) {
+    Id byte_offset{ctx.Def(offset)};
     if (index_offset != 0) {
-        index = ctx.OpIAdd(ctx.U32[1], index, ctx.Const(index_offset));
+        byte_offset = ctx.OpIAdd(ctx.U32[1], byte_offset, ctx.Const(static_cast<u32>(index_offset * element_size)));
     }
-    return index;
+    return byte_offset;
 }
 
 Id StoragePointer(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset,
                   const StorageTypeDefinition& type_def, size_t element_size,
-                  Id StorageDefinitions::*member_ptr, u32 index_offset = 0) {
+                  Id StorageDefinitions::* member_ptr, u32 index_offset = 0) {
     if (!binding.IsImmediate()) {
         throw NotImplementedException("Dynamic storage buffer indexing");
     }
-    const Id ssbo{ctx.ssbos[binding.U32()].*member_ptr};
-    const Id index{StorageIndex(ctx, offset, element_size, index_offset)};
-    return ctx.OpAccessChain(type_def.element, ssbo, ctx.u32_zero_value, index);
+    const Id byte_offset{StorageByteOffset(ctx, offset, element_size, index_offset)};
+    return ctx.StoragePointer(binding.U32(), byte_offset, type_def, static_cast<u32>(element_size), member_ptr);
 }
 
 Id LoadStorage(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset, Id result_type,
                const StorageTypeDefinition& type_def, size_t element_size,
-               Id StorageDefinitions::*member_ptr, u32 index_offset = 0) {
+               Id StorageDefinitions::* member_ptr, u32 index_offset = 0) {
     const Id pointer{
         StoragePointer(ctx, binding, offset, type_def, element_size, member_ptr, index_offset)};
     return ctx.OpLoad(result_type, pointer);
@@ -57,7 +45,7 @@ Id LoadStorage32(EmitContext& ctx, const IR::Value& binding, const IR::Value& of
 
 void WriteStorage(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset, Id value,
                   const StorageTypeDefinition& type_def, size_t element_size,
-                  Id StorageDefinitions::*member_ptr, u32 index_offset = 0) {
+                  Id StorageDefinitions::* member_ptr, u32 index_offset = 0) {
     const Id pointer{
         StoragePointer(ctx, binding, offset, type_def, element_size, member_ptr, index_offset)};
     ctx.OpStore(pointer, value);
@@ -69,93 +57,71 @@ void WriteStorage32(EmitContext& ctx, const IR::Value& binding, const IR::Value&
                  &StorageDefinitions::U32, index_offset);
 }
 
-void WriteStorageByCasLoop(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset,
-                           Id value, Id bit_offset, Id bit_count) {
+void WriteStorageBits(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset,
+                      Id value, Id bit_offset, Id bit_count) {
     const Id pointer{StoragePointer(ctx, binding, offset, ctx.storage_types.U32, sizeof(u32),
                                     &StorageDefinitions::U32)};
-    ctx.OpFunctionCall(ctx.TypeVoid(), ctx.write_storage_cas_loop_func, pointer, value, bit_offset,
-                       bit_count);
+    ctx.AtomicBitFieldInsert(pointer, value, bit_offset, bit_count);
 }
 } // Anonymous namespace
 
-void EmitLoadGlobalU8(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitLoadGlobalU8(EmitContext& ctx, Id address) {
+    return ctx.CallGlobalMemory(IR::Opcode::LoadGlobalU8, ctx.U32[1], address, ctx.u32_zero_value);
 }
 
-void EmitLoadGlobalS8(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitLoadGlobalS8(EmitContext& ctx, Id address) {
+    return ctx.CallGlobalMemory(IR::Opcode::LoadGlobalS8, ctx.U32[1], address, ctx.u32_zero_value);
 }
 
-void EmitLoadGlobalU16(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitLoadGlobalU16(EmitContext& ctx, Id address) {
+    return ctx.CallGlobalMemory(IR::Opcode::LoadGlobalU16, ctx.U32[1], address,
+                                ctx.u32_zero_value);
 }
 
-void EmitLoadGlobalS16(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitLoadGlobalS16(EmitContext& ctx, Id address) {
+    return ctx.CallGlobalMemory(IR::Opcode::LoadGlobalS16, ctx.U32[1], address,
+                                ctx.u32_zero_value);
 }
 
 Id EmitLoadGlobal32(EmitContext& ctx, Id address) {
-    if (ctx.profile.support_int64) {
-        return ctx.OpFunctionCall(ctx.U32[1], ctx.load_global_func_u32, address);
-    }
-    LOG_WARNING(Shader_SPIRV, "Int64 not supported, ignoring memory operation");
-    return ctx.Const(0u);
+    return ctx.CallGlobalMemory(IR::Opcode::LoadGlobal32, ctx.U32[1], address, ctx.u32_zero_value);
 }
 
 Id EmitLoadGlobal64(EmitContext& ctx, Id address) {
-    if (ctx.profile.support_int64) {
-        return ctx.OpFunctionCall(ctx.U32[2], ctx.load_global_func_u32x2, address);
-    }
-    LOG_WARNING(Shader_SPIRV, "Int64 not supported, ignoring memory operation");
-    return ctx.Const(0u, 0u);
+    return ctx.CallGlobalMemory(IR::Opcode::LoadGlobal64, ctx.U32[2], address, ctx.u32_zero_value);
 }
 
 Id EmitLoadGlobal128(EmitContext& ctx, Id address) {
-    if (ctx.profile.support_int64) {
-        return ctx.OpFunctionCall(ctx.U32[4], ctx.load_global_func_u32x4, address);
-    }
-    LOG_WARNING(Shader_SPIRV, "Int64 not supported, ignoring memory operation");
-    return ctx.Const(0u, 0u, 0u, 0u);
+    return ctx.CallGlobalMemory(IR::Opcode::LoadGlobal128, ctx.U32[4], address,
+                                ctx.u32_zero_value);
 }
 
-void EmitWriteGlobalU8(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+void EmitWriteGlobalU8(EmitContext& ctx, Id address, Id value) {
+    ctx.CallGlobalMemory(IR::Opcode::WriteGlobalU8, ctx.void_id, address, value);
 }
 
-void EmitWriteGlobalS8(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+void EmitWriteGlobalS8(EmitContext& ctx, Id address, Id value) {
+    ctx.CallGlobalMemory(IR::Opcode::WriteGlobalS8, ctx.void_id, address, value);
 }
 
-void EmitWriteGlobalU16(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+void EmitWriteGlobalU16(EmitContext& ctx, Id address, Id value) {
+    ctx.CallGlobalMemory(IR::Opcode::WriteGlobalU16, ctx.void_id, address, value);
 }
 
-void EmitWriteGlobalS16(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+void EmitWriteGlobalS16(EmitContext& ctx, Id address, Id value) {
+    ctx.CallGlobalMemory(IR::Opcode::WriteGlobalS16, ctx.void_id, address, value);
 }
 
 void EmitWriteGlobal32(EmitContext& ctx, Id address, Id value) {
-    if (ctx.profile.support_int64) {
-        ctx.OpFunctionCall(ctx.void_id, ctx.write_global_func_u32, address, value);
-        return;
-    }
-    LOG_WARNING(Shader_SPIRV, "Int64 not supported, ignoring memory operation");
+    ctx.CallGlobalMemory(IR::Opcode::WriteGlobal32, ctx.void_id, address, value);
 }
 
 void EmitWriteGlobal64(EmitContext& ctx, Id address, Id value) {
-    if (ctx.profile.support_int64) {
-        ctx.OpFunctionCall(ctx.void_id, ctx.write_global_func_u32x2, address, value);
-        return;
-    }
-    LOG_WARNING(Shader_SPIRV, "Int64 not supported, ignoring memory operation");
+    ctx.CallGlobalMemory(IR::Opcode::WriteGlobal64, ctx.void_id, address, value);
 }
 
 void EmitWriteGlobal128(EmitContext& ctx, Id address, Id value) {
-    if (ctx.profile.support_int64) {
-        ctx.OpFunctionCall(ctx.void_id, ctx.write_global_func_u32x4, address, value);
-        return;
-    }
-    LOG_WARNING(Shader_SPIRV, "Int64 not supported, ignoring memory operation");
+    ctx.CallGlobalMemory(IR::Opcode::WriteGlobal128, ctx.void_id, address, value);
 }
 
 Id EmitLoadStorageU8(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset) {
@@ -210,8 +176,24 @@ Id EmitLoadStorage32(EmitContext& ctx, const IR::Value& binding, const IR::Value
     return LoadStorage32(ctx, binding, offset);
 }
 
+// Offsets are relative to a binding aligned only to the device's storage buffer alignment (4 bytes
+// on AMD), so the vector view (offset >> 3 or 4) is exact only for offsets known to be multiples of
+// the access size; otherwise it reads the vector before the access.
+static bool VectorViewIsExact(EmitContext& ctx, const IR::Value& offset, u32 size) {
+    if (!ctx.profile.support_descriptor_aliasing) {
+        return false;
+    }
+    if (!SsboAlignFixEnabled()) {
+        return true;
+    }
+    if (offset.IsImmediate()) {
+        return offset.U32() % size == 0;
+    }
+    return ctx.profile.min_ssbo_alignment >= size;
+}
+
 Id EmitLoadStorage64(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset) {
-    if (ctx.profile.support_descriptor_aliasing) {
+    if (VectorViewIsExact(ctx, offset, sizeof(u32[2]))) {
         return LoadStorage(ctx, binding, offset, ctx.U32[2], ctx.storage_types.U32x2,
                            sizeof(u32[2]), &StorageDefinitions::U32x2);
     } else {
@@ -221,7 +203,7 @@ Id EmitLoadStorage64(EmitContext& ctx, const IR::Value& binding, const IR::Value
 }
 
 Id EmitLoadStorage128(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset) {
-    if (ctx.profile.support_descriptor_aliasing) {
+    if (VectorViewIsExact(ctx, offset, sizeof(u32[4]))) {
         return LoadStorage(ctx, binding, offset, ctx.U32[4], ctx.storage_types.U32x4,
                            sizeof(u32[4]), &StorageDefinitions::U32x4);
     } else {
@@ -239,7 +221,7 @@ void EmitWriteStorageU8(EmitContext& ctx, const IR::Value& binding, const IR::Va
         WriteStorage(ctx, binding, offset, ctx.OpSConvert(ctx.U8, value), ctx.storage_types.U8,
                      sizeof(u8), &StorageDefinitions::U8);
     } else {
-        WriteStorageByCasLoop(ctx, binding, offset, value, ctx.BitOffset8(offset), ctx.Const(8u));
+        WriteStorageBits(ctx, binding, offset, value, ctx.BitOffset8(offset), ctx.Const(8u));
     }
 }
 
@@ -250,7 +232,7 @@ void EmitWriteStorageS8(EmitContext& ctx, const IR::Value& binding, const IR::Va
         WriteStorage(ctx, binding, offset, ctx.OpSConvert(ctx.S8, value), ctx.storage_types.S8,
                      sizeof(s8), &StorageDefinitions::S8);
     } else {
-        WriteStorageByCasLoop(ctx, binding, offset, value, ctx.BitOffset8(offset), ctx.Const(8u));
+        WriteStorageBits(ctx, binding, offset, value, ctx.BitOffset8(offset), ctx.Const(8u));
     }
 }
 
@@ -261,7 +243,7 @@ void EmitWriteStorageU16(EmitContext& ctx, const IR::Value& binding, const IR::V
         WriteStorage(ctx, binding, offset, ctx.OpSConvert(ctx.U16, value), ctx.storage_types.U16,
                      sizeof(u16), &StorageDefinitions::U16);
     } else {
-        WriteStorageByCasLoop(ctx, binding, offset, value, ctx.BitOffset16(offset), ctx.Const(16u));
+        WriteStorageBits(ctx, binding, offset, value, ctx.BitOffset16(offset), ctx.Const(16u));
     }
 }
 
@@ -272,7 +254,7 @@ void EmitWriteStorageS16(EmitContext& ctx, const IR::Value& binding, const IR::V
         WriteStorage(ctx, binding, offset, ctx.OpSConvert(ctx.S16, value), ctx.storage_types.S16,
                      sizeof(s16), &StorageDefinitions::S16);
     } else {
-        WriteStorageByCasLoop(ctx, binding, offset, value, ctx.BitOffset16(offset), ctx.Const(16u));
+        WriteStorageBits(ctx, binding, offset, value, ctx.BitOffset16(offset), ctx.Const(16u));
     }
 }
 
@@ -283,7 +265,7 @@ void EmitWriteStorage32(EmitContext& ctx, const IR::Value& binding, const IR::Va
 
 void EmitWriteStorage64(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset,
                         Id value) {
-    if (ctx.profile.support_descriptor_aliasing) {
+    if (VectorViewIsExact(ctx, offset, sizeof(u32[2]))) {
         WriteStorage(ctx, binding, offset, value, ctx.storage_types.U32x2, sizeof(u32[2]),
                      &StorageDefinitions::U32x2);
     } else {
@@ -296,7 +278,7 @@ void EmitWriteStorage64(EmitContext& ctx, const IR::Value& binding, const IR::Va
 
 void EmitWriteStorage128(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset,
                          Id value) {
-    if (ctx.profile.support_descriptor_aliasing) {
+    if (VectorViewIsExact(ctx, offset, sizeof(u32[4]))) {
         WriteStorage(ctx, binding, offset, value, ctx.storage_types.U32x4, sizeof(u32[4]),
                      &StorageDefinitions::U32x4);
     } else {

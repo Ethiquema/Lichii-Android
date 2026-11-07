@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -31,7 +34,7 @@ public:
     /**
      * Free this audio out from the audio out manager.
      */
-    void Free();
+    void Free(Core::System& system);
 
     /**
      * Get this audio out's system.
@@ -144,7 +147,7 @@ private:
     /// Buffer event, signalled when buffers are ready to be released
     Kernel::KEvent* event;
     /// Main audio out system
-    System system;
+    System audio_system;
 };
 
 } // namespace AudioCore::AudioOut

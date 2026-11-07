@@ -1,7 +1,5 @@
 # SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 # SPDX-License-Identifier: GPL-3.0-or-later
-include(TargetArchitectureSpecificSources)
-
 add_library(dynarmic STATIC
     mcl/bit.hpp
     mcl/function_info.hpp
@@ -74,6 +72,7 @@ add_library(dynarmic STATIC
     interface/halt_reason.h
     interface/exclusive_monitor.h
     interface/optimization_flags.h
+    interface/halt_reason.h
     ir/acc_type.h
     ir/basic_block.cpp
     ir/basic_block.h
@@ -135,15 +134,14 @@ add_library(dynarmic STATIC
     interface/A64/config.h
 )
 
-if ("x86_64" IN_LIST ARCHITECTURE)
+if (ARCHITECTURE_x86_64)
     # Newer versions of xbyak (>= 7.25.0) have stricter checks that currently
     # fail in dynarmic
     target_compile_definitions(dynarmic PRIVATE XBYAK_STRICT_CHECK_MEM_REG_SIZE=0)
-
     target_compile_definitions(dynarmic PRIVATE XBYAK_OLD_DISP_CHECK=1)
     target_link_libraries(dynarmic PRIVATE xbyak::xbyak)
 
-    target_architecture_specific_sources(dynarmic "x86_64"
+    target_sources(dynarmic PRIVATE
         backend/x64/abi.cpp
         backend/x64/abi.h
         backend/x64/block_of_code.cpp
@@ -169,8 +167,6 @@ if ("x86_64" IN_LIST ARCHITECTURE)
         backend/x64/emit_x64_vector.cpp
         backend/x64/emit_x64_vector_floating_point.cpp
         backend/x64/emit_x64_vector_saturation.cpp
-        backend/x64/exclusive_monitor.cpp
-        backend/x64/exclusive_monitor_friend.h
         backend/x64/host_feature.h
         backend/x64/hostloc.h
         backend/x64/jitstate_info.h
@@ -201,10 +197,10 @@ if ("x86_64" IN_LIST ARCHITECTURE)
     )
 endif()
 
-if ("arm64" IN_LIST ARCHITECTURE)
+if (ARCHITECTURE_arm64)
     target_link_libraries(dynarmic PRIVATE merry::oaknut)
 
-    target_architecture_specific_sources(dynarmic "arm64"
+    target_sources(dynarmic PRIVATE
         backend/arm64/a32_jitstate.cpp
         backend/arm64/a32_jitstate.h
         backend/arm64/a64_jitstate.h
@@ -231,7 +227,6 @@ if ("arm64" IN_LIST ARCHITECTURE)
         backend/arm64/emit_arm64_vector_floating_point.cpp
         backend/arm64/emit_arm64_vector_saturation.cpp
         backend/arm64/emit_context.h
-        backend/arm64/exclusive_monitor.cpp
         backend/arm64/fastmem.h
         backend/arm64/fpsr_manager.cpp
         backend/arm64/fpsr_manager.h
@@ -255,7 +250,7 @@ if ("arm64" IN_LIST ARCHITECTURE)
     )
 endif()
 
-if ("riscv64" IN_LIST ARCHITECTURE)
+if (ARCHITECTURE_riscv64)
     target_link_libraries(dynarmic PRIVATE biscuit::biscuit)
 
     target_sources(dynarmic PRIVATE
@@ -278,7 +273,6 @@ if ("riscv64" IN_LIST ARCHITECTURE)
         backend/riscv64/emit_riscv64_vector.cpp
         backend/riscv64/emit_riscv64.cpp
         backend/riscv64/emit_riscv64.h
-        backend/riscv64/exclusive_monitor.cpp
         backend/riscv64/reg_alloc.cpp
         backend/riscv64/reg_alloc.h
         backend/riscv64/stack_layout.h
@@ -294,8 +288,33 @@ if ("riscv64" IN_LIST ARCHITECTURE)
     )
     message(WARNING "TODO: Incomplete frontend for this host architecture")
 endif()
+if ("powerpc64" IN_LIST ARCHITECTURE)
+    target_link_libraries(dynarmic PRIVATE powah)
+    target_sources(dynarmic PRIVATE
+        backend/ppc64/abi.h
+        backend/ppc64/emit_context.h
+        backend/ppc64/emit_ppc64_a32.cpp
+        backend/ppc64/emit_ppc64_a64.cpp
+        backend/ppc64/emit_ppc64_misc.cpp
+        backend/ppc64/emit_ppc64_data_processing.cpp
+        backend/ppc64/emit_ppc64_floating_point.cpp
+        backend/ppc64/emit_ppc64_vector.cpp
+        backend/ppc64/emit_ppc64.cpp
+        backend/ppc64/emit_ppc64.h
+        backend/ppc64/reg_alloc.cpp
+        backend/ppc64/reg_alloc.h
+        backend/ppc64/stack_layout.h
+        # A32
+        backend/ppc64/a32_core.h
+        backend/ppc64/a32_interface.cpp
+        # A64
+        backend/ppc64/a64_core.h
+        backend/ppc64/a64_interface.cpp
+        backend/ppc64/code_block.h
+    )
+endif()
 
-if ("loongarch64" IN_LIST ARCHITECTURE)
+if (ARCHITECTURE_loongarch64)
     target_link_libraries(dynarmic PRIVATE lagoon::lagoon)
 
     target_sources(dynarmic PRIVATE
@@ -400,14 +419,8 @@ if (DYNARMIC_USE_LLVM)
     target_compile_definitions(dynarmic PRIVATE DYNARMIC_USE_LLVM=1 ${LLVM_DEFINITIONS})
     llvm_config(dynarmic USE_SHARED armdesc armdisassembler aarch64desc aarch64disassembler x86desc x86disassembler)
 endif()
-if (DYNARMIC_ENABLE_CPU_FEATURE_DETECTION)
-    target_compile_definitions(dynarmic PRIVATE DYNARMIC_ENABLE_CPU_FEATURE_DETECTION=1)
-endif()
 if (DYNARMIC_ENABLE_NO_EXECUTE_SUPPORT)
     target_compile_definitions(dynarmic PRIVATE DYNARMIC_ENABLE_NO_EXECUTE_SUPPORT=1)
-endif()
-if (DYNARMIC_IGNORE_ASSERTS)
-    target_compile_definitions(dynarmic PRIVATE MCL_IGNORE_ASSERTS=1)
 endif()
 if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
     target_compile_definitions(dynarmic PRIVATE FMT_USE_WINDOWS_H=0)

@@ -32,18 +32,13 @@ enum class Nx2PictureFormat : u32 {
     Bgra8,
 };
 
-/// Checks if stream data begins with an H.264 Annex-B start code or avcC/MP4 length-prefixed NALUs.
-bool IsH264Stream(std::span<const u8> data);
-
 /// The decoder behind the Switch 2 video decoder service (nn::codec::video): FFmpeg decodes the
 /// elementary stream the game demuxed, in software or on the host GPU (NVDEC emulation setting).
 /// Used from one thread at a time.
 class Nx2VideoDecoder {
 public:
     /// mime: the codec name nn::codec sends with Configure ("video/vp9", "video/vp8", ...).
-    /// width/height: the stream size from Configure, if known (0: unknown). On Android, codecs the
-    /// bundled FFmpeg lacks (AV1) are decoded with the platform's MediaCodec, which needs a size.
-    explicit Nx2VideoDecoder(std::string_view mime, u32 width = 0, u32 height = 0);
+    explicit Nx2VideoDecoder(std::string_view mime);
     ~Nx2VideoDecoder();
 
     bool IsOpen() const;
@@ -52,12 +47,6 @@ public:
 
     /// Decodes one compressed frame and appends the pictures it completes.
     void Decode(std::span<const u8> data, u64 pts, std::vector<Nx2Picture>& pictures);
-
-    /// True while an asynchronous decoder holds submitted frames it has not output yet.
-    bool HasPendingOutput() const;
-
-    /// Appends the pictures an asynchronous decoder finished since the last call, without input.
-    void Poll(std::vector<Nx2Picture>& pictures);
 
     /// End of stream: appends the pictures the decoder still holds, then starts over.
     void Drain(std::vector<Nx2Picture>& pictures);

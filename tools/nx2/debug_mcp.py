@@ -6,6 +6,10 @@ Run Lichii with EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545, then register this script 
 server for the agent:  python3 -I tools/nx2/debug_mcp.py [--server 127.0.0.1:6545]
 or run one request from a shell:
   python3 -I tools/nx2/debug_mcp.py --call '{"method":"screenshot","params":{}}' --out shot.png
+"""MCP server (stdio) for Eglantine's in-process debug server (docs/nx2/debug-mcp.md).
+Run eglantine.exe or eden-cli.exe with EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545, then register this
+script as a stdio MCP server for the agent:  py -I tools/nx2/debug_mcp.py [--server 127.0.0.1:6545]
+  py -I tools/nx2/debug_mcp.py --call '{"method":"screenshot","params":{}}' --out shot.png
 
 Standard library only. Each tool call is forwarded as one JSON line to the emulator, which may
 be restarted between calls: the adapter reconnects on demand.
@@ -175,6 +179,23 @@ TOOLS = [
         },
     },
     {
+        "name": "write_memory",
+        "description": "For experiments only: writes 1 to 4096 bytes of the game's guest memory "
+                       "and returns what was there before. Refused unless the emulator was "
+                       "started with EDEN_NX2_DEBUG_WRITE=1 (status shows write_memory). Give "
+                       "'hex' (byte pairs in memory order) or 'f32' (floats, little endian). "
+                       "Restore the 'before' bytes when done.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "address": {"type": ["string", "integer"]},
+                "hex": {"type": "string"},
+                "f32": {"type": "array", "items": {"type": "number"}},
+            },
+            "required": ["address"],
+        },
+    },
+    {
         "name": "read_gpu_memory",
         "description": "Reads up to 64 KiB of GPU virtual memory (e.g. query report and semaphore "
                        "buffers the game reads back) at the next frame end, as the GPU sees it, "
@@ -281,7 +302,7 @@ class Emulator:
                 if isinstance(error, socket.timeout):
                     raise EmulatorError(f"no answer within {timeout} s") from error
                 raise EmulatorError(
-                    f"nothing listens on {self.host}:{self.port}: start Lichii with "
+                    f"nothing listens on {self.host}:{self.port}: start Eglantine with "
                     f"EDEN_NX2_DEBUG_SERVER={self.host}:{self.port} and boot a game") from error
             except OSError as error:
                 # A stale connection from an earlier boot: reconnect once.
@@ -371,7 +392,7 @@ class Adapter:
             reply["result"] = {
                 "protocolVersion": wanted if wanted in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "lichii-debug", "version": "1"},
+                "serverInfo": {"name": "eglantine-debug", "version": "1"},
             }
         elif method == "ping":
             reply["result"] = {}
@@ -429,6 +450,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--server", default=os.environ.get("LICHII_DEBUG_SERVER", DEFAULT_SERVER),
                         help=f"host:port of EDEN_NX2_DEBUG_SERVER (default {DEFAULT_SERVER})")
+    parser.add_argument("--server", default=os.environ.get("EDEN_NX2_DEBUG_SERVER", DEFAULT_SERVER),
+                        help="host:port of EDEN_NX2_DEBUG_SERVER (default: that variable, else "
+                             f"{DEFAULT_SERVER})")
     parser.add_argument("--call", metavar="JSON",
                         help='run one request and exit, e.g. \'{"method":"screenshot","params":{}}\'')
     parser.add_argument("--out", metavar="PNG", help="with --call: where to save the PNG")

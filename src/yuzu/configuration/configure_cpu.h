@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
@@ -11,6 +11,7 @@
 #include <QWidget>
 #include "qt_common/config/shared_translation.h"
 #include "yuzu/configuration/configuration_shared.h"
+#include "qt_common/shared_translation.h"
 
 class QComboBox;
 

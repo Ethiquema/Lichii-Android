@@ -18,10 +18,10 @@
 
 #include "common/common_types.h"
 #include "core/core.h"
-#include "frontend_common/play_time_manager.h"
-#include "qt_common/config/uisettings.h"
-#include "qt_common/game_list/model.h"
-#include "qt_common/util/game.h"
+#include "qt_common/uisettings.h"
+#include "qt_common/qt_game_util.h"
+#include "yuzu/compatibility_list.h"
+#include "yuzu/play_time_manager.h"
 
 class QVariantAnimation;
 
@@ -75,8 +75,8 @@ public:
     void SetFilterVisible(bool visibility);
     bool IsEmpty() const;
 
+    void LoadCompatibilityList();
     void PopulateAsync(QVector<UISettings::GameDir>& game_dirs);
-    void SetScanEnabled(bool enabled);
 
     void SaveInterfaceLayout();
     void LoadInterfaceLayout();
@@ -89,7 +89,6 @@ public:
     void ResetViewMode();
 
 public slots:
-    void SetNupConversionRunning(bool running);
     void RefreshGameDirectory();
     void RefreshExternalContent();
     void UpdateIconSizes();
@@ -114,6 +113,8 @@ signals:
     void CopyTIDRequested(u64 program_id);
     void CreateShortcut(u64 program_id, const std::string& game_path,
                         const QtCommon::Game::ShortcutTarget target);
+    void NavigateToGamedbEntryRequested(u64 program_id,
+                                        const CompatibilityList& compatibility_list);
     void OpenPerGameGeneralRequested(const std::string& file);
     void LinkToRyujinxRequested(const u64& program_id);
     void OpenDirectory(const QString& directory);
@@ -170,6 +171,7 @@ private:
     Core::System& system;
 
     bool m_isTreeMode = true;
+    bool m_populating = false;
     bool nup_conversion_running{};
     QAbstractItemView* m_currentView = nullptr;
 };

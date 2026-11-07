@@ -642,7 +642,7 @@ bool TranslatorVisitor::thumb16_SUB_sp(Imm<7> imm7) {
 
 // SEV<c>
 bool TranslatorVisitor::thumb16_SEV() {
-    if (!options.hook_hint_instructions) {
+    if (!conf.hook_hint_instructions) {
         return true;
     }
     return RaiseException(Exception::SendEvent);
@@ -650,7 +650,7 @@ bool TranslatorVisitor::thumb16_SEV() {
 
 // SEVL<c>
 bool TranslatorVisitor::thumb16_SEVL() {
-    if (!options.hook_hint_instructions) {
+    if (!conf.hook_hint_instructions) {
         return true;
     }
     return RaiseException(Exception::SendEventLocal);
@@ -658,7 +658,7 @@ bool TranslatorVisitor::thumb16_SEVL() {
 
 // WFE<c>
 bool TranslatorVisitor::thumb16_WFE() {
-    if (!options.hook_hint_instructions) {
+    if (!conf.hook_hint_instructions) {
         return true;
     }
     return RaiseException(Exception::WaitForEvent);
@@ -666,7 +666,7 @@ bool TranslatorVisitor::thumb16_WFE() {
 
 // WFI<c>
 bool TranslatorVisitor::thumb16_WFI() {
-    if (!options.hook_hint_instructions) {
+    if (!conf.hook_hint_instructions) {
         return true;
     }
     return RaiseException(Exception::WaitForInterrupt);
@@ -674,7 +674,7 @@ bool TranslatorVisitor::thumb16_WFI() {
 
 // YIELD<c>
 bool TranslatorVisitor::thumb16_YIELD() {
-    if (!options.hook_hint_instructions) {
+    if (!conf.hook_hint_instructions) {
         return true;
     }
     return RaiseException(Exception::Yield);
@@ -687,7 +687,7 @@ bool TranslatorVisitor::thumb16_NOP() {
 
 // IT{<x>{<y>{<z>}}} <cond>
 bool TranslatorVisitor::thumb16_IT(Imm<8> imm8) {
-    ASSERT((imm8.Bits<0, 3>() != 0b0000) && "Decode Error");
+    DEBUG_ASSERT((imm8.Bits<0, 3>() != 0b0000) && "Decode Error");
     if (imm8.Bits<4, 7>() == 0b1111 || (imm8.Bits<4, 7>() == 0b1110 && std::popcount(imm8.Bits<0, 3>()) != 1)) {
         return UnpredictableInstruction();
     }

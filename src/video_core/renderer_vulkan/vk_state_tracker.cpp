@@ -63,7 +63,6 @@ Maxwell3D::DirtyState::Flags MakeInvalidationFlags() {
         BlendEnable,
         ConservativeRasterizationMode,
         LineStippleEnable,
-        LineStippleParams,
     };
     Maxwell3D::DirtyState::Flags flags{};
     for (const int flag : INVALIDATION_FLAGS) {
@@ -213,7 +212,7 @@ void SetupDirtyVertexAttributes(Maxwell3D::DirtyState::Tables& tables) {
     FillBlock(tables[1], OFF(vertex_attrib_format), Regs::NumVertexAttributes, VertexInput);
 }
 
-void SetupDirtyVertexBindings(Maxwell3D::DirtyState::Tables& tables) {
+void SetupDirtyVertexBindings(Tables& tables) {
     // Do NOT include stride here, it's implicit in VertexBuffer
     static constexpr size_t divisor_offset = 3;
     for (size_t i = 0; i < Regs::NumVertexArrays; ++i) {
@@ -228,7 +227,6 @@ void SetupDirtyVertexBindings(Maxwell3D::DirtyState::Tables& tables) {
 void SetupRasterModes(Maxwell3D::DirtyState::Tables &tables) {
     auto& table = tables[0];
 
-    table[OFF(line_stipple_params)] = LineStippleParams;
     table[OFF(conservative_raster_enable)] = ConservativeRasterizationMode;
     table[OFF(line_anti_alias_enable)] = LineRasterizationMode;
 }

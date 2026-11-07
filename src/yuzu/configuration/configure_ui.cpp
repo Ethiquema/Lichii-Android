@@ -25,9 +25,7 @@
 #include "core/core.h"
 #include "core/frontend/framebuffer_layout.h"
 #include "ui_configure_ui.h"
-
-#include "qt_common/config/uisettings.h"
-#include "qt_common/qt_compat.h"
+#include "qt_common/uisettings.h"
 
 namespace {
 

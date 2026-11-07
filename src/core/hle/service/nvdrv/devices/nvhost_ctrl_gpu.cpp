@@ -4,9 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <array>
 #include <algorithm>
-#include <cstdlib>
 #include <cstring>
 #include "common/assert.h"
 #include "common/logging.h"
@@ -14,8 +12,7 @@
 #include "core/core_timing.h"
 #include "core/hle/service/nvdrv/devices/ioctl_serialization.h"
 #include "core/hle/service/nvdrv/devices/nvhost_ctrl_gpu.h"
-#include "core/hle/service/nvdrv/devices/nx2_stub_device.h"
-#include "video_core/nx2.h"
+#include "core/hle/service/nvdrv/devices/native_gpu_characteristics.h"
 #include "core/hle/service/nvdrv/nvdrv.h"
 
 namespace Service::Nvidia::Devices {
@@ -102,14 +99,39 @@ NvResult nvhost_ctrl_gpu::Ioctl3(DeviceFD fd, Ioctl command, std::span<const u8>
     switch (command.group) {
     case 'G':
         switch (command.cmd) {
-        case 0x5: {
-            const auto result = WrapFixedInlOut(this, &nvhost_ctrl_gpu::GetCharacteristics3,
-                                                input, output, inline_output);
-            if (nx2_caller) {
-                ApplyNx2CharacteristicsTail(inline_output);
+        case 0x5:
+            if (command.raw == 0xc0e04705 || command.raw == 0xc0e84705) {
+                const size_t native_size = command.raw == 0xc0e84705
+                                               ? ExtendedNativeGpuCharacteristicsSize
+                                               : NativeGpuCharacteristicsSize;
+                const size_t packet_size = 0x10 + native_size;
+                if (input.size() < packet_size || output.size() < packet_size ||
+                    inline_output.size() < native_size) {
+                    return NvResult::BadParameter;
+                }
+                IoctlCharacteristics legacy{};
+                GetCharacteristics3(legacy, {});
+                const std::span<const u8, 0xa0> legacy_bytes{
+                    reinterpret_cast<const u8*>(&legacy.gc), 0xa0};
+                std::array<u8, ExtendedNativeGpuCharacteristicsSize> native{};
+                if (native_size == ExtendedNativeGpuCharacteristicsSize) {
+                    native = MakeNativeGpuCharacteristics<ExtendedNativeGpuCharacteristicsSize>(
+                        legacy_bytes);
+                } else {
+                    const auto original = MakeNativeGpuCharacteristics(legacy_bytes);
+                    std::copy(original.begin(), original.end(), native.begin());
+                }
+                std::fill(output.begin(), output.end(), u8{});
+                std::fill(inline_output.begin(), inline_output.end(), u8{});
+                std::memcpy(output.data(), input.data(), 0x10);
+                const u64_le size{native_size};
+                std::memcpy(output.data(), &size, sizeof(size));
+                std::memcpy(output.data() + 0x10, native.data(), native_size);
+                std::memcpy(inline_output.data(), native.data(), native_size);
+                return NvResult::Success;
             }
-            return result;
-        }
+            return WrapFixedInlOut(this, &nvhost_ctrl_gpu::GetCharacteristics3, input, output,
+                                   inline_output);
         case 0x6:
             return WrapFixedInlOut(this, &nvhost_ctrl_gpu::GetTPCMasks3, input, output,
                                    inline_output);
@@ -228,11 +250,9 @@ void ApplyNx2Characteristics(GC& gc) {
     if (remap) {
         gc.flags |= 1ULL << 35;
     }
-    // Engine support bits 40-44 (2D, 3D, compute, inline-to-memory, ZBC). The SDK filters its class
-    // enumeration by them, and NvRm's newer device path lists a class family in the device info
-    // only when its bit is set; without them Fire Emblem: Fortune's Weave aborts at boot and a
-    // device opened that way has no compute class (Fire Emblem's CUDA driver reports no device).
-    gc.flags |= 0x1FULL << 40;
+    // Bits 40..43: the 2D, 3D, compute and inline-to-memory class families. The SDK filters its
+    // class enumeration by them; without them Fire Emblem: Fortune's Weave aborts at boot.
+    gc.flags |= 0xfULL << 40;
 
     // The Switch 2 layout keeps nine s16 interface versions at 0x70..0x80 (like nvgpu's
     // *_ioctl_nr_last); its NvRm requires e.g. [0x78] >= 6 and enables features above 0xa, 0x1f
@@ -411,7 +431,7 @@ NvResult nvhost_ctrl_gpu::ZCullGetInfo(IoctlNvgpuGpuZcullGetInfoArgs& params) {
 }
 
 NvResult nvhost_ctrl_gpu::ZBCSetTable(IoctlZbcSetTable& params) {
-    if (params.type > supported_types) {
+    if (params.type == 0 || params.type > supported_types) {
         LOG_ERROR(Service_NVDRV, "ZBCSetTable: invalid type {:#x}", params.type);
         return NvResult::BadParameter;
     }
@@ -426,42 +446,61 @@ NvResult nvhost_ctrl_gpu::ZBCSetTable(IoctlZbcSetTable& params) {
             color_entry.format = params.format;
             color_entry.ref_cnt = 1u;
 
-            auto color_it = std::ranges::find_if(zbc_colors,
-                                                 [&](const ZbcColorEntry& color_in_question) {
-                                                     return color_entry.format == color_in_question.format &&
-                                                            color_entry.color_ds == color_in_question.color_ds &&
-                                                            color_entry.color_l2 == color_in_question.color_l2;
-                                                 });
+            const auto color_end = zbc_colors.begin() + zbc_used_color_entries;
+            auto color_it = std::find_if(zbc_colors.begin(), color_end,
+                                         [&](const ZbcColorEntry& color_in_question) {
+                                             return color_entry.format == color_in_question.format &&
+                                                    color_entry.color_ds == color_in_question.color_ds &&
+                                                    color_entry.color_l2 == color_in_question.color_l2;
+                                         });
 
-            if (color_it != zbc_colors.end()) {
+            if (color_it != color_end) {
                 ++color_it->ref_cnt;
                 LOG_DEBUG(Service_NVDRV, "ZBCSetTable: reused color entry fmt={:#x}, ref_cnt={:#x}",
                           params.format, color_it->ref_cnt);
-            } else {
-                zbc_colors.push_back(color_entry);
-                LOG_DEBUG(Service_NVDRV, "ZBCSetTable: added color entry fmt={:#x}, index={:#x}",
-                          params.format, zbc_colors.size() - 1);
+                break;
             }
+
+            if (zbc_used_color_entries >= ZBC_TABLE_SIZE) {
+                LOG_WARNING(Service_NVDRV, "ZBCSetTable: color table is full, fmt={:#x}",
+                            params.format);
+                return NvResult::InsufficientMemory;
+            }
+
+            zbc_colors[zbc_used_color_entries] = color_entry;
+            LOG_DEBUG(Service_NVDRV, "ZBCSetTable: added color entry fmt={:#x}, index={:#x}",
+                      params.format, zbc_used_color_entries);
+            ++zbc_used_color_entries;
             break;
         }
         case ZBCTypes::depth: {
             ZbcDepthEntry depth_entry{params.depth, params.format, 1u};
 
-            auto depth_it = std::ranges::find_if(zbc_depths,
-                                                 [&](const ZbcDepthEntry& depth_entry_in_question) {
-                                                     return depth_entry.format == depth_entry_in_question.format &&
-                                                            depth_entry.depth == depth_entry_in_question.depth;
-                                                 });
+            const auto depth_end = zbc_depths.begin() + zbc_used_depth_entries;
+            auto depth_it = std::find_if(zbc_depths.begin(), depth_end,
+                                         [&](const ZbcDepthEntry& depth_entry_in_question) {
+                                             return depth_entry.format == depth_entry_in_question.format &&
+                                                    depth_entry.depth == depth_entry_in_question.depth;
+                                         });
 
-            if (depth_it != zbc_depths.end()) {
+            if (depth_it != depth_end) {
                 ++depth_it->ref_cnt;
                 LOG_DEBUG(Service_NVDRV, "ZBCSetTable: reused depth entry fmt={:#x}, ref_cnt={:#x}",
                           depth_entry.format, depth_it->ref_cnt);
-            } else {
-                zbc_depths.push_back(depth_entry);
-                LOG_DEBUG(Service_NVDRV, "ZBCSetTable: added depth entry fmt={:#x}, index={:#x}",
-                          depth_entry.format, zbc_depths.size() - 1);
+                break;
             }
+
+            if (zbc_used_depth_entries >= ZBC_TABLE_SIZE) {
+                LOG_WARNING(Service_NVDRV, "ZBCSetTable: depth table is full, fmt={:#x}",
+                            depth_entry.format);
+                return NvResult::InsufficientMemory;
+            }
+
+            zbc_depths[zbc_used_depth_entries] = depth_entry;
+            LOG_DEBUG(Service_NVDRV, "ZBCSetTable: added depth entry fmt={:#x}, index={:#x}",
+                      depth_entry.format, zbc_used_depth_entries);
+            ++zbc_used_depth_entries;
+            break;
         }
     }
 
@@ -476,10 +515,16 @@ NvResult nvhost_ctrl_gpu::ZBCQueryTable(IoctlZbcQueryTable& params) {
 
     std::scoped_lock lk(zbc_mutex);
 
+    if (params.type == 0) {
+        params.index_size = ZBC_TABLE_SIZE;
+        return NvResult::Success;
+    }
+
     switch (static_cast<ZBCTypes>(params.type)) {
         case ZBCTypes::color: {
-            if (params.index_size >= zbc_colors.size()) {
-                LOG_ERROR(Service_NVDRV, "ZBCQueryTable: invalid color index {:#x}", params.index_size);
+            if (params.index_size >= zbc_used_color_entries) {
+                LOG_ERROR(Service_NVDRV, "ZBCQueryTable: invalid color index {:#x}",
+                          params.index_size);
                 return NvResult::BadParameter;
             }
 
@@ -489,12 +534,13 @@ NvResult nvhost_ctrl_gpu::ZBCQueryTable(IoctlZbcQueryTable& params) {
             params.depth = 0;
             params.ref_cnt = colors.ref_cnt;
             params.format = colors.format;
-            params.index_size = static_cast<u32>(zbc_colors.size());
+            params.index_size = zbc_used_color_entries;
             break;
         }
         case ZBCTypes::depth: {
-            if (params.index_size >= zbc_depths.size()) {
-                LOG_ERROR(Service_NVDRV, "ZBCQueryTable: invalid depth index {:#x}", params.index_size);
+            if (params.index_size >= zbc_used_depth_entries) {
+                LOG_ERROR(Service_NVDRV, "ZBCQueryTable: invalid depth index {:#x}",
+                          params.index_size);
                 return NvResult::BadParameter;
             }
 
@@ -504,7 +550,8 @@ NvResult nvhost_ctrl_gpu::ZBCQueryTable(IoctlZbcQueryTable& params) {
             params.depth = depth_entry.depth;
             params.ref_cnt = depth_entry.ref_cnt;
             params.format = depth_entry.format;
-            params.index_size = static_cast<u32>(zbc_depths.size());
+            params.index_size = zbc_used_depth_entries;
+            break;
         }
     }
 

@@ -90,10 +90,14 @@ void GpuSplit::CheckOwner(const char* where) {
 GpuSplit GpuSplit::instance;
 
 void GpuSplit::MaybeStart(Core::System& system_) {
-    static const char mode = [] {
+    static const char forced_mode = [] {
         const char* value = std::getenv("EDEN_NX2_SPLIT");
-        return value != nullptr ? value[0] : '0';
+        return value != nullptr ? value[0] : '\0';
     }();
+    const char mode = forced_mode != '\0'
+                          ? forced_mode
+                          : static_cast<char>('0' + static_cast<u32>(
+                                                        Settings::values.nx2_gpu_split.GetValue()));
     const bool wanted = mode == '1' || mode == '2';
     // Disabled by default: on device (AYN Thor, Adreno 740, PurpleVK) the split leaves the
     // GPU back thread ~90% idle — Nx2Profile reports "split wait 908-927 ms" or "other

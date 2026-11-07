@@ -11,13 +11,13 @@
 
 namespace AudioCore {
 
-AudioManager::AudioManager() {
-    thread = std::jthread([this](std::stop_token stop_token) {
+AudioManager::AudioManager(Core::System& system) {
+    thread = std::jthread([&](std::stop_token stop_token) {
         Common::SetCurrentThreadName("AudioManager");
         std::unique_lock l{events.GetAudioEventLock()};
         events.ClearEvents();
         while (!stop_token.stop_requested()) {
-            const auto timed_out{events.Wait(l, std::chrono::seconds(2))};
+            const auto timed_out = events.Wait(l, std::chrono::seconds{2});
             if (events.CheckAudioEventSet(Event::Type::Max)) {
                 break;
             }
@@ -25,7 +25,7 @@ AudioManager::AudioManager() {
                 const auto event_type = Event::Type(i);
                 if (events.CheckAudioEventSet(event_type) || timed_out) {
                     if (buffer_events[i]) {
-                        buffer_events[i]();
+                        buffer_events[i](buffer_data[i], system);
                     }
                 }
                 events.SetAudioEvent(event_type, false);
@@ -35,19 +35,20 @@ AudioManager::AudioManager() {
 }
 
 void AudioManager::Shutdown() {
-    events.SetAudioEvent(Event::Type::Max, true);
     if (thread.joinable()) {
         thread.request_stop();
+        events.SetAudioEvent(Event::Type::Max, true);
         thread.join();
     }
 }
 
-Result AudioManager::SetOutManager(BufferEventFunc buffer_func) {
+Result AudioManager::SetOutManager(void *data, BufferEventFunc buffer_func) {
     if (thread.joinable()) {
         std::scoped_lock l{lock};
         const auto index{events.GetManagerIndex(Event::Type::AudioOutManager)};
         if (buffer_events[index] == nullptr) {
             buffer_events[index] = std::move(buffer_func);
+            buffer_data[index] = data;
             needs_update = true;
             events.SetAudioEvent(Event::Type::AudioOutManager, true);
         }
@@ -56,12 +57,13 @@ Result AudioManager::SetOutManager(BufferEventFunc buffer_func) {
     return Service::Audio::ResultOperationFailed;
 }
 
-Result AudioManager::SetInManager(BufferEventFunc buffer_func) {
+Result AudioManager::SetInManager(void *data, BufferEventFunc buffer_func) {
     if (thread.joinable()) {
         std::scoped_lock l{lock};
         const auto index{events.GetManagerIndex(Event::Type::AudioInManager)};
         if (buffer_events[index] == nullptr) {
             buffer_events[index] = std::move(buffer_func);
+            buffer_data[index] = data;
             needs_update = true;
             events.SetAudioEvent(Event::Type::AudioInManager, true);
         }

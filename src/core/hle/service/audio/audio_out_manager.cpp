@@ -13,20 +13,20 @@
 namespace Service::Audio {
 using namespace AudioCore::AudioOut;
 
+std::optional<ServiceFrameworkBase::FunctionInfoBase> IAudioOutManager::FindRequest(u32 key) {
+    static constexpr auto functions = CreateStaticMap(
+        FunctionInfo{0, D<&IAudioOutManager::ListAudioOuts>, "ListAudioOuts"},
+        FunctionInfo{1, D<&IAudioOutManager::OpenAudioOut>, "OpenAudioOut"},
+        FunctionInfo{2, D<&IAudioOutManager::ListAudioOutsAuto>, "ListAudioOutsAuto"},
+        FunctionInfo{3, D<&IAudioOutManager::OpenAudioOutAuto>, "OpenAudioOutAuto"}
+    );
+    return HandlerTableGenerateWithFind(key, functions);
+}
+
 IAudioOutManager::IAudioOutManager(Core::System& system_)
     : ServiceFramework{system_, "audout:u"}
     , impl(std::make_shared<AudioCore::AudioOut::Manager>(system_))
 {
-    // clang-format off
-    static const FunctionInfo functions[] = {
-        {0, D<&IAudioOutManager::ListAudioOuts>, "ListAudioOuts"},
-        {1, D<&IAudioOutManager::OpenAudioOut>, "OpenAudioOut"},
-        {2, D<&IAudioOutManager::ListAudioOutsAuto>, "ListAudioOutsAuto"},
-        {3, D<&IAudioOutManager::OpenAudioOutAuto>, "OpenAudioOutAuto"},
-    };
-    // clang-format on
-
-    RegisterHandlers(functions);
 }
 
 IAudioOutManager::~IAudioOutManager() = default;
@@ -77,8 +77,8 @@ Result IAudioOutManager::OpenAudioOutAuto(
     }
 
     size_t new_session_id{};
-    R_TRY(impl->LinkToManager());
-    R_TRY(impl->AcquireSessionId(new_session_id));
+    R_TRY(impl->LinkToManager(system));
+    R_TRY(impl->AcquireSessionId(system, new_session_id));
 
     const auto device_name = Common::StringFromBuffer(name[0].name);
     LOG_DEBUG(Service_Audio, "Opening new AudioOut, sessionid={}, free sessions={}", new_session_id,

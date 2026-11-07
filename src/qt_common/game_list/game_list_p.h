@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-FileCopyrightText: 2015 Citra Emulator Project
@@ -21,9 +21,9 @@
 #include "common/common_types.h"
 #include "common/logging.h"
 #include "common/string_util.h"
-#include "frontend_common/play_time_manager.h"
-#include "qt_common/config/uisettings.h"
-#include "qt_common/qt_common.h"
+#include "yuzu/play_time_manager.h"
+#include "qt_common/uisettings.h"
+#include "yuzu/util/util.h"
 
 enum class GameListItemType {
     Game = QStandardItem::UserType + 1,

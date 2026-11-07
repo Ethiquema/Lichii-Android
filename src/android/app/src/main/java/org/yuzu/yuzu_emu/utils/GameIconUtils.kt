@@ -37,32 +37,29 @@ private fun Game.iconCacheKey(): String = "$path|$version"
 
 private data class GameIconTarget(val game: Game, var iconHash: Int? = null)
 
-class GameIconFetcher(
+class GameObjectIconFetcher(
     private val game: Game,
     private val options: Options
 ) : Fetcher {
     override suspend fun fetch(): FetchResult {
+        val bitmap = decodeGameIcon(game.path)
+            ?: throw IllegalStateException("Failed to decode game icon for: ${game.title}")
+
         return DrawableResult(
-            drawable = decodeGameIcon(game)!!.toDrawable(options.context.resources),
+            drawable = bitmap.toDrawable(options.context.resources),
             isSampled = false,
             dataSource = DataSource.DISK
         )
     }
 
-    private fun decodeGameIcon(game: Game): Bitmap? {
-        val data = GameMetadata.getIcon(game.path)
-        gameIconHashes[game.iconCacheKey()] = data.contentHashCode()
-        return BitmapFactory.decodeByteArray(
-            data,
-            0,
-            data.size,
-            BitmapFactory.Options()
-        )
+    private fun decodeGameIcon(path: String): Bitmap? {
+        val iconBytes = GameMetadata.getIcon(path)
+        return BitmapFactory.decodeByteArray(iconBytes, 0, iconBytes.size)
     }
 
     class Factory : Fetcher.Factory<Game> {
         override fun create(data: Game, options: Options, imageLoader: ImageLoader): Fetcher =
-            GameIconFetcher(data, options)
+            GameObjectIconFetcher(data, options)
     }
 }
 
@@ -74,7 +71,7 @@ object GameIconUtils {
     private val imageLoader = ImageLoader.Builder(YuzuApplication.appContext)
         .components {
             add(GameIconKeyer())
-            add(GameIconFetcher.Factory())
+            add(GameObjectIconFetcher.Factory())
         }
         .memoryCache {
             MemoryCache.Builder(YuzuApplication.appContext)
@@ -107,6 +104,9 @@ object GameIconUtils {
     }
 
     fun refreshGameIcon(game: Game) {
+        if (game.isLooseExeFS) {
+            return
+        }
         val targets = synchronized(gameIconTargets) {
             gameIconTargets
                 .filterValues { it.game.path == game.path && it.game.programId == game.programId }
@@ -156,9 +156,6 @@ object GameIconUtils {
             R.id.shortcut_foreground,
             getGameIcon(lifecycleOwner, game).toDrawable(YuzuApplication.appContext.resources)
         )
-        val inset = YuzuApplication.appContext.resources
-            .getDimensionPixelSize(R.dimen.icon_inset)
-        layerDrawable.setLayerInset(1, inset, inset, inset, inset)
         return IconCompat.createWithAdaptiveBitmap(
             layerDrawable.toBitmap(config = Bitmap.Config.ARGB_8888)
         )

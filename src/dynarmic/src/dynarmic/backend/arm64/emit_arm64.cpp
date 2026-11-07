@@ -8,6 +8,8 @@
 
 #include "dynarmic/backend/arm64/emit_arm64.h"
 
+#include <algorithm>
+
 #include <oaknut/oaknut.hpp>
 
 #include "dynarmic/backend/arm64/abi.h"
@@ -54,7 +56,7 @@ void EmitIR<IR::Opcode::PushRSB>(oaknut::CodeGenerator& code, EmitContext& ctx, 
     }
 
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ASSERT(args[0].IsImmediate());
+    DEBUG_ASSERT(args[0].IsImmediate());
     const IR::LocationDescriptor target{args[0].GetImmediateU64()};
 
     code.LDR(Wscratch2, SP, offsetof(StackLayout, rsb_ptr));
@@ -71,19 +73,19 @@ void EmitIR<IR::Opcode::PushRSB>(oaknut::CodeGenerator& code, EmitContext& ctx, 
 template<>
 void EmitIR<IR::Opcode::GetCarryFromOp>(oaknut::CodeGenerator&, EmitContext& ctx, IR::Inst* inst) {
     [[maybe_unused]] auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ASSERT(ctx.reg_alloc.WasValueDefined(inst));
+    DEBUG_ASSERT(ctx.reg_alloc.WasValueDefined(inst));
 }
 
 template<>
 void EmitIR<IR::Opcode::GetOverflowFromOp>(oaknut::CodeGenerator&, EmitContext& ctx, IR::Inst* inst) {
     [[maybe_unused]] auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ASSERT(ctx.reg_alloc.WasValueDefined(inst));
+    DEBUG_ASSERT(ctx.reg_alloc.WasValueDefined(inst));
 }
 
 template<>
 void EmitIR<IR::Opcode::GetGEFromOp>(oaknut::CodeGenerator&, EmitContext& ctx, IR::Inst* inst) {
     [[maybe_unused]] auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ASSERT(ctx.reg_alloc.WasValueDefined(inst));
+    DEBUG_ASSERT(ctx.reg_alloc.WasValueDefined(inst));
 }
 
 template<>
@@ -149,13 +151,13 @@ void EmitIR<IR::Opcode::GetNZFromOp>(oaknut::CodeGenerator& code, EmitContext& c
 template<>
 void EmitIR<IR::Opcode::GetUpperFromOp>(oaknut::CodeGenerator&, EmitContext& ctx, IR::Inst* inst) {
     [[maybe_unused]] auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ASSERT(ctx.reg_alloc.WasValueDefined(inst));
+    DEBUG_ASSERT(ctx.reg_alloc.WasValueDefined(inst));
 }
 
 template<>
 void EmitIR<IR::Opcode::GetLowerFromOp>(oaknut::CodeGenerator&, EmitContext& ctx, IR::Inst* inst) {
     [[maybe_unused]] auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ASSERT(ctx.reg_alloc.WasValueDefined(inst));
+    DEBUG_ASSERT(ctx.reg_alloc.WasValueDefined(inst));
 }
 
 template<>
@@ -206,9 +208,9 @@ EmittedBlockInfo EmitArm64(oaknut::CodeGenerator& code, IR::Block block, const E
     ebi.entry_point = code.xptr<CodePtr>();
 
     if (ctx.block.GetCondition() == IR::Cond::AL) {
-        ASSERT(!ctx.block.HasConditionFailedLocation());
+        DEBUG_ASSERT(!ctx.block.HasConditionFailedLocation());
     } else {
-        ASSERT(ctx.block.HasConditionFailedLocation());
+        DEBUG_ASSERT(ctx.block.HasConditionFailedLocation());
         oaknut::Label pass;
 
         pass = conf.emit_cond(code, ctx, ctx.block.GetCondition());
@@ -273,7 +275,13 @@ void EmitRelocation(oaknut::CodeGenerator& code, EmitContext& ctx, LinkTarget li
 }
 
 void EmitBlockLinkRelocation(oaknut::CodeGenerator& code, EmitContext& ctx, const IR::LocationDescriptor& descriptor, BlockRelocationType type) {
-    ctx.ebi.block_relocations[descriptor].emplace_back(BlockRelocation{code.xptr<CodePtr>() - ctx.ebi.entry_point, type});
+    auto& block_relocations = ctx.ebi.block_relocations;
+    auto it = std::find_if(block_relocations.begin(), block_relocations.end(),
+                           [&](const auto& entry) { return entry.first == descriptor; });
+    if (it == block_relocations.end()) {
+        it = block_relocations.emplace(block_relocations.end(), descriptor, std::vector<BlockRelocation>{});
+    }
+    it->second.emplace_back(BlockRelocation{code.xptr<CodePtr>() - ctx.ebi.entry_point, type});
     switch (type) {
     case BlockRelocationType::Branch:
         code.NOP();

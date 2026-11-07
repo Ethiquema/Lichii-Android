@@ -12,7 +12,8 @@
 #include <memory>
 #include <span>
 #include <string>
-#include "common/container/unordered_map.h"
+#include <vector>
+#include <ankerl/unordered_dense.h>
 
 #include "common/common_types.h"
 #include "core/hle/service/kernel_helpers.h"
@@ -26,6 +27,7 @@ class System;
 
 namespace Kernel {
 class KEvent;
+class KProcess;
 }
 
 namespace Service::Nvidia {
@@ -65,10 +67,7 @@ public:
     /// Returns a pointer to one of the available devices, identified by its name.
     template <typename T>
     std::shared_ptr<T> GetDevice(DeviceFD fd) {
-        auto itr = open_files.find(fd);
-        if (itr == open_files.end())
-            return nullptr;
-        return std::static_pointer_cast<T>(itr->second);
+        return std::static_pointer_cast<T>(FindDevice(fd));
     }
 
     NvResult VerifyFD(DeviceFD fd) const;
@@ -89,6 +88,9 @@ public:
     NvResult Close(DeviceFD fd);
 
     NvResult QueryEvent(DeviceFD fd, u32 event_id, Kernel::KEvent*& event);
+    void CloseSession(NvCore::SessionId session_id);
+    void TrackSessionAruid(NvCore::SessionId session_id, u64 aruid);
+    size_t ResetForProcess(Kernel::KProcess* process);
 
     NvCore::Container& GetContainer() {
         return container;
@@ -96,6 +98,8 @@ public:
 
 private:
     friend class EventInterface;
+
+    std::shared_ptr<Devices::nvdevice> FindDevice(DeviceFD fd) const;
 
     /// Manages syncpoints on the host
     /// Builds a logged stub for nvgpu device nodes only Switch 2 drivers use.
@@ -108,12 +112,16 @@ private:
     using FilesContainerType = ::Common::unordered_map<DeviceFD, std::shared_ptr<Devices::nvdevice>>;
     /// Mapping of file descriptors to the devices they reference.
     FilesContainerType open_files;
+    mutable std::mutex open_files_mutex;
 
     KernelHelpers::ServiceContext service_context;
 
     EventInterface events_interface;
 
-    ::Common::unordered_map<std::string, std::function<FilesContainerType::iterator(DeviceFD)>> builders;
+    ankerl::unordered_dense::map<std::string, std::function<FilesContainerType::iterator(DeviceFD)>> builders;
+
+    size_t CloseFilesForSessions(std::span<const NvCore::SessionId> session_ids);
+    std::vector<NvCore::SessionId> GetSessionIdsForAruid(u64 aruid) const;
 };
 
 void LoopProcess(Core::System& system);

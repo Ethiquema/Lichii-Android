@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #pragma once
@@ -55,6 +55,8 @@ struct EnvironmentInfo {
 
 EnvironmentInfo DetectEnvironment(const VideoCore::RendererBase& renderer);
 
-void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& renderer);
+void LoadEarlyOverrides(std::uint64_t program_id, const std::string& gpu_vendor, bool enabled = true);
+
+void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& renderer, bool enabled = true);
 
 } // namespace Core::GameSettings

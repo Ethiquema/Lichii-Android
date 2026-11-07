@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include "audio_core/renderer/audio_device.h"
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/kernel_helpers.h"
@@ -48,20 +50,21 @@ private:
     Result QueryAudioDeviceSystemEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
     Result QueryAudioDeviceInputEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
     Result QueryAudioDeviceOutputEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result AcquireAudioOutputDeviceNotification(OutCopyHandle<Kernel::KReadableEvent> out_event,
+                                                u64 notification_id);
+    Result ReleaseAudioOutputDeviceNotification(u64 notification_id);
     Result GetActiveChannelCount(Out<u32> out_active_channel_count);
     Result ListAudioOutputDeviceName(
         OutArray<AudioDevice::AudioDeviceName, BufferAttr_HipcMapAlias> out_names,
         Out<s32> out_count);
     Result SetAudioDeviceOutputVolumeAutoTuneEnabled(bool enabled);
     Result IsAudioDeviceOutputVolumeAutoTuneEnabled(Out<bool> out_enabled);
-    Result AcquireAudioDeviceNotification(OutCopyHandle<Kernel::KReadableEvent> out_event,
-                                          u64 unknown);
-    Result ReleaseAudioDeviceNotification(u64 unknown);
 
+    std::optional<FunctionInfoBase> FindRequest(u32 key) override;
     KernelHelpers::ServiceContext service_context;
     std::unique_ptr<AudioCore::Renderer::AudioDevice> impl;
     Kernel::KEvent* event;
-    Kernel::KEvent* notification_event;
+    std::unordered_map<u64, Kernel::KEvent*> output_notifications;
 };
 
 } // namespace Service::Audio

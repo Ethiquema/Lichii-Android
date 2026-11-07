@@ -23,10 +23,14 @@ import androidx.core.view.updatePadding
 import androidx.documentfile.provider.DocumentFile
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.findNavController
 import androidx.navigation.fragment.findNavController
 import androidx.recyclerview.widget.GridLayoutManager
 import com.google.android.material.transition.MaterialSharedAxis
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.yuzu.yuzu_emu.HomeNavigationDirections
 import org.yuzu.yuzu_emu.NativeLibrary
 import org.yuzu.yuzu_emu.R
@@ -41,6 +45,7 @@ import org.yuzu.yuzu_emu.model.DriverViewModel
 import org.yuzu.yuzu_emu.model.HomeSetting
 import org.yuzu.yuzu_emu.model.HomeViewModel
 import org.yuzu.yuzu_emu.ui.main.MainActivity
+import org.yuzu.yuzu_emu.utils.BugReport
 import org.yuzu.yuzu_emu.utils.FileUtil
 import org.yuzu.yuzu_emu.utils.GpuDriverHelper
 import org.yuzu.yuzu_emu.utils.Log
@@ -80,6 +85,20 @@ class HomeSettingsFragment : Fragment() {
         binding.toolbarHomeSettings.title = getString(R.string.preferences_settings)
 
         val optionsList: MutableList<HomeSetting> = mutableListOf<HomeSetting>().apply {
+            add(
+                HomeSetting(
+                    R.string.switch2_readiness,
+                    R.string.switch2_readiness_description,
+                    R.drawable.ic_check_circle,
+                    {
+                        val action = HomeNavigationDirections.actionGlobalSettingsSubscreenActivity(
+                            SettingsSubscreen.SWITCH2_READINESS,
+                            null
+                        )
+                        binding.root.findNavController().navigate(action)
+                    }
+                )
+            )
             add(
                 HomeSetting(
                     R.string.advanced_settings,
@@ -171,20 +190,6 @@ class HomeSettingsFragment : Fragment() {
                     )
                 )
             }
-            add(
-                HomeSetting(
-                    R.string.post_processing,
-                    R.string.post_processing_description,
-                    R.drawable.ic_post_processing,
-                    {
-                        val action = HomeNavigationDirections.actionGlobalSettingsActivity(
-                            null,
-                            Settings.MenuTag.SECTION_POST_PROCESSING
-                        )
-                        binding.root.findNavController().navigate(action)
-                    }
-                )
-            )
             add(
                 HomeSetting(
                     R.string.lossless_scaling,
@@ -465,39 +470,23 @@ class HomeSettingsFragment : Fragment() {
         }
     }
 
-    // Share the current log if we just returned from a game but share the old log
-    // if we just started the app and the old log exists.
+    // The same report as the readiness check's Share report, without the check results.
     private fun shareLog() {
-        val currentLog = DocumentFile.fromSingleUri(
-            mainActivity,
-            DocumentsContract.buildDocumentUri(
-                DocumentProvider.AUTHORITY,
-                "${DocumentProvider.ROOT_ID}/log/eden_log.txt"
-            )
-        )!!
-        val oldLog = DocumentFile.fromSingleUri(
-            mainActivity,
-            DocumentsContract.buildDocumentUri(
-                DocumentProvider.AUTHORITY,
-                "${DocumentProvider.ROOT_ID}/log/eden_log.txt.old.txt"
-            )
-        )!!
-
-        val intent = Intent(Intent.ACTION_SEND)
-            .setDataAndType(currentLog.uri, FileUtil.TEXT_PLAIN)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        if (!Log.gameLaunched && oldLog.exists()) {
-            intent.putExtra(Intent.EXTRA_STREAM, oldLog.uri)
-            startActivity(Intent.createChooser(intent, getText(R.string.share_log)))
-        } else if (currentLog.exists()) {
-            intent.putExtra(Intent.EXTRA_STREAM, currentLog.uri)
-            startActivity(Intent.createChooser(intent, getText(R.string.share_log)))
-        } else {
-            Toast.makeText(
-                requireContext(),
-                getText(R.string.share_log_missing),
-                Toast.LENGTH_SHORT
-            ).show()
+        val context = requireContext().applicationContext
+        viewLifecycleOwner.lifecycleScope.launch {
+            val report = withContext(Dispatchers.IO) {
+                try {
+                    BugReport.write(context, null)
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            if (report == null) {
+                Toast.makeText(context, R.string.readiness_share_report_failed, Toast.LENGTH_SHORT)
+                    .show()
+                return@launch
+            }
+            BugReport.share(requireActivity(), report, getText(R.string.share_log))
         }
     }
 

@@ -148,10 +148,6 @@ inline u64 HashPushbufferWords(std::span<const u32> words) {
 /// details on this implementation.
 class DmaPusher final {
 public:
-    /// Counts suspensions on a semaphore acquire and the resumes after them, so it is odd while
-    /// the channel is suspended (see CommandList::snapshot_suspensions).
-    std::atomic<u64> suspensions{0};
-
     explicit DmaPusher(Core::System& system_, MemoryManager& memory_manager_, Control::ChannelState& channel_state_);
     ~DmaPusher();
 
@@ -170,14 +166,8 @@ public:
     }
 
     void DispatchCalls();
-
-    /// Switch 2: true while the channel is suspended on a semaphore acquire.
-    [[nodiscard]] bool HasPendingAcquire() const {
-        return puller.HasPendingAcquire();
-    }
-    [[nodiscard]] bool CanResumeAcquire() {
-        return puller.CanResumeAcquire(*this);
-    }
+    [[nodiscard]] bool HasPendingNativeAcquire() const { return puller.HasPendingNativeAcquire(); }
+    [[nodiscard]] bool CanResumeNativeAcquire() { return !HasFailedNativeWork() && puller.CanResumeNativeAcquire(*this); }
 
     void BindSubchannel(Engines::EngineInterface* engine, u32 subchannel_id, Engines::EngineTypes engine_type) {
         subchannels[subchannel_id] = engine;
@@ -194,11 +184,10 @@ private:
 
     static constexpr u32 non_puller_methods = 0x40;
     static constexpr u32 max_subchannels = 8;
+    bool HasFailedNativeWork() const;
     bool Step();
-    /// Returns how many words were processed: fewer than given when a semaphore acquire
-    /// suspended the channel.
     size_t ProcessCommands(std::span<const CommandHeader> commands, size_t word_offset = 0);
-    size_t command_resume_offset{}; ///< Words of the current entry done before a suspension
+    size_t command_resume_offset{};
 
     void SetState(const CommandHeader& command_header);
 
@@ -237,7 +226,10 @@ public:
     /// Brings command list words the GPU wrote (still only in host buffers) to guest memory.
     bool FlushGpuWrittenCommands(GPUVAddr address, size_t size);
 
-private:
+    Common::ScratchBuffer<CommandHeader>
+        command_headers; ///< Buffer for list of commands fetched at once
+    Common::ScratchBuffer<CommandHeader>
+        refreshed_command_payload; ///< Buffer for small payload refreshes inside unsafe DMA segments
 
 public:
     Common::ScratchBuffer<CommandHeader> command_headers; ///< Buffer for list of commands fetched at once
@@ -261,31 +253,6 @@ public:
     Control::ChannelState& channel_state;
 
     DmaState dma_state{};
-
-    // Switch 2: methods whose data continues in a later GPFIFO entry, set aside while other
-    // command buffers run (NVN interleaves several, so more than one can be pending).
-    struct ParkedMethod {
-        u32 method;
-        u32 subchannel;
-        u32 method_count;
-        bool non_incrementing;
-        bool increment_once;
-        GPUVAddr resume_address; ///< Where the entry that continues the method starts
-    };
-    void ResolveSplitMethod(GPUVAddr entry_address);
-    static constexpr size_t MaxParkedMethods = 16;
-
-    // Debug aid: hashes of the words of the last entries as they were parsed.
-    struct ParsedEntry {
-        GPUVAddr address;
-        u32 size;
-        u64 hash;
-    };
-    std::array<ParsedEntry, 64> parsed_entries{};
-    size_t parsed_entry_count{};
-    std::vector<ParkedMethod> parked_methods;
-    GPUVAddr split_method_end{}; ///< End of the last entry that ended inside a method
-
     std::array<Engines::EngineInterface*, max_subchannels> subchannels{};
     std::array<Engines::EngineTypes, max_subchannels> subchannel_type;
 

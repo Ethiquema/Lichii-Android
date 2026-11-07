@@ -8,7 +8,7 @@ Tools for Eden and other subprojects. When adding new scripts please use `#!/bin
 
 ## Binaries
 
-- `maxwell-spirv`: Converts Maxwell shaders (dumped from `.ash` files) into SPIR-V code (emitted into STDOUT).
+- `maxwell-spirv`: Converts Maxwell shaders (dumped from `.ash` files) into SPIR-V code sent to stdout.
 - `maxwell-disas`: Dumb raw Maxwell disassembler.
 - `maxwell-ir`: Dump generated IR of Maxwell shaders.
 
@@ -19,6 +19,7 @@ Tools for Eden and other subprojects. When adding new scripts please use `#!/bin
 - `shellcheck.sh`: Ensure POSIX compliance (and syntax sanity) for all tools in this directory and subdirectories.
 - `llvmpipe-run.sh`: Sets environment variables needed to run any command (or Eden) with llvmpipe.
 - `optimize-assets.sh`: Optimizes PNG assets with OptiPng.
+- `setup-cross-sysroot.sh`: Allows to quickly create a sysroot of a given system for cross compilation (experimental).
 - `update-cpm.sh`: Updates CPM.cmake to the latest version.
 - `update-icons.sh`: Rebuild all icons (macOS, Windows, bitmaps) based on the master SVG file (`dist/dev.eden_emu.eden.svg`)
     * Also optimizes the master SVG
@@ -30,6 +31,7 @@ Tools for Eden and other subprojects. When adding new scripts please use `#!/bin
 - `find-unused-strings.sh`: Find any unused strings in the Android app (XML -> Kotlin).
 - `cpp-lint.sh`: Homemade dumb C++ linter.
 - `fuzzsettings.cpp`: Fuzz settings files.
+- `miniserver.js`: Make a quick server that serves a page with the WASM on it, takes a single argument which is the path to the build directory containing *both* `eden-cli.js` and `eden-cli.wasm`. Run via `node.js`, `wasmtime` isn't supported.
 
 ## Android
 

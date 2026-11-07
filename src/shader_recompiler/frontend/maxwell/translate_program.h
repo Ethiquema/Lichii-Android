@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -7,7 +10,7 @@
 #include "shader_recompiler/frontend/ir/basic_block.h"
 #include "shader_recompiler/frontend/ir/program.h"
 #include "shader_recompiler/frontend/maxwell/control_flow.h"
-#include "shader_recompiler/object_pool.h"
+#include "shader_recompiler/frontend/maxwell/structured_control_flow.h"
 #include "shader_recompiler/runtime_info.h"
 
 namespace Shader {
@@ -18,12 +21,14 @@ namespace Shader::Maxwell {
 
 [[nodiscard]] IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool,
                                            ObjectPool<IR::Block>& block_pool, Environment& env,
-                                           Flow::CFG& cfg, const HostTranslateInfo& host_info);
+                                           Flow::CFG& cfg, const HostTranslateInfo& host_info,
+                                           InputTopology input_topology);
 
-[[nodiscard]] IR::Program MergeDualVertexPrograms(IR::Program& vertex_a, IR::Program& vertex_b,
-                                                  Environment& env_vertex_b);
+[[nodiscard]] IR::Program MergeDualVertexPrograms(IR::Program& vertex_a, IR::Program& vertex_b, Environment& env_vertex_b);
 
 void ConvertLegacyToGeneric(IR::Program& program, const RuntimeInfo& runtime_info);
+
+void PrunePassthroughStores(IR::Program& program, const VaryingState& previous_stage_stores);
 
 // Maxwell v1 and older Nvidia cards don't support setting gl_Layer from non-geometry stages.
 // This creates a workaround by setting the layer as a generic output and creating a
@@ -32,6 +37,7 @@ void ConvertLegacyToGeneric(IR::Program& program, const RuntimeInfo& runtime_inf
                                                       ObjectPool<IR::Block>& block_pool,
                                                       const HostTranslateInfo& host_info,
                                                       IR::Program& source_program,
-                                                      Shader::OutputTopology output_topology);
+                                                      Shader::OutputTopology output_topology,
+                                                      InputTopology input_topology);
 
 } // namespace Shader::Maxwell

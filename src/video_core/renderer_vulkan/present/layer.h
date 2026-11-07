@@ -20,6 +20,7 @@
 #include "video_core/renderer_vulkan/present/post_process.h"
 #endif
 #include "video_core/renderer_vulkan/present/smaa.h"
+#include "video_core/renderer_vulkan/present/ssaa.h"
 
 namespace Layout {
 struct FramebufferLayout;
@@ -52,7 +53,7 @@ class Layer final {
 public:
     explicit Layer(const Device& device, MemoryAllocator& memory_allocator, Scheduler& scheduler,
                    Tegra::MaxwellDeviceMemoryManager& device_memory, size_t image_count,
-                   VkExtent2D output_size, VkDescriptorSetLayout layout,
+                   size_t generation_count, VkExtent2D output_size, VkDescriptorSetLayout layout,
                    const PresentFilters& filters);
     ~Layer();
 
@@ -61,6 +62,21 @@ public:
                        VkSampler sampler, size_t image_index,
                        const Tegra::FramebufferConfig& framebuffer,
                        const Layout::FramebufferLayout& layout);
+
+    void ConfigureGenerated(const Device& device, PresentPushConstants* out_push_constants,
+                            VkDescriptorSet* out_descriptor_set, VkSampler sampler,
+                            size_t generation, VkImage image, VkImageView view,
+                            const Layout::FramebufferLayout& layout);
+
+    [[nodiscard]] bool IsGenerationFree(size_t generation) const;
+
+    [[nodiscard]] VkImageView GenerationSource() const {
+        return generation_source;
+    }
+
+    [[nodiscard]] VkExtent2D GenerationExtent() const {
+        return generation_extent;
+    }
 
 private:
     void CreateDescriptorPool(const Device& device);
@@ -89,6 +105,7 @@ private:
     Tegra::MaxwellDeviceMemoryManager& device_memory;
     const PresentFilters& filters;
     const size_t image_count{};
+    const size_t generation_count{};
     vk::DescriptorPool descriptor_pool{};
     vk::DescriptorSets descriptor_sets{};
 
@@ -100,15 +117,14 @@ private:
     Service::android::PixelFormat pixel_format{};
 
     Settings::AntiAliasing anti_alias_setting{};
-    std::variant<std::monostate, FXAA, SMAA> anti_alias{};
-    std::variant<std::monostate, SGSR, FSR, FSR3> sr_filter{};
-#ifdef HAS_RESHADE
-    std::optional<PostProcessChain> post_process{};
-    u64 post_process_generation{};
-    bool post_process_enabled{};
-    VkExtent2D post_process_extent{};
-#endif
+    std::variant<std::monostate, FXAA, SMAA, SSAA> anti_alias{};
+    std::variant<std::monostate, SGSR, FSR> sr_filter{};
     std::vector<u64> resource_ticks{};
+    std::vector<u64> generation_ticks{};
+    VkImageView generation_source{};
+    VkExtent2D generation_extent{};
+    VkExtent2D generation_render_extent{};
+    Common::Rectangle<f32> generation_crop{};
 };
 
 } // namespace Vulkan

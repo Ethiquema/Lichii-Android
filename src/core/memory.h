@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-FileCopyrightText: 2014 Citra Emulator Project
@@ -48,6 +48,12 @@ u32& UnmappedReadFlag();
 constexpr std::size_t YUZU_PAGEBITS = 12;
 constexpr u64 YUZU_PAGESIZE = 1ULL << YUZU_PAGEBITS;
 constexpr u64 YUZU_PAGEMASK = YUZU_PAGESIZE - 1;
+
+enum class NCEAccessFaultAction {
+    Unmapped,
+    Retry,
+    Instruction,
+};
 
 /// Virtual user-space memory regions
 enum : u64 {
@@ -501,10 +507,9 @@ public:
      *              marked as debug or non-debug.
      */
     void MarkRegionDebug(Common::ProcessAddress vaddr, u64 size, bool debug);
-
     void SetGPUDirtyManagers(std::span<Core::GPUDirtyMemoryManager> managers);
 
-    bool InvalidateNCE(Common::ProcessAddress vaddr, size_t size);
+    NCEAccessFaultAction InvalidateNCE(Common::ProcessAddress vaddr, size_t size);
 
     bool InvalidateSeparateHeap(void* fault_address);
 

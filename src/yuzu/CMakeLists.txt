@@ -124,6 +124,8 @@ add_executable(yuzu
     configuration/configure_network.cpp
     configuration/configure_network.h
     configuration/configure_network.ui
+    configuration/configure_switch2.cpp
+    configuration/configure_switch2.h
     configuration/configure_system.cpp
     configuration/configure_system.h
     configuration/configure_system.ui
@@ -196,10 +198,11 @@ add_executable(yuzu
     multiplayer/state.cpp
     multiplayer/state.h
     multiplayer/validation.h
+    play_time_manager.cpp
+    play_time_manager.h
+    precompiled_headers.h
     startup_checks.cpp
     startup_checks.h
-    set_play_time_dialog.cpp
-    set_play_time_dialog.h
     util/clickable_label.cpp
     util/clickable_label.h
     util/controller_navigation.cpp
@@ -211,8 +214,6 @@ add_executable(yuzu
     util/overlay_dialog.ui
     util/sequence_dialog/sequence_dialog.cpp
     util/sequence_dialog/sequence_dialog.h
-    util/url_request_interceptor.cpp
-    util/url_request_interceptor.h
     util/util.cpp
     util/util.h
     util/icon_search.cpp
@@ -234,6 +235,9 @@ add_executable(yuzu
     ryujinx_dialog.h ryujinx_dialog.cpp ryujinx_dialog.ui
     main_window.h main_window.cpp main.ui
 
+    overrides_updater.h
+    overrides_updater.cpp
+
     configuration/system/new_user_dialog.h configuration/system/new_user_dialog.cpp configuration/system/new_user_dialog.ui
     configuration/system/profile_avatar_dialog.h configuration/system/profile_avatar_dialog.cpp
     configuration/addon/mod_select_dialog.h configuration/addon/mod_select_dialog.cpp configuration/addon/mod_select_dialog.ui
@@ -252,6 +256,19 @@ add_custom_command(TARGET yuzu POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${PROJECT_SOURCE_DIR}/dist/nx2_switches.txt" "$<TARGET_FILE_DIR:yuzu>/nx2_switches.txt"
     VERBATIM)
+
+# Shipped next to the executable: the NX2 switches a GUI launch cannot set another way. Read at
+# startup (LoadNx2Switches in main.cpp); a user copy in %APPDATA%\eden overrides it.
+add_custom_command(TARGET yuzu PRE_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${PROJECT_SOURCE_DIR}/dist/nx2_switches.txt" "$<TARGET_FILE_DIR:yuzu>/nx2_switches.txt"
+    VERBATIM)
+
+if (YUZU_USE_QT_WEB_ENGINE)
+    target_sources(yuzu PRIVATE
+        util/url_request_interceptor.cpp
+        util/url_request_interceptor.h)
+endif()
 
 if (YUZU_CRASH_DUMPS)
     target_sources(yuzu PRIVATE
@@ -368,7 +385,11 @@ target_sources(yuzu
         ${LANGUAGES}
         ${THEMES})
 
-# TODO(crueter): Move Assets.car/icon/icns handling to its own Module.
+if (ENABLE_OPENSSL)
+    target_link_libraries(yuzu PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    target_compile_definitions(yuzu PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+endif()
+
 if (APPLE)
     target_sources(yuzu PRIVATE util/macos_sleep.cpp util/macos_sleep.h)
 
@@ -376,8 +397,11 @@ if (APPLE)
     set(_dist "${CMAKE_SOURCE_DIR}/dist")
     set(_icons "${_dist}/lichii.icns")
     if (CMAKE_GENERATOR MATCHES "Xcode")
+        set(_icons "${_dist}/eden.icon")
+
         set_target_properties(yuzu PROPERTIES
-            MACOSX_BUNDLE_ICON_FILE lichii.icns
+            XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME eden
+            MACOSX_BUNDLE_ICON_FILE eden
             # Also force xcode to manage signing for us.
             XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED ON
             XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED ON)
@@ -390,14 +414,35 @@ if (APPLE)
     set_target_properties(yuzu PROPERTIES MACOSX_BUNDLE TRUE)
     set_target_properties(yuzu PROPERTIES MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist)
 
+    # Hypervisor.framework (native execution, EDEN_NX2_HYPERVISOR=1) needs this entitlement; an
+    # ad-hoc signature carries it for local builds.
+    if (NOT CMAKE_GENERATOR MATCHES "Xcode")
+        # Signed outside the bundle: in place, codesign checks the bundle, whose MacOS folder
+        # holds non-code files (nx2_switches.txt), and refuses.
+        add_custom_command(TARGET yuzu POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:yuzu> ${CMAKE_CURRENT_BINARY_DIR}/eglantine-sign
+            COMMAND codesign --force --sign - --entitlements
+                    ${CMAKE_CURRENT_SOURCE_DIR}/hypervisor.entitlements
+                    ${CMAKE_CURRENT_BINARY_DIR}/eglantine-sign
+            COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/eglantine-sign $<TARGET_FILE:yuzu>
+            COMMENT "Signing with the hypervisor entitlement")
+    endif()
+
     set(CMAKE_FIND_LIBRARY_SUFFIXES ".dylib")
     find_library(MOLTENVK_LIBRARY MoltenVK REQUIRED)
     message(STATUS "Using MoltenVK at ${MOLTENVK_LIBRARY}.")
 
-    set_source_files_properties(${MOLTENVK_LIBRARY} PROPERTIES
+    set_source_files_properties(${KK_LIBS} PROPERTIES
         MACOSX_PACKAGE_LOCATION Frameworks
         XCODE_FILE_ATTRIBUTES "CodeSignOnCopy")
-    target_sources(yuzu PRIVATE ${MOLTENVK_LIBRARY})
+
+    target_sources(yuzu PRIVATE ${KK_LIBS})
+
+    add_custom_command(TARGET yuzu POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${KosmicKrisp_SOURCE_DIR}/vulkan"
+            "$<TARGET_FILE_DIR:yuzu>/../Resources/vulkan"
+        COMMENT "Copying Vulkan ICDs")
 elseif(WIN32)
     # compile as a win32 gui application instead of a console application
     target_link_libraries(yuzu PRIVATE Qt6::EntryPointPrivate)
@@ -412,13 +457,13 @@ endif()
 
 target_link_libraries(yuzu PRIVATE nlohmann_json::nlohmann_json)
 target_link_libraries(yuzu PRIVATE common core input_common frontend_common network video_core qt_common)
-target_link_libraries(yuzu PRIVATE Boost::headers Qt6::Widgets Qt6::Charts Qt6::Concurrent Qt6::Network)
-# Unpacks NVIDIA's files from the Streamline release (nvidia_dlss_panel.cpp).
-target_link_libraries(yuzu PRIVATE ZLIB::ZLIB)
+target_link_libraries(yuzu PRIVATE Boost::headers glad Qt6::Widgets)
 target_link_libraries(yuzu PRIVATE ${PLATFORM_LIBRARIES} Threads::Threads)
 if (ENABLE_OPENGL)
     target_link_libraries(yuzu PRIVATE glad)
 endif()
+
+target_link_libraries(yuzu PRIVATE Vulkan::Headers)
 
 if (UNIX AND NOT APPLE)
     target_link_libraries(yuzu PRIVATE Qt6::DBus)
@@ -446,13 +491,20 @@ if (WIN32 AND NOT YUZU_USE_BUNDLED_QT)
     # Copy the Qt DLLs and plugins next to the executable. WINDEPLOYQT_EXECUTABLE was never set, so
     # this step ran the emulator itself with windeployqt's arguments and failed every build that
     # uses an installed Qt (the Windows release workflow).
-    if (TARGET Qt6::windeployqt)
+    # A static Qt (MSYS2's qt6-static) is linked into the executable: there is nothing to copy, and
+    # windeployqt fails the build on it ("does not seem to be a Qt executable").
+    get_target_property(YUZU_QT_CORE_TYPE Qt6::Core TYPE)
+    if (YUZU_QT_CORE_TYPE STREQUAL "STATIC_LIBRARY")
+        set(WINDEPLOYQT_EXECUTABLE "")
+    elseif (TARGET Qt6::windeployqt)
         set(WINDEPLOYQT_EXECUTABLE "$<TARGET_FILE:Qt6::windeployqt>")
     else()
         find_program(WINDEPLOYQT_EXECUTABLE NAMES windeployqt6 windeployqt
                      HINTS "${QT_HOST_PATH}/bin" "${QT_TARGET_PATH}/bin")
     endif()
-    if (WINDEPLOYQT_EXECUTABLE)
+    if (YUZU_QT_CORE_TYPE STREQUAL "STATIC_LIBRARY")
+        # Nothing to deploy.
+    elseif (WINDEPLOYQT_EXECUTABLE)
         set(YUZU_EXE_DIR "$<TARGET_FILE_DIR:yuzu>")
         add_custom_command(TARGET yuzu POST_BUILD COMMAND ${WINDEPLOYQT_EXECUTABLE} "$<TARGET_FILE:yuzu>" --dir "${YUZU_EXE_DIR}" --libdir "${YUZU_EXE_DIR}" --plugindir "${YUZU_EXE_DIR}/plugins" --no-compiler-runtime --no-opengl-sw --no-system-d3d-compiler --no-translations --verbose 0)
     else()
@@ -468,6 +520,10 @@ if (YUZU_ROOM)
     target_link_libraries(yuzu PRIVATE yuzu-room)
 endif()
 
+if (LINKER STREQUAL "lld")
+    target_link_options(yuzu-cmd PRIVATE "LINKER:--icf=all")
+endif()
+
 if (NOT MSVC AND (APPLE OR NOT YUZU_STATIC_BUILD))
     # needed for vma
     target_compile_options(yuzu PRIVATE
@@ -477,7 +533,7 @@ if (NOT MSVC AND (APPLE OR NOT YUZU_STATIC_BUILD))
         $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-missing-field-initializers>)
 endif()
 
-# Remember that the linker is incredibly stupid.
-target_link_libraries(yuzu PRIVATE OpenSSL::SSL OpenSSL::Crypto SDL3::SDL3)
+# Remember that link order matters to the linker.
+target_link_libraries(yuzu PRIVATE OpenSSL::SSL OpenSSL::Crypto SDL2::SDL2)
 
 create_target_directory_groups(yuzu)

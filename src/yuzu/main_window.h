@@ -11,22 +11,21 @@
 
 #include <filesystem>
 #include <QElapsedTimer>
+#include <QFutureWatcher>
 #include <QMainWindow>
 #include <QMessageBox>
-#include <QFutureWatcher>
 #include <QPushButton>
 #include <QTimer>
 #include <QTranslator>
 #include <qaction.h>
 
 #include "common/common_types.h"
-#include "common/settings_enums.h"
-#include "core/file_sys/nup_writer.h"
 #include "frontend_common/content_manager.h"
 #include "input_common/drivers/tas_input.h"
-#include "qt_common/config/qt_config.h"
-#include "qt_common/qt_common.h"
-#include "qt_common/util/game.h"
+#include "qt_common/qt_config.h"
+#include "qt_common/qt_game_util.h"
+#include "user_data_migration.h"
+#include "yuzu/compatibility_list.h"
 #include "yuzu/hotkeys.h"
 #include "yuzu/user_data_migration.h"
 
@@ -72,6 +71,7 @@ class QtControllerSelectorDialog;
 class QtProfileSelectionDialog;
 class QtSoftwareKeyboardDialog;
 class QtNXWebEngineView;
+class OverridesUpdater;
 
 namespace VideoCore {
 class ShaderNotify;
@@ -180,6 +180,9 @@ public:
 
     std::filesystem::path GetShortcutPath(QtCommon::Game::ShortcutTarget target);
 
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 signals:
 
     /**
@@ -268,6 +271,8 @@ private:
     void ConnectWidgetEvents();
     void ConnectMenuEvents();
     void UpdateMenuState();
+    void RefreshRuntimeCheats();
+    void ClearRuntimeCheats();
 
     void SetupPrepareForSleep();
 
@@ -361,7 +366,10 @@ private slots:
     void OnGameListExtractNup(const std::string& game_path);
     void OnGameListEditNupMetadata(const std::string& game_path);
     void OnGameListCopyTID(u64 program_id);
-    void OnGameListCreateShortcut(u64 program_id, const std::string& game_path,
+    void OnGameListNavigateToGamedbEntry(u64 program_id,
+                                         const CompatibilityList& compatibility_list);
+    void OnGameListCreateShortcut(u64 program_id,
+                                  const std::string& game_path,
                                   const QtCommon::Game::ShortcutTarget target);
     void OnGameListOpenDirectory(const QString& directory);
     void OnGameListAddDirectory();
@@ -507,6 +515,8 @@ private:
     MultiplayerState* multiplayer_state = nullptr;
     bool use_recommended_mkw_settings = false;
     bool asked_recommended_mkw_settings = false;
+    bool use_recommended_oot_settings = false;
+    bool asked_recommended_oot_settings = false;
 
     GRenderWindow* render_window = nullptr;
     GameList* game_list = nullptr;
@@ -570,6 +580,7 @@ private:
     QString startup_icon_theme;
 
     QActionGroup* game_size_actions;
+    std::vector<QAction*> runtime_cheat_actions;
 
     // Debugger panes
     ControllerDialog* controller_dialog = nullptr;
@@ -602,6 +613,9 @@ private:
     QtSoftwareKeyboardDialog* software_keyboard = nullptr;
     QtNXWebEngineView* web_applet = nullptr;
 
+    // Overrides updater
+    OverridesUpdater* overrides_updater = nullptr;
+
     // True if amiibo file select is visible
     bool is_amiibo_file_select_active{};
 
@@ -618,9 +632,14 @@ private:
 
     std::filesystem::path GetEdenCommand();
 
-    void CreateShortcut(const std::string& game_path, const u64 program_id,
-                        const std::string& game_title, QtCommon::Game::ShortcutTarget target,
-                        std::string arguments, const bool needs_title);
+    void CreateShortcut(const std::string& game_path,
+                        const u64 program_id,
+                        const std::string& game_title,
+                        QtCommon::Game::ShortcutTarget target,
+                        std::string arguments,
+                        const bool needs_title);
+
+    void InstallFirmware(const QString& location, bool recursive = false);
 
 protected:
     void dropEvent(QDropEvent* event) override;

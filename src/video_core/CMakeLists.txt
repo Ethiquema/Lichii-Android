@@ -22,6 +22,7 @@ add_library(video_core STATIC
     buffer_cache/usage_tracker.h
     buffer_cache/virtual_range_cache.h
     buffer_cache/word_manager.h
+    cache_reclaim.h
     cache_types.h
     capture.h
     cdma_pusher.cpp
@@ -34,7 +35,7 @@ add_library(video_core STATIC
     control/channel_state_cache.h
     control/scheduler.cpp
     control/scheduler.h
-    delayed_destruction_ring.h
+    deferred_destruction_queue.h
     dirty_flags.cpp
     dirty_flags.h
     dma_pusher.cpp
@@ -60,6 +61,10 @@ add_library(video_core STATIC
     engines/maxwell_dma.h
     engines/puller.cpp
     engines/puller.h
+    frame_gen/lossless_dll.cpp
+    frame_gen/lossless_dll.h
+    frame_gen/lsfg_translate.cpp
+    frame_gen/lsfg_translate.h
     framebuffer_config.cpp
     framebuffer_config.h
     render_trace.h
@@ -101,7 +106,6 @@ add_library(video_core STATIC
     fence_manager.h
     gpu.cpp
     gpu.h
-    gpu_timestamp.h
     gpu_split.cpp
     gpu_split.h
     gpu_thread.cpp
@@ -113,13 +117,8 @@ add_library(video_core STATIC
     native_qmd.h
     native_query_trace.h
     nx2.h
-    nx2_cmdpage_diag.h
-    nx2_debug_control.cpp
-    nx2_debug_control.h
+    nx2_diag.h
     nx2_profile.h
-    nx2_perf.h
-    nx2_download_trace.h
-    pending_maps.h
     present.h
     pte_kind.h
     query_cache/bank_base.h
@@ -144,12 +143,36 @@ add_library(video_core STATIC
     renderer_vulkan/present/anti_alias_pass.h
     renderer_vulkan/present/filters.cpp
     renderer_vulkan/present/filters.h
+    renderer_vulkan/present/frame_gen.cpp
+    renderer_vulkan/present/frame_gen.h
+    renderer_vulkan/present/frame_gen_pacer.cpp
+    renderer_vulkan/present/frame_gen_pacer.h
+    renderer_vulkan/present/lsfg_alpha.cpp
+    renderer_vulkan/present/lsfg_alpha.h
+    renderer_vulkan/present/lsfg_beta.cpp
+    renderer_vulkan/present/lsfg_beta.h
+    renderer_vulkan/present/lsfg_chain.cpp
+    renderer_vulkan/present/lsfg_chain.h
+    renderer_vulkan/present/lsfg_common.cpp
+    renderer_vulkan/present/lsfg_common.h
+    renderer_vulkan/present/lsfg_delta.cpp
+    renderer_vulkan/present/lsfg_delta.h
+    renderer_vulkan/present/lsfg_gamma.cpp
+    renderer_vulkan/present/lsfg_gamma.h
+    renderer_vulkan/present/lsfg_generate.cpp
+    renderer_vulkan/present/lsfg_generate.h
+    renderer_vulkan/present/lsfg_mipmaps.cpp
+    renderer_vulkan/present/lsfg_mipmaps.h
+    renderer_vulkan/present/lsfg_shaders.cpp
+    renderer_vulkan/present/lsfg_shaders.h
     renderer_vulkan/present/fsr.cpp
     renderer_vulkan/present/fsr.h
     renderer_vulkan/present/fsr3.cpp
     renderer_vulkan/present/fsr3.h
     renderer_vulkan/present/fxaa.cpp
     renderer_vulkan/present/fxaa.h
+    renderer_vulkan/present/ssaa.cpp
+    renderer_vulkan/present/ssaa.h
     renderer_vulkan/present/layer.cpp
     renderer_vulkan/present/layer.h
     renderer_vulkan/present/present_push_constants.h
@@ -170,7 +193,7 @@ add_library(video_core STATIC
     renderer_vulkan/maxwell_to_vk.h
     renderer_vulkan/pipeline_build.h
     renderer_vulkan/pipeline_helper.h
-    renderer_vulkan/pipeline_shader_emission.h
+    renderer_vulkan/pipeline_optimization.h
     renderer_vulkan/pipeline_statistics.cpp
     renderer_vulkan/pipeline_statistics.h
     renderer_vulkan/renderer_vulkan.h
@@ -200,6 +223,8 @@ add_library(video_core STATIC
     renderer_vulkan/vk_frame_dump.h
     renderer_vulkan/vk_graphics_pipeline.cpp
     renderer_vulkan/vk_graphics_pipeline.h
+    renderer_vulkan/vk_guest_memory.cpp
+    renderer_vulkan/vk_guest_memory.h
     renderer_vulkan/vk_multi_range_buffer.cpp
     renderer_vulkan/vk_multi_range_buffer.h
     renderer_vulkan/vk_master_semaphore.cpp
@@ -219,7 +244,8 @@ add_library(video_core STATIC
     renderer_vulkan/vk_resource_pool.h
     renderer_vulkan/vk_scheduler.cpp
     renderer_vulkan/vk_scheduler.h
-    renderer_vulkan/fragment_barrier_state.h
+    renderer_vulkan/vk_shader_reuse.cpp
+    renderer_vulkan/vk_shader_reuse.h
     renderer_vulkan/vk_shader_util.cpp
     renderer_vulkan/vk_shader_util.h
     renderer_vulkan/vk_staging_buffer_pool.cpp
@@ -279,6 +305,7 @@ add_library(video_core STATIC
     texture_cache/image_base.h
     texture_cache/image_info.cpp
     texture_cache/image_info.h
+    texture_cache/pending_download.h
     texture_cache/image_view_base.cpp
     texture_cache/image_view_base.h
     texture_cache/image_view_info.cpp
@@ -293,8 +320,6 @@ add_library(video_core STATIC
     texture_cache/util.h
     textures/astc.h
     textures/astc.cpp
-    textures/bcn.cpp
-    textures/bcn.h
     textures/decoders.cpp
     textures/decoders.h
     textures/texture.cpp
@@ -447,7 +472,7 @@ if (ENABLE_OPENGL)
 endif()
 
 target_link_libraries(video_core PUBLIC common core)
-target_link_libraries(video_core PUBLIC shader_recompiler stb bc_decoder gpu_logging)
+target_link_libraries(video_core PUBLIC shader_recompiler bc_decoder gpu_logging)
 if (ENABLE_OPENGL)
     target_link_libraries(video_core PUBLIC glad)
 endif()
@@ -455,9 +480,7 @@ endif()
 if (YUZU_USE_EXTERNAL_FFMPEG)
     add_dependencies(video_core ffmpeg-build)
 endif()
-
 target_include_directories(video_core PUBLIC ${FFmpeg_INCLUDE_DIR})
-
 target_link_libraries(video_core PRIVATE ${FFmpeg_LIBRARIES})
 target_link_options(video_core PRIVATE ${FFmpeg_LDFLAGS})
 
@@ -465,6 +488,7 @@ add_dependencies(video_core host_shaders)
 target_include_directories(video_core PRIVATE ${HOST_SHADERS_INCLUDE})
 
 target_link_libraries(video_core PRIVATE sirit::sirit)
+target_link_libraries(video_core PRIVATE dxbc)
 
 # Header-only stuff needed by all dependent targets
 target_link_libraries(video_core PUBLIC Vulkan::Headers Vulkan::UtilityHeaders GPUOpen::VulkanMemoryAllocator)
@@ -493,7 +517,7 @@ else()
             $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-shadow>
             $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-unused-local-typedef>)
     else()
-        target_compile_options(video_core PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:-Wconversion>)
+        target_compile_options(video_core PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:-Werror=conversion>)
     endif()
 
     target_compile_options(video_core PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-sign-conversion>)
@@ -513,6 +537,10 @@ endif()
 
 if (ARCHITECTURE_x86_64)
     target_link_libraries(video_core PUBLIC xbyak::xbyak)
+endif()
+
+if (ARCHITECTURE_arm64)
+    target_link_libraries(video_core PRIVATE merry::oaknut)
 endif()
 
 if (ARCHITECTURE_x86_64 OR ARCHITECTURE_arm64)

@@ -1,0 +1,44 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#include <stdio.h>
+
+#define STUB_WEAK(name) \
+    extern "C" void name() { \
+        printf("called " #name); \
+        asm volatile("ud2"); \
+    }
+
+#define STUB_ZERO(name) \
+    extern "C" int name() { \
+        printf("called " #name " = ret zero"); \
+        return 0; \
+    }
+
+
+extern "C" int __pthread_cxa_finalize();
+extern "C" void __cxa_thread_atexit_impl() {
+    //printf("__cxa_thread_atexit_impl called!\n");
+    //__pthread_cxa_finalize();
+}
+
+STUB_WEAK(ZSTD_trace_compress_begin)
+STUB_WEAK(ZSTD_trace_compress_end)
+STUB_WEAK(ZSTD_trace_decompress_begin)
+STUB_WEAK(ZSTD_trace_decompress_end)
+
+extern "C" thread_local struct {
+    char pad[512];
+} _ThreadRuneLocale = {};
+extern "C" struct {
+    char pad[512];
+} __h_errno = {};
+
+FILE* __stderrp = stdout;
+FILE* __stdinp = stdin;
+
+#undef STUB_WEAK
+
+// THIS MAKES STD::COUT AND SUCH WORK :)
+#include <iostream>
+std::ios_base::Init init;

@@ -30,6 +30,9 @@ InfoUpdater::InfoUpdater(std::span<const u8> input_, std::span<u8> output_,
       expected_input_size{input_.size()}, expected_output_size{output_.size()},
       process_handle{process_handle_}, behaviour{behaviour_} {
     std::construct_at<UpdateDataHeader>(out_header, behaviour.GetProcessRevision());
+    if ((in_header->revision & 0x00ffffffU) == 0x00764552U) {
+        out_header->revision ^= 0x00200000U;
+    }
 }
 
 Result InfoUpdater::UpdateVoiceChannelResources(VoiceContext& voice_context) {
@@ -132,7 +135,8 @@ Result InfoUpdater::UpdateVoices(VoiceContext& voice_context,
             static_assert(sizeof(VoiceInParameterV2) == 0x188);
             static_assert(offsetof(VoiceInParameterV2, crossfade_curve) == 0x177);
             const auto* vin = reinterpret_cast<const VoiceInParameterV2*>(input + i * in_stride);
-            if (behaviour.GetUserRevisionNum() >= 16 && vin->in_use && vin->crossfade_curve != 0) {
+            if (behaviour.GetUserRevisionNum() >= 16 && vin->in_use &&
+                vin->crossfade_curve != 0) {
                 LOG_ERROR(Service_Audio, "Unsupported voice biquad crossfade curve {}",
                           vin->crossfade_curve);
                 return Service::Audio::ResultInvalidUpdateInfo;
@@ -593,15 +597,24 @@ Result InfoUpdater::UpdatePerformanceBuffer(std::span<u8> performance_output,
 Result InfoUpdater::UpdateBehaviorInfo(BehaviorInfo& behaviour_) {
     const auto in_params{reinterpret_cast<const BehaviorInfo::InParameter*>(input)};
 
+    static bool logged_header = false;
+    if (!logged_header) {
+        logged_header = true;
+        LOG_WARNING(Service_Audio, "Audio update header revision={:#x}, behavior revision={:#x}, expected={:#x}, behavior_size={}, total={}",
+                    in_header->revision, in_params->revision, behaviour_.GetUserRevision(), in_header->behaviour_size, in_header->size);
+    }
     if (!CheckValidRevision(in_params->revision)) {
+        LOG_ERROR(Service_Audio,
+                  "Invalid behavior revision {:#x}; user revision={:#x}, header revision={:#x}, "
+                  "behavior size={:#x}",
+                  in_params->revision, behaviour_.GetUserRevision(), in_header->revision,
+                  in_header->behaviour_size);
         return Service::Audio::ResultInvalidUpdateInfo;
     }
 
-    // Compare revision numbers: Switch 2 opens the renderer with 'REV?' but tags its updates
-    // 'REv?' (lowercase v) for the same revision.
-    if (GetRevisionNum(in_params->revision) != GetRevisionNum(behaviour_.GetUserRevision())) {
-        LOG_ERROR(Service_Audio, "BehaviorInfo revision {:08X} does not match the renderer's {:08X}",
-                  in_params->revision, behaviour_.GetUserRevision());
+    const u32 revision = (in_params->revision & 0x00ffffffU) == 0x00764552U
+        ? in_params->revision ^ 0x00200000U : in_params->revision;
+    if (revision != behaviour_.GetUserRevision()) {
         return Service::Audio::ResultInvalidUpdateInfo;
     }
 
@@ -609,6 +622,10 @@ Result InfoUpdater::UpdateBehaviorInfo(BehaviorInfo& behaviour_) {
     behaviour_.UpdateFlags(in_params->flags);
 
     if (in_header->behaviour_size != sizeof(BehaviorInfo::InParameter)) {
+        LOG_ERROR(Service_Audio,
+                  "Behavior size mismatch: input={:#x}, expected={:#x}, revision={:#x}",
+                  in_header->behaviour_size, sizeof(BehaviorInfo::InParameter),
+                  in_params->revision);
         return Service::Audio::ResultInvalidUpdateInfo;
     }
 

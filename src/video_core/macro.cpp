@@ -4,7 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <array>
+#include "video_core/native_diagnostics.h"
 #include <cstdlib>
 #include <unordered_set>
 #include <cstring>
@@ -17,6 +17,9 @@
 
 #ifdef ARCHITECTURE_x86_64
 #include "common/x64/xbyak.h"
+#include "video_core/macro_turing_jit.h"
+#endif
+#if defined(ARCHITECTURE_x86_64) || defined(ARCHITECTURE_arm64)
 #include "video_core/macro_turing_jit.h"
 #endif
 
@@ -278,24 +281,24 @@ void HLE_MultiDrawIndexedIndirectCount::Fallback(Core::System& system, Engines::
 }
 void HLE_DrawIndirectByteCount::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, std::span<const u32> parameters, [[maybe_unused]] u32 method) {
     const bool force = maxwell3d.Rasterizer().HasDrawTransformFeedback();
-    if (force) {
-        auto topology = Maxwell3D::Regs::PrimitiveTopology(parameters[0] & 0xFFFFU);
-        auto& params = maxwell3d.draw_manager.indirect_state;
-        params.is_byte_count = true;
-        params.is_indexed = false;
-        params.include_count = false;
-        params.count_start_address = 0;
-        params.indirect_start_address = maxwell3d.GetMacroAddress(2);
-        params.buffer_size = 4;
-        params.max_draw_counts = 1;
-        params.stride = parameters[1];
-        maxwell3d.regs.draw.begin = parameters[0];
-        maxwell3d.regs.draw_auto_stride = parameters[1];
-        maxwell3d.regs.draw_auto_byte_count = parameters[2];
-        maxwell3d.draw_manager.DrawArrayIndirect(maxwell3d, topology);
-    } else {
-        Fallback(system, maxwell3d, parameters);
+    if (!force) {
+        Fallback(maxwell3d, parameters);
+        return;
     }
+    auto topology = Maxwell3D::Regs::PrimitiveTopology(parameters[0] & 0xFFFFU);
+    auto& params = maxwell3d.draw_manager->GetIndirectParams();
+    params.is_byte_count = true;
+    params.is_indexed = false;
+    params.include_count = false;
+    params.count_start_address = 0;
+    params.indirect_start_address = maxwell3d.GetMacroAddress(2);
+    params.buffer_size = 4;
+    params.max_draw_counts = 1;
+    params.stride = parameters[1];
+    maxwell3d.regs.draw.begin = parameters[0];
+    maxwell3d.regs.draw_auto_stride = parameters[1];
+    maxwell3d.regs.draw_auto_byte_count = parameters[2];
+    maxwell3d.draw_manager->DrawArrayIndirect(topology);
 }
 void HLE_DrawIndirectByteCount::Fallback(Core::System& system, Engines::Maxwell3D& maxwell3d, std::span<const u32> parameters) {
     maxwell3d.RefreshParameters();
@@ -790,13 +793,17 @@ void MacroJITx64Impl::Compile_ALU(Core::System& system, Macro::Opcode opcode) {
     const bool valid_operation = !is_a_zero && !is_b_zero;
     [[maybe_unused]] const bool is_move_operation = !is_a_zero && is_b_zero;
     const bool has_zero_register = is_a_zero || is_b_zero;
-    const bool no_zero_reg_skip = opcode.alu_operation == Macro::ALUOperation::AddWithCarry ||
-                                  opcode.alu_operation == Macro::ALUOperation::SubtractWithBorrow;
+    const bool zero_reg_skip =
+        optimizer.zero_reg_skip && !is_a_zero && is_b_zero &&
+        (opcode.alu_operation == Macro::ALUOperation::Xor ||
+         opcode.alu_operation == Macro::ALUOperation::Or ||
+         (optimizer.can_skip_carry && (opcode.alu_operation == Macro::ALUOperation::Add ||
+                                       opcode.alu_operation == Macro::ALUOperation::Subtract)));
 
     Xbyak::Reg32 src_a;
     Xbyak::Reg32 src_b;
 
-    if (!optimizer.zero_reg_skip || no_zero_reg_skip) {
+    if (!zero_reg_skip) {
         src_a = Compile_GetRegister(opcode.src_a, RESULT);
         src_b = Compile_GetRegister(opcode.src_b, eax);
     } else {
@@ -812,7 +819,7 @@ void MacroJITx64Impl::Compile_ALU(Core::System& system, Macro::Opcode opcode) {
 
     switch (opcode.alu_operation) {
     case Macro::ALUOperation::Add:
-        if (optimizer.zero_reg_skip) {
+        if (zero_reg_skip) {
             if (valid_operation) {
                 add(src_a, src_b);
             }
@@ -830,7 +837,7 @@ void MacroJITx64Impl::Compile_ALU(Core::System& system, Macro::Opcode opcode) {
         setc(byte[STATE + offsetof(JITState, carry_flag)]);
         break;
     case Macro::ALUOperation::Subtract:
-        if (optimizer.zero_reg_skip) {
+        if (zero_reg_skip) {
             if (valid_operation) {
                 sub(src_a, src_b);
                 has_emitted = true;
@@ -849,7 +856,7 @@ void MacroJITx64Impl::Compile_ALU(Core::System& system, Macro::Opcode opcode) {
         setc(byte[STATE + offsetof(JITState, carry_flag)]);
         break;
     case Macro::ALUOperation::Xor:
-        if (optimizer.zero_reg_skip) {
+        if (zero_reg_skip) {
             if (valid_operation) {
                 xor_(src_a, src_b);
             }
@@ -858,7 +865,7 @@ void MacroJITx64Impl::Compile_ALU(Core::System& system, Macro::Opcode opcode) {
         }
         break;
     case Macro::ALUOperation::Or:
-        if (optimizer.zero_reg_skip) {
+        if (zero_reg_skip) {
             if (valid_operation) {
                 or_(src_a, src_b);
             }
@@ -867,7 +874,7 @@ void MacroJITx64Impl::Compile_ALU(Core::System& system, Macro::Opcode opcode) {
         }
         break;
     case Macro::ALUOperation::And:
-        if (optimizer.zero_reg_skip) {
+        if (zero_reg_skip) {
             if (!has_zero_register) {
                 and_(src_a, src_b);
             }
@@ -876,7 +883,7 @@ void MacroJITx64Impl::Compile_ALU(Core::System& system, Macro::Opcode opcode) {
         }
         break;
     case Macro::ALUOperation::AndNot:
-        if (optimizer.zero_reg_skip) {
+        if (zero_reg_skip) {
             if (!is_a_zero) {
                 not_(src_b);
                 and_(src_a, src_b);
@@ -887,7 +894,7 @@ void MacroJITx64Impl::Compile_ALU(Core::System& system, Macro::Opcode opcode) {
         }
         break;
     case Macro::ALUOperation::Nand:
-        if (optimizer.zero_reg_skip) {
+        if (zero_reg_skip) {
             if (!is_a_zero) {
                 and_(src_a, src_b);
                 not_(src_a);
@@ -1437,18 +1444,7 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
                     // Accurate GPU mode holds report and semaphore writes in the query cache until a
                     // fence: write them out, or occlusion predicates read stale values. The split only
                     // runs with immediate payload writes, and the query cache belongs to its back.
-                    const bool owns_caches = !VideoCommon::GpuSplit::Get().Active() ||
-                                             VideoCommon::GpuSplit::OnBackThread();
-                    if (owns_caches && VideoCommon::QueryDma::TraceEnabled() &&
-                        VideoCommon::QueryDma::HasPendingQueries(memory, maxwell3d.Rasterizer(),
-                                                                 source, read_bytes)) {
-                        VideoCommon::QueryDma::Trace(memory, maxwell3d.Rasterizer(), method, address,
-                                                     source, read_bytes);
-                    }
-                    // Query reports count too: conditional rendering DMA-reads an occlusion query's
-                    // report into a macro, and those results sit in the query cache until flushed
-                    // (read as 0 samples, the draws are skipped).
-                    if (owns_caches) {
+                    if (!VideoCommon::GpuSplit::Get().Active()) {
                         memory.FlushRegion(source, read_bytes, VideoCommon::CacheType::QueryCache);
                     }
                     if (memory.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {
@@ -1458,6 +1454,12 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
                             LOG_INFO(HW_GPU, "Native MME DMA read flushed GPU-written memory ({} times)", flushes);
                         }
                     }
+                    // Accurate GPU mode holds report and semaphore writes in the query cache until a
+                    // fence: write them out, or occlusion predicates read stale values. The split only
+                    // runs with immediate payload writes, and the query cache belongs to its back.
+                    if (!VideoCommon::GpuSplit::Get().Active()) {
+                        memory.FlushRegion(source, read_bytes, VideoCommon::CacheType::QueryCache);
+                    }
                     static u32 dma_logs{};
                     if (dma_logs < 400) {
                         ++dma_logs;
@@ -1466,11 +1468,8 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
                         LOG_INFO(HW_GPU, "Native MME DMA read{} start={:#x} source={:#x} count={} words={:08x}",
                                  address == DmaReadFifoed ? " fifoed" : "", method, source, value, fmt::join(words, ","));
                     }
-                    const u32 word_count = std::min<u32>(value, 0x1000);
-                    std::array<u32, 0x1000> dma_words;
-                    memory.ReadWordsUnsafe(source, dma_words.data(), word_count);
-                    for (u32 i = 0; i < word_count; ++i) {
-                        const u32 word = dma_words[i];
+                    for (u32 i = 0; i < std::min<u32>(value, 0x1000); ++i) {
+                        const u32 word = memory.Read<u32>(source + u64{i} * 4);
                         if (address == DmaReadFifoed) {
                             fifo.push_back(word);
                         } else if (ram + i < native_interpreter.active_dram->size()) {
@@ -1485,6 +1484,9 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
                 }
                 return true;
             };
+#if defined(ARCHITECTURE_x86_64) || defined(ARCHITECTURE_arm64)
+        // Macro code runs compiled to x86-64 or arm64 (macro_turing_jit.h) instead of through the
+        // memo and the interpreter; EDEN_NX2_MME_JIT=0 goes back to those.
 #ifdef ARCHITECTURE_x86_64
         // Macro code runs compiled to x86-64 (macro_turing_jit.h) instead of through the memo
         // and the interpreter; EDEN_NX2_MME_JIT=0 goes back to those.
@@ -1621,29 +1623,26 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
     std::span<const u32> code;
     auto macro_code = uploaded_macro_code.find(method);
     if (macro_code == uploaded_macro_code.end()) {
-        std::optional<u32> mid_method;
-        for (const auto& [method_base, uploaded_code] : uploaded_macro_code) {
+        for (auto it = uploaded_macro_code.begin(); it != uploaded_macro_code.end(); ++it) {
+            const auto& [method_base, uploaded_code] = *it;
             if (method >= method_base && (method - method_base) < uploaded_code.size()) {
-                mid_method = method_base;
+                macro_code = it;
                 break;
             }
         }
-        if (!mid_method) {
+        if (macro_code == uploaded_macro_code.end()) {
             ASSERT_MSG(false, "Macro 0x{0:x} was not uploaded", method);
             return;
         }
 
-        const auto source = uploaded_macro_code.find(*mid_method);
-        ASSERT(source != uploaded_macro_code.end());
-        const auto rebased_method = method - *mid_method;
-        std::vector<u32> rebased_code(source->second.begin() + rebased_method,
-                                      source->second.end());
+        const auto rebased_method = method - macro_code->first;
+        std::vector<u32> rebased_code(macro_code->second.begin() + rebased_method,
+                                      macro_code->second.end());
         const auto [it, inserted] = uploaded_macro_code.emplace(method, std::move(rebased_code));
         ASSERT(inserted);
-        code = it->second;
-    } else {
-        code = macro_code->second;
+        macro_code = it;
     }
+    code = macro_code->second;
 
     auto& ci = macro_cache[method];
     ci.hash = Common::HashRange(code.begin(), code.end());

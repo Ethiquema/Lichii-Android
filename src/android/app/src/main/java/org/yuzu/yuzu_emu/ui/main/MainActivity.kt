@@ -4,7 +4,6 @@
 package org.yuzu.yuzu_emu.ui.main
 
 import android.content.Intent
-import android.content.Context
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
@@ -71,10 +70,6 @@ class MainActivity : AppCompatActivity(), ThemeProvider {
     private val CHECKED_DECRYPTION = "CheckedDecryption"
     private var checkedDecryption = false
 
-    override fun attachBaseContext(base: Context) {
-        super.attachBaseContext(YuzuApplication.applyLanguage(base))
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
         splashScreen.setKeepOnScreenCondition { !DirectoryInitialization.areDirectoriesReady }
@@ -113,6 +108,14 @@ class MainActivity : AppCompatActivity(), ThemeProvider {
 
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+
+        // Hide status bar and navigation bar for fullscreen experience
+        // Maybe a setting? Reminds me: SafeArea Testing!
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.statusBars())
+            hide(WindowInsetsCompat.Type.navigationBars())
+            systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
 
         window.statusBarColor =
             ContextCompat.getColor(applicationContext, android.R.color.transparent)

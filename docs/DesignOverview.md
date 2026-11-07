@@ -1,10 +1,10 @@
 # Design Overview
 
-Modern game consoles require heavy power to be emulated appropriately. This is why the emulator uses an approach known as HLE (High-Level-Emulation), in a nutshell: Instead of accurately emulating every subsystem that forms part of a component, emulate the resulting visible I/O interface instead.
+Modern game consoles require heavy power to emulate. This is why the emulator uses an approach known as HLE (High-Level-Emulation), in a nutshell: Instead of accurately emulating every subsystem that forms part of a component, emulate the resulting visible output of said interface instead.
 
 For example, take a disk write, instead of emulating a proper SD card we instead use the C++ standard library for I/O. Additionally we use the abstractions provided by the `fs` service to "lie" to programs about certain SD card properties. Notably this includes making up sizes for the fake SD card, giving "realistic" values or expected outputs for a given card, and so on. And instead of writing to an actual SD card, the emulator simply writes to a file.
 
-This also means grand part of the emulator consists of just re-implementing firmware but using HLE primitives; for example audio doesn't go to an emulated audio device, but rather gets processed on the fly by a dedicated service and then passed to SDL3/cubeb/etc.
+This also means grand part of the emulator consists of just re-implementing firmware but using HLE primitives; for example audio doesn't go to an emulated audio device, but rather gets processed on the fly by a dedicated service and then passed to SDL3 or null backend.
 
 As such, many of the systems implemented are not 100% accurate to the original software, but they're "good enough" to pass as being so. While we do strive to maintain high compatibility (especially with homebrew), there are realistic limitations to these approaches.
 

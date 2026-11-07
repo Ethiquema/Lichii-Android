@@ -18,6 +18,7 @@
 #include "common/settings.h"
 #include "qt_common/config/uisettings.h"
 #include "ui_configure_web.h"
+#include "qt_common/uisettings.h"
 
 ConfigureWeb::ConfigureWeb(QWidget* parent)
     : QWidget(parent), ui(std::make_unique<Ui::ConfigureWeb>()), m_rng{QRandomGenerator::system()} {

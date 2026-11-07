@@ -59,7 +59,7 @@ void SyncpointManager::DeregisterHostAction(u32 syncpoint_id, const ActionHandle
 
 void SyncpointManager::IncrementGuest(u32 syncpoint_id) {
     if (syncpoint_id >= NUM_MAX_SYNCPOINTS) {
-        LOG_ERROR(HW_GPU, "Ignoring increment of invalid syncpoint {:#x}", syncpoint_id);
+        LOG_ERROR(HW_GPU, "Increment of out-of-range syncpoint {} dropped", syncpoint_id);
         return;
     }
     Increment(syncpoints_guest[syncpoint_id], wait_guest_cv, guest_action_storage[syncpoint_id]);

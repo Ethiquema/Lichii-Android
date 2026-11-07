@@ -76,22 +76,16 @@ TEST_CASE("Vertex repacking requires the captured tail and stride", "[vertex_rep
     REQUIRE(Vulkan::VertexRepackMask(regs) == 0);
 }
 
-TEST_CASE("Static vertex repacking follows the device stride alignment", "[vertex_repack]") {
+TEST_CASE("Static vertex repacking requires explicit experimental opt-in", "[vertex_repack]") {
     REQUIRE(Vulkan::VertexRepackInputSupported(true, false));
     REQUIRE_FALSE(Vulkan::VertexRepackInputSupported(false, false));
     REQUIRE(Vulkan::VertexRepackInputSupported(false, true));
-    REQUIRE_FALSE(Vulkan::StaticVertexRepackSelected(nullptr, 1));
-    REQUIRE(Vulkan::StaticVertexRepackSelected(nullptr, 4));
-    REQUIRE(Vulkan::StaticVertexRepackSelected("1", 1));
-    REQUIRE_FALSE(Vulkan::StaticVertexRepackSelected("0", 4));
-    REQUIRE(Vulkan::StaticVertexRepackSelected("other", 4));
 }
 
 TEST_CASE("Vertex repack planning keeps descriptor offsets aligned", "[vertex_repack]") {
     for (const u32 alignment : {4U, 16U, 64U, 256U, 4096U}) {
         for (const u32 offset : {0U, 1U, 3U, 255U, 4099U}) {
-            const auto plan = Vulkan::MakeVertexRepackParameters(offset, 70, alignment, 1U << 20,
-                                                                 65535, 1U << 20);
+            const auto plan = Vulkan::MakeVertexRepackParameters(offset, 70, alignment, 1U << 20, 65535);
             REQUIRE(plan.has_value());
             REQUIRE(plan->source_base % alignment == 0);
             REQUIRE(plan->source_base + plan->source_bias == offset);
@@ -105,22 +99,35 @@ TEST_CASE("Vertex repack planning keeps descriptor offsets aligned", "[vertex_re
 }
 
 TEST_CASE("Vertex repack planning rejects overflow and device-limit violations", "[vertex_repack]") {
-    REQUIRE_FALSE(Vulkan::MakeVertexRepackParameters(0, 0, 256, 1U << 20, 65535, 1U << 20));
-    REQUIRE_FALSE(Vulkan::MakeVertexRepackParameters(0, 69, 0, 1U << 20, 65535, 1U << 20));
-    REQUIRE_FALSE(Vulkan::MakeVertexRepackParameters(0, 69, 256, 71, 65535, 1U << 20));
-    REQUIRE_FALSE(Vulkan::MakeVertexRepackParameters(255, 69, 256, 323, 65535, 1U << 20));
-    REQUIRE_FALSE(Vulkan::MakeVertexRepackParameters(0, 69, 256, 1U << 20, 0, 1U << 20));
-    REQUIRE_FALSE(
-        Vulkan::MakeVertexRepackParameters(0, 0xffffffffU, 256, ~u64{0}, 0xffffffffU, ~u64{0}));
-    const auto one = Vulkan::MakeVertexRepackParameters(0, 69, 256, 72, 1, 72);
+    REQUIRE_FALSE(Vulkan::MakeVertexRepackParameters(0, 0, 256, 1U << 20, 65535));
+    REQUIRE_FALSE(Vulkan::MakeVertexRepackParameters(0, 69, 0, 1U << 20, 65535));
+    REQUIRE_FALSE(Vulkan::MakeVertexRepackParameters(0, 69, 256, 71, 65535));
+    REQUIRE_FALSE(Vulkan::MakeVertexRepackParameters(255, 69, 256, 323, 65535));
+    REQUIRE_FALSE(Vulkan::MakeVertexRepackParameters(0, 69, 256, 1U << 20, 0));
+    REQUIRE_FALSE(Vulkan::MakeVertexRepackParameters(0, 0xffffffffU, 256, ~u64{0}, 0xffffffffU));
+    const auto one = Vulkan::MakeVertexRepackParameters(0, 69, 256, 72, 1);
     REQUIRE(one.has_value());
     REQUIRE(one->source_range == 72);
 }
 
-TEST_CASE("Vertex repack planning keeps the source range inside the buffer", "[vertex_repack]") {
-    const auto clamped = Vulkan::MakeVertexRepackParameters(0, 69, 256, 1U << 20, 65535, 69);
-    REQUIRE(clamped.has_value());
-    REQUIRE(clamped->source_range == 69);
-    REQUIRE_FALSE(Vulkan::MakeVertexRepackParameters(0, 69, 256, 1U << 20, 65535, 68));
-    REQUIRE_FALSE(Vulkan::MakeVertexRepackParameters(300, 69, 256, 1U << 20, 65535, 256));
+TEST_CASE("Vertex repack chunks fit the device limits and keep outputs aligned", "[vertex_repack]") {
+    for (const u64 alignment : {4ULL, 16ULL, 64ULL, 256ULL}) {
+        for (const u64 max_range : {u64{1} << 27, u64{1} << 30, u64{0xffffffff}}) {
+            for (const u32 max_groups : {65535U, 0xffffffffU}) {
+                const u32 vertices = Vulkan::VertexRepackChunkVertices(alignment, max_range, max_groups);
+                REQUIRE(vertices > 0);
+                REQUIRE(u64{vertices} * 72 % alignment == 0);
+                // The worst-placed chunk: largest bias, full size.
+                const auto plan = Vulkan::MakeVertexRepackParameters(
+                    static_cast<u32>(alignment - 1), vertices * 69, alignment, max_range, max_groups);
+                REQUIRE(plan.has_value());
+                REQUIRE(plan->vertices == vertices);
+            }
+        }
+    }
+    // A 64 MB binding is over one dispatch at 65535 groups and is split, not refused.
+    const u32 vertices = Vulkan::VertexRepackChunkVertices(256, u64{1} << 27, 65535);
+    REQUIRE(u64{vertices} * 69 < (u64{64} << 20));
+    REQUIRE_FALSE(Vulkan::VertexRepackChunkVertices(0, u64{1} << 27, 65535));
+    REQUIRE_FALSE(Vulkan::VertexRepackChunkVertices(256, 300, 65535));
 }

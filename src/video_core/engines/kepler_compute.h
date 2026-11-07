@@ -12,15 +12,12 @@
 #include <memory>
 #include <optional>
 #include <span>
-#include <unordered_set>
 #include <vector>
 #include "common/bit_field.h"
 #include "common/common_funcs.h"
 #include "common/common_types.h"
 #include "video_core/engines/engine_interface.h"
 #include "video_core/engines/engine_upload.h"
-#include "video_core/fire_emblem_upscale.h"
-#include "video_core/game_dlss_status.h"
 #include "video_core/macro.h"
 #include "video_core/native_qmd.h"
 #include "video_core/textures/texture.h"
@@ -66,15 +63,6 @@ public:
     /// Binds a rasterizer to this engine.
     void BindRasterizer(VideoCore::RasterizerInterface* rasterizer);
 
-    [[nodiscard]] bool MayWriteMemory(u32 method) const {
-        if (method >= native_plain_methods.size()) {
-            return true;
-        }
-        return native_mode ? !native_plain_methods[method] : execution_mask[method];
-    }
-
-    /// The channel's MME data RAM, shared with its 3D engine.
-    void SetNativeDataRam(std::array<u32, 0xc00>* data_ram) { native_data_ram = data_ram; }
     void SetNativeMacroMode(MacroEngine* shared_macro, std::span<u32> positions, NativeMacroContext* context = nullptr) {
         if (native_context != context) native_compute_uploaded = false;
         native_context = context;
@@ -252,11 +240,15 @@ public:
     }
 
     bool IsNativeMode() const { return native_mode; }
-    bool ProcessGameDlss(u64 program_id, u64 native_key);
-    /// Ocarina of Time's movie network (ocarina_movie.h): true when this dispatch is skipped or
-    /// replaced.
-    bool ProcessOcarinaMovie(u64 program_id, u64 native_key);
-    void TraceDlssContract(u64 native_key, bool warn_unvalidated = true);
+    /// Whether the dispatch being run is a pass of a game DLSS evaluation (Fortune's Weave).
+    bool IsDlssDispatch() const { return native_mode && dlss_chain.active; }
+    /// Whether the matrix multiplies (tensor-core instructions) of the program being dispatched
+    /// are emulated: in a game DLSS evaluation when the game's own network may draw, and always
+    /// for Donkey Kong Bananza and Ocarina of Time.
+    [[nodiscard]] bool EmulatesNativeTensorPrograms() const;
+    /// Whether those matrix multiplies use the compact software form (one shared helper per
+    /// program) instead of the inline expansion: Ocarina of Time's network.
+    [[nodiscard]] bool UsesCompactTensorPrograms() const;
 
     /// GPU thread split with macros on its front half (gpu_split.h, EDEN_NX2_SPLIT=2), called by
     /// the front instead of CallMethod for native compute engines: runs their macros and macro
@@ -269,81 +261,16 @@ public:
                               const GPUVAddr* segment);
 
 private:
-    struct FrontState;
-    FrontState& Front(VideoCommon::GpuSplit& split);
-    void FrontApply(FrontState& state, u32 method, u32 argument);
-    MacroEngine& FrontMacroEngine(FrontState& state);
-    std::span<u32> FrontMacroPositions(FrontState& state);
-    void FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split, FrontState& state);
-    std::unique_ptr<FrontState> front;
-    bool front_macros{}; ///< The front owns the macro code and bindings (the back skips them)
-
     bool DispatchNativeCompute(const NativeQmdScheduler::Descriptor& descriptor);
-    void ProcessNativeReportSemaphore(u32 argument);
-    void DescribeNativeResources(const NativeQmdScheduler::Descriptor& qmd);
-    void RememberDlssMotionVectors();
-    bool TryFireEmblemUpscale(bool allow_history = true);
-    void CaptureFireEmblemJitter();
-    bool FinishDlssEvaluation();
-    void CheckDlssNetwork();
-    [[nodiscard]] VideoCore::GameDlssReason GameDlssBlocker() const;
-    void UpdateGameDlssStatus(bool complete, VideoCore::GameDlssReason blocker);
-
-    /// This frame's DLSS evaluation (Fortune's Weave): whether its passes all ran, and whether
-    /// the game's own network output is shown instead of the replacement upscale.
-    struct DlssChain {
-        bool active{};
-        bool spatial_only{};
-        bool output_pass{};
-        u32 rejected{};
-        u32 clean_evaluations{};
-        bool native{};
-        /// Health checks of the network's output against its input (CheckDlssNetwork): whether
-        /// this backend has them, good and bad results in a row, and why the network failed them
-        /// (None while it hasn't; then the replacement upscale draws the output for the session).
-        bool checked{};
-        u32 good_checks{};
-        u32 bad_checks{};
-        VideoCore::GameDlssReason failure{};
-        /// Programs of evaluations that reached their output pass; they are skipped only after
-        /// the network fails its health checks.
-        std::unordered_set<u64> programs;
-        /// This evaluation's programs and dispatches so far. Its programs join `programs` only
-        /// at its output pass, so compute work after a look-alike first pass keeps running.
-        std::unordered_set<u64> pending;
-        u32 dispatches{};
-        u32 evaluations{};
-        /// What the Graphics tab was last told.
-        VideoCore::GameDlssStatus status{};
-    } dlss_chain;
-
-    /// Motion vectors and depth of Fire Emblem: Fortune's Weave's DLSS evaluation, from its first
-    /// pass (run earlier in the frame than the network pass the stand-in replaces), with the input
-    /// colour image and camera jitter they go with.
-    std::optional<Texture::TICEntry> dlss_motion_vectors;
-    std::optional<Texture::TICEntry> dlss_depth;
-    u32 dlss_contract_trace_count{};
-    GPUVAddr dlss_motion_color{};
-    VideoCommon::FireEmblemUpscale::FrameJitter fe_upscale_jitter;
-    /// Ocarina of Time's RGB movie frame (ocarina_movie.h), from this frame's conversion pass.
-    std::optional<Texture::TICEntry> ocarina_movie_frame;
-    std::optional<Texture::TICEntry> ComputeImageHandle(u32 offset) const;
     bool ProcessNativeMethod(Core::System& system, u32 method, u32 argument, bool is_last_call);
     NativeQmdScheduler native_qmd;
-    std::array<u32, 0xc00>* native_data_ram{};
-    bool native_mme_dumped{};
-    std::optional<u32> native_executing_macro_logged;
     bool native_mode{};
     NativeMacroContext* native_context{};
     bool native_compute_uploaded{};
     MacroEngine* native_macro{};
     std::array<u32, 0x1000> native_registers{};
-    /// Native methods that only store their value (no macro, QMD, upload, semaphore or code
-    /// side effect): CallMethod writes those directly.
-    std::bitset<0xe00> native_plain_methods;
     std::span<u32> native_macro_positions;
     std::vector<u32> native_parameters;
-    std::vector<u32> native_memo_parameters; ///< The current call's parameters, for the memo
     std::optional<u32> native_executing_macro;
     u32 native_bind_pointer{};
 

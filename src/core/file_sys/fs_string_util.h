@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -6,85 +9,6 @@
 #include "common/assert.h"
 
 namespace FileSys {
-
-template <typename T>
-constexpr int Strlen(const T* str) {
-    ASSERT(str != nullptr);
-
-    int length = 0;
-    while (*str++) {
-        ++length;
-    }
-
-    return length;
-}
-
-template <typename T>
-constexpr int Strnlen(const T* str, std::size_t count) {
-    return Strnlen(str, static_cast<int>(count));
-}
-
-template <typename T>
-constexpr int Strnlen(const T* str, int count) {
-    ASSERT(str != nullptr);
-    ASSERT(count >= 0);
-
-    int length = 0;
-    while (count-- && *str++) {
-        ++length;
-    }
-
-    return length;
-}
-
-template <typename T>
-constexpr int Strncmp(const T* lhs, const T* rhs, std::size_t count) {
-    return Strncmp(lhs, rhs, static_cast<int>(count));
-}
-
-template <typename T>
-constexpr int Strncmp(const T* lhs, const T* rhs, int count) {
-    ASSERT(lhs != nullptr);
-    ASSERT(rhs != nullptr);
-    ASSERT(count >= 0);
-
-    if (count == 0) {
-        return 0;
-    }
-
-    T l, r;
-    do {
-        l = *(lhs++);
-        r = *(rhs++);
-    } while (l && (l == r) && (--count));
-
-    return l - r;
-}
-
-template <typename T>
-static constexpr int Strlcpy(T* dst, const T* src, std::size_t count) {
-    return Strlcpy<T>(dst, src, static_cast<int>(count));
-}
-
-template <typename T>
-static constexpr int Strlcpy(T* dst, const T* src, int count) {
-    ASSERT(dst != nullptr);
-    ASSERT(src != nullptr);
-
-    const T* cur = src;
-    if (count > 0) {
-        while ((--count) && *cur) {
-            *(dst++) = *(cur++);
-        }
-        *dst = 0;
-    }
-
-    while (*cur) {
-        cur++;
-    }
-
-    return static_cast<int>(cur - src);
-}
 
 enum CharacterEncodingResult {
     CharacterEncodingResult_Success = 0,

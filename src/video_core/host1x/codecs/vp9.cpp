@@ -341,6 +341,9 @@ void VP9::WriteSegmentation(VpxBitStreamWriter& writer) {
     writer.WriteBit(update_map);
 
     if (update_map) {
+        EntropyProbs entropy_probs{};
+        host1x.gmmu_manager.ReadBlock(regs.vp9_prob_tab_buffer_offset.Address(), &entropy_probs, sizeof(entropy_probs));
+
         auto WriteProb = [&](u8 prob) {
             bool coded = prob != 255;
             writer.WriteBit(coded);
@@ -897,20 +900,28 @@ void VpxRangeEncoder::Write(bool bit, s32 probability) {
     count += shift;
 
     if (count >= 0) {
-        const s32 offset = shift - count;
-
-        if (((low_value << (offset - 1)) >> 31) != 0) {
-            const s32 current_pos = static_cast<s32>(base_stream.GetPosition());
-            base_stream.Seek(-1, Common::SeekOrigin::FromCurrentPos);
-            while (PeekByte() == 0xff) {
-                base_stream.WriteByte(0);
-
-                base_stream.Seek(-2, Common::SeekOrigin::FromCurrentPos);
+        auto const write_byte = [&](u8 byte) {
+            if (stream_pos == stream_data.size()) {
+                stream_data.push_back(byte);
+                ++stream_pos;
+            } else {
+                stream_data.insert(stream_data.begin() + stream_pos, byte);
             }
-            base_stream.WriteByte(static_cast<u8>((PeekByte() + 1)));
-            base_stream.Seek(current_pos, Common::SeekOrigin::SetOrigin);
+        };
+
+        const s32 offset = shift - count;
+        if (((low_value << (offset - 1)) >> 31) != 0) {
+            auto const current_pos = stream_pos;
+            --stream_pos;
+            while (stream_data[stream_pos] == 0xff) {
+                write_byte(0);
+                stream_pos -= 2;
+            }
+            write_byte(stream_data[stream_pos] + 1);
+            stream_pos = current_pos;
         }
-        base_stream.WriteByte(static_cast<u8>((low_value >> (24 - offset))));
+        write_byte(u8((low_value >> (24 - offset))));
+        ++stream_pos;
 
         low_value <<= offset;
         shift = count;
@@ -926,13 +937,6 @@ void VpxRangeEncoder::End() {
     for (std::size_t index = 0; index < 32; ++index) {
         Write(false);
     }
-}
-
-u8 VpxRangeEncoder::PeekByte() {
-    const u8 value = base_stream.ReadByte();
-    base_stream.Seek(-1, Common::SeekOrigin::FromCurrentPos);
-
-    return value;
 }
 
 VpxBitStreamWriter::VpxBitStreamWriter() = default;

@@ -36,7 +36,6 @@ add_library(
     cityhash.h
     common_funcs.h
     common_types.h
-    concepts.h
     container_hash.h
     demangle.cpp
     demangle.h
@@ -67,7 +66,6 @@ add_library(
     fs/fs_util.h
     fs/path_util.cpp
     fs/path_util.h
-    hash.h
     heap_tracker.cpp
     heap_tracker.h
     hex_util.cpp
@@ -77,6 +75,7 @@ add_library(
     input.h
     intrusive_red_black_tree.h
     literals.h
+    log_ring.h
     logging.cpp
     logging.h
     lz4_compression.cpp
@@ -86,6 +85,8 @@ add_library(
     memory_detect.h
     multi_level_page_table.cpp
     multi_level_page_table.h
+    nx2_sampler.cpp
+    nx2_sampler.h
     overflow.h
     page_table.cpp
     page_table.h
@@ -113,14 +114,11 @@ add_library(
     settings_setting.h
     slot_vector.h
     socket_types.h
-    sparse_large_vector.cpp
-    sparse_large_vector.h
+    spin_lock.h
     stb.cpp
     stb.h
     steady_clock.cpp
     steady_clock.h
-    stream.cpp
-    stream.h
     string_util.cpp
     string_util.h
     swap.h
@@ -158,8 +156,8 @@ add_library(
     container/unordered_map.h container/unordered_set.h)
 
 set_source_files_properties(zbic_compression.cpp PROPERTIES
-    INCLUDE_DIRECTORIES "${ZBIC_INCLUDE_DIR}"
-    COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wno-unused-function;-Wno-missing-declarations;-Wno-shadow>;$<$<CXX_COMPILER_ID:MSVC>:/wd4505;/wd5245>")
+    INCLUDE_DIRECTORIES "${ATMOSPHERE_ZSTD_BIC_INCLUDE_DIR}"
+    COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:Clang,GNU>:-Wno-unused-function>")
 
 if(WIN32)
     target_sources(common PRIVATE windows/timer_resolution.cpp
@@ -232,7 +230,7 @@ endif()
 if(CXX_CLANG)
     target_compile_options(common PRIVATE
         $<$<COMPILE_LANGUAGE:C,CXX>:-fsized-deallocation>
-        $<$<COMPILE_LANGUAGE:C,CXX>:-Wunreachable-code-aggressive>)
+        $<$<COMPILE_LANGUAGE:C,CXX>:-Werror=unreachable-code-aggressive>)
     target_compile_definitions(
         common
         PRIVATE
@@ -241,13 +239,18 @@ if(CXX_CLANG)
         $<$<VERSION_LESS:$<CXX_COMPILER_VERSION>,15>:CANNOT_EXPLICITLY_INSTANTIATE>)
 endif()
 
+# Has to be BEFORE httplib
 if (BOOST_NO_HEADERS)
     target_link_libraries(common PUBLIC Boost::algorithm Boost::heap Boost::icl Boost::pool)
 else()
     target_link_libraries(common PUBLIC Boost::headers)
 endif()
 target_link_libraries(common PRIVATE OpenSSL::SSL)
-target_link_libraries(common PUBLIC Boost::filesystem Boost::context httplib::httplib nlohmann_json::nlohmann_json)
+target_link_libraries(common PUBLIC Boost::filesystem httplib::httplib nlohmann_json::nlohmann_json)
+if (NOT EMSCRIPTEN)
+    # Emscripten is: "bring your own implementation", boost doesn't add upstream support sadly
+    target_link_libraries(common PRIVATE Boost::context)
+endif()
 
 if (lz4_ADDED)
     target_include_directories(common PRIVATE ${lz4_SOURCE_DIR}/lib)

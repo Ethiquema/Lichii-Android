@@ -5,10 +5,17 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/logging.h"
+#include "core/hle/kernel/k_scoped_resource_reservation.h"
+#include "core/hle/kernel/k_session.h"
+#include "core/hle/kernel/k_client_session.h"
+#include "core/hle/kernel/k_thread.h"
 #include "core/hle/result.h"
 #include "core/hle/service/am/am_results.h"
 #include "core/hle/service/am/frontend/applets.h"
 #include "core/hle/service/am/service/self_controller.h"
+#include "core/hle/service/am/service/graphics_supervisor.h"
+#include "core/hle/service/ipc_helpers.h"
+#include "core/hle/service/server_manager.h"
 #include "core/hle/service/caps/caps_su.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/nvnflinger/nvnflinger.h"
@@ -17,6 +24,62 @@
 #include "core/hle/service/vi/vi_results.h"
 
 namespace Service::AM {
+
+    std::optional<ServiceFrameworkBase::FunctionInfoBase> ISelfController::FindRequest(u32 key) {
+        static constexpr auto functions = CreateStaticMap(
+            FunctionInfo{0, D<&ISelfController::Exit>, "Exit"},
+            FunctionInfo{1, D<&ISelfController::LockExit>, "LockExit"},
+            FunctionInfo{2, D<&ISelfController::UnlockExit>, "UnlockExit"},
+            FunctionInfo{3, D<&ISelfController::EnterFatalSection>, "EnterFatalSection"},
+            FunctionInfo{4, D<&ISelfController::LeaveFatalSection>, "LeaveFatalSection"},
+            FunctionInfo{9, D<&ISelfController::GetLibraryAppletLaunchableEvent>, "GetLibraryAppletLaunchableEvent"},
+            FunctionInfo{10, D<&ISelfController::SetScreenShotPermission>, "SetScreenShotPermission"},
+            FunctionInfo{11, D<&ISelfController::SetOperationModeChangedNotification>, "SetOperationModeChangedNotification"},
+            FunctionInfo{12, D<&ISelfController::SetPerformanceModeChangedNotification>, "SetPerformanceModeChangedNotification"},
+            FunctionInfo{13, D<&ISelfController::SetFocusHandlingMode>, "SetFocusHandlingMode"},
+            FunctionInfo{14, D<&ISelfController::SetRestartMessageEnabled>, "SetRestartMessageEnabled"},
+            FunctionInfo{15, D<&ISelfController::SetScreenShotAppletIdentityInfo>, "SetScreenShotAppletIdentityInfo"},
+            FunctionInfo{16, D<&ISelfController::SetOutOfFocusSuspendingEnabled>, "SetOutOfFocusSuspendingEnabled"},
+            FunctionInfo{17, nullptr, "SetControllerFirmwareUpdateSection"},
+            FunctionInfo{18, nullptr, "SetRequiresCaptureButtonShortPressedMessage"},
+            FunctionInfo{19, D<&ISelfController::SetAlbumImageOrientation>, "SetAlbumImageOrientation"},
+            FunctionInfo{20, nullptr, "SetDesirableKeyboardLayout"},
+            FunctionInfo{21, nullptr, "GetScreenShotProgramId"},
+            FunctionInfo{40, D<&ISelfController::CreateManagedDisplayLayer>, "CreateManagedDisplayLayer"},
+            FunctionInfo{41, D<&ISelfController::IsSystemBufferSharingEnabled>, "IsSystemBufferSharingEnabled"},
+            FunctionInfo{42, D<&ISelfController::GetSystemSharedLayerHandle>, "GetSystemSharedLayerHandle"},
+            FunctionInfo{43, D<&ISelfController::GetSystemSharedBufferHandle>, "GetSystemSharedBufferHandle"},
+            FunctionInfo{44, D<&ISelfController::CreateManagedDisplaySeparableLayer>, "CreateManagedDisplaySeparableLayer"},
+            FunctionInfo{45, nullptr, "SetManagedDisplayLayerSeparationMode"},
+            FunctionInfo{46, nullptr, "SetRecordingLayerCompositionEnabled"},
+            FunctionInfo{50, D<&ISelfController::SetHandlesRequestToDisplay>, "SetHandlesRequestToDisplay"},
+            FunctionInfo{51, D<&ISelfController::ApproveToDisplay>, "ApproveToDisplay"},
+            FunctionInfo{60, D<&ISelfController::OverrideAutoSleepTimeAndDimmingTime>, "OverrideAutoSleepTimeAndDimmingTime"},
+            FunctionInfo{61, D<&ISelfController::SetMediaPlaybackState>, "SetMediaPlaybackState"},
+            FunctionInfo{62, D<&ISelfController::SetIdleTimeDetectionExtension>, "SetIdleTimeDetectionExtension"},
+            FunctionInfo{63, D<&ISelfController::GetIdleTimeDetectionExtension>, "GetIdleTimeDetectionExtension"},
+            FunctionInfo{64, nullptr, "SetInputDetectionSourceSet"},
+            FunctionInfo{65, D<&ISelfController::ReportUserIsActive>, "ReportUserIsActive"},
+            FunctionInfo{66, nullptr, "GetCurrentIlluminance"},
+            FunctionInfo{67, D<&ISelfController::IsIlluminanceAvailable>, "IsIlluminanceAvailable"},
+            FunctionInfo{68, D<&ISelfController::SetAutoSleepDisabled>, "SetAutoSleepDisabled"},
+            FunctionInfo{69, D<&ISelfController::IsAutoSleepDisabled>, "IsAutoSleepDisabled"},
+            FunctionInfo{70, nullptr, "ReportMultimediaError"},
+            FunctionInfo{71, nullptr, "GetCurrentIlluminanceEx"},
+            FunctionInfo{72, D<&ISelfController::SetInputDetectionPolicy>, "SetInputDetectionPolicy"},
+            FunctionInfo{80, nullptr, "SetWirelessPriorityMode"},
+            FunctionInfo{90, D<&ISelfController::GetAccumulatedSuspendedTickValue>, "GetAccumulatedSuspendedTickValue"},
+            FunctionInfo{91, D<&ISelfController::GetAccumulatedSuspendedTickChangedEvent>, "GetAccumulatedSuspendedTickChangedEvent"},
+            FunctionInfo{100, D<&ISelfController::SetAlbumImageTakenNotificationEnabled>, "SetAlbumImageTakenNotificationEnabled"},
+            FunctionInfo{110, nullptr, "SetApplicationAlbumUserData"},
+            FunctionInfo{120, D<&ISelfController::SaveCurrentScreenshot>, "SaveCurrentScreenshot"},
+            FunctionInfo{130, D<&ISelfController::SetRecordVolumeMuted>, "SetRecordVolumeMuted"},
+            FunctionInfo{230, D<&ISelfController::Unknown230>, "Unknown230"},
+            FunctionInfo{240, D<&ISelfController::Unknown240>, "Unknown240"},
+            FunctionInfo{1000, nullptr, "GetDebugStorageChannel"}
+        );
+        return HandlerTableGenerateWithFind(key, functions);
+    }
 
 ISelfController::ISelfController(Core::System& system_, std::shared_ptr<Applet> applet,
                                  Kernel::KProcess* process)
@@ -37,58 +100,52 @@ ISelfController::ISelfController(Core::System& system_, std::shared_ptr<Applet> 
         {14, D<&ISelfController::SetRestartMessageEnabled>, "SetRestartMessageEnabled"},
         {15, D<&ISelfController::SetScreenShotAppletIdentityInfo>, "SetScreenShotAppletIdentityInfo"},
         {16, D<&ISelfController::SetOutOfFocusSuspendingEnabled>, "SetOutOfFocusSuspendingEnabled"},
-        {17, &ISelfController::StubReplyZeroed, "SetControllerFirmwareUpdateSection"},
-        {18, &ISelfController::StubReplyZeroed, "SetRequiresCaptureButtonShortPressedMessage"},
+        {17, nullptr, "SetControllerFirmwareUpdateSection"},
+        {18, nullptr, "SetRequiresCaptureButtonShortPressedMessage"},
         {19, D<&ISelfController::SetAlbumImageOrientation>, "SetAlbumImageOrientation"},
         {20, &ISelfController::StubReplyZeroed, "SetDesirableKeyboardLayout"},
         {21, &ISelfController::StubReplyZeroed, "GetScreenShotProgramId"},
-        {22, &ISelfController::StubReplyZeroed, "Unknown22"},
-        {23, &ISelfController::StubReplyZeroed, "Unknown23"},
-        {24, &ISelfController::StubReplyZeroed, "Unknown24"},
+        {22, &ISelfController::StubReplyZeroed, "GetScreenShotAcdIndex"},
+        {23, &ISelfController::StubReplyZeroed, "GetScreenShotApparentPlatform"},
+        {24, &ISelfController::StubReplyZeroed, "GetScreenShotApplicationProperty"},
         {40, D<&ISelfController::CreateManagedDisplayLayer>, "CreateManagedDisplayLayer"},
         {41, D<&ISelfController::IsSystemBufferSharingEnabled>, "IsSystemBufferSharingEnabled"},
         {42, D<&ISelfController::GetSystemSharedLayerHandle>, "GetSystemSharedLayerHandle"},
         {43, D<&ISelfController::GetSystemSharedBufferHandle>, "GetSystemSharedBufferHandle"},
         {44, D<&ISelfController::CreateManagedDisplaySeparableLayer>, "CreateManagedDisplaySeparableLayer"},
-        {45, &ISelfController::StubReplyZeroed, "SetManagedDisplayLayerSeparationMode"},
-        {46, &ISelfController::StubReplyZeroed, "SetRecordingLayerCompositionEnabled"},
+        {45, nullptr, "SetManagedDisplayLayerSeparationMode"},
+        {46, nullptr, "SetRecordingLayerCompositionEnabled"},
         {50, D<&ISelfController::SetHandlesRequestToDisplay>, "SetHandlesRequestToDisplay"},
         {51, D<&ISelfController::ApproveToDisplay>, "ApproveToDisplay"},
         {60, D<&ISelfController::OverrideAutoSleepTimeAndDimmingTime>, "OverrideAutoSleepTimeAndDimmingTime"},
         {61, D<&ISelfController::SetMediaPlaybackState>, "SetMediaPlaybackState"},
         {62, D<&ISelfController::SetIdleTimeDetectionExtension>, "SetIdleTimeDetectionExtension"},
         {63, D<&ISelfController::GetIdleTimeDetectionExtension>, "GetIdleTimeDetectionExtension"},
-        {64, &ISelfController::StubReplyZeroed, "SetInputDetectionSourceSet"},
+        {64, nullptr, "SetInputDetectionSourceSet"},
         {65, D<&ISelfController::ReportUserIsActive>, "ReportUserIsActive"},
-        {66, &ISelfController::StubReplyZeroed, "GetCurrentIlluminance"},
+        {66, nullptr, "GetCurrentIlluminance"},
         {67, D<&ISelfController::IsIlluminanceAvailable>, "IsIlluminanceAvailable"},
         {68, D<&ISelfController::SetAutoSleepDisabled>, "SetAutoSleepDisabled"},
         {69, D<&ISelfController::IsAutoSleepDisabled>, "IsAutoSleepDisabled"},
-        {70, &ISelfController::StubReplyZeroed, "ReportMultimediaError"},
-        {71, &ISelfController::StubReplyZeroed, "GetCurrentIlluminanceEx"},
+        {70, nullptr, "ReportMultimediaError"},
+        {71, nullptr, "GetCurrentIlluminanceEx"},
         {72, D<&ISelfController::SetInputDetectionPolicy>, "SetInputDetectionPolicy"},
-        {73, &ISelfController::StubReplyZeroed, "Unknown73"},
-        {80, &ISelfController::StubReplyZeroed, "SetWirelessPriorityMode"},
+        {80, nullptr, "SetWirelessPriorityMode"},
         {90, D<&ISelfController::GetAccumulatedSuspendedTickValue>, "GetAccumulatedSuspendedTickValue"},
         {91, D<&ISelfController::GetAccumulatedSuspendedTickChangedEvent>, "GetAccumulatedSuspendedTickChangedEvent"},
         {100, D<&ISelfController::SetAlbumImageTakenNotificationEnabled>, "SetAlbumImageTakenNotificationEnabled"},
-        {110, &ISelfController::StubReplyZeroed, "SetApplicationAlbumUserData"},
+        {110, nullptr, "SetApplicationAlbumUserData"},
         {120, D<&ISelfController::SaveCurrentScreenshot>, "SaveCurrentScreenshot"},
         {130, D<&ISelfController::SetRecordVolumeMuted>, "SetRecordVolumeMuted"},
-        {200, &ISelfController::StubReplyZeroed, "Unknown200"},
-        {210, &ISelfController::StubReplyZeroed, "Unknown210"},
-        {211, &ISelfController::StubReplyZeroed, "Unknown211"},
-        {220, &ISelfController::StubReplyZeroed, "Unknown220"},
-        {221, &ISelfController::StubReplyZeroed, "Unknown221"},
         {230, D<&ISelfController::Unknown230>, "Unknown230"},
         {240, D<&ISelfController::Unknown240>, "Unknown240"},
         {1000, &ISelfController::StubReplyInterface, "GetDebugStorageChannel"},
-        {2000, &ISelfController::GetNx2GraphicsSystemSession, "GetGraphicsSystemSession (Switch 2, guessed)"},
-        {2100, &ISelfController::StubReplyZeroed, "Unknown2100"},
-        {2200, &ISelfController::StubReplyZeroed, "Unknown2200"},
-        {2300, &ISelfController::StubReplyZeroed, "Unknown2300"},
-        {2400, &ISelfController::StubReplyZeroed, "Unknown2400"},
-        {2401, &ISelfController::StubReplyZeroed, "Unknown2401"},
+        {2000, &ISelfController::GetGraphicsSupervisor, "GetGraphicsSupervisor"},
+        {2100, &ISelfController::StubReplyZeroed, "SetRecordingLayerEnabled"},
+        {2200, &ISelfController::StubReplyZeroed, "SetSharingLayerEnabled"},
+        {2300, &ISelfController::StubReplyZeroed, "SetCopyrightLayerEnabled"},
+        {2400, &ISelfController::StubReplyZeroed, "SetRtcScreenSharingAudioEnabled"},
+        {2401, &ISelfController::StubReplyZeroed, "SetStreamPlayMirroringAudioEnabled"},
         {2402, &ISelfController::StubReplyZeroed, "Unknown2402"},
     };
     // clang-format on
@@ -100,15 +157,52 @@ ISelfController::ISelfController(Core::System& system_, std::shared_ptr<Applet> 
                                                m_applet->library_applet_mode);
 }
 
-void ISelfController::GetNx2GraphicsSystemSession(HLERequestContext& ctx) {
+void ISelfController::GetGraphicsSupervisor(HLERequestContext& ctx) {
     // nn::gsv::BootWithRemoteMemory sends TIPC on the handle this returns.
-    LOG_WARNING(Service_AM, "(STUBBED) Switch 2 ISelfController::2000, returning a nx2:gsv session");
+    LOG_WARNING(Service_AM, "(STUBBED) GetGraphicsSupervisor, returning a nx2:gsv session");
     ReturnRawSession(system, ctx, std::make_shared<INx2GraphicsSystemSession>(system));
 }
 
 ISelfController::~ISelfController() {
+    if (m_graphics_supervisor_session != nullptr) {
+        m_graphics_supervisor_session->Close(kernel);
+    }
     std::scoped_lock lk{m_applet->lock};
     m_applet->display_layer_manager.Finalize();
+}
+
+void ISelfController::GetGraphicsSupervisor(HLERequestContext& ctx) {
+    if (m_graphics_supervisor_session != nullptr) {
+        IPC::ResponseBuilder rb{ctx, 2, 1};
+        rb.Push(ResultSuccess);
+        rb.PushCopyObjects(ctx, m_graphics_supervisor_session);
+        return;
+    }
+    Kernel::KScopedResourceReservation reservation(
+        kernel, Kernel::GetCurrentProcessPointer(kernel), Kernel::LimitableResource::SessionCountMax);
+    if (!reservation.Succeeded()) {
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(Kernel::ResultLimitReached);
+        return;
+    }
+    auto* session = Kernel::KSession::Create(kernel);
+    if (session == nullptr) {
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(Kernel::ResultOutOfResource);
+        return;
+    }
+    session->Initialize(kernel, nullptr, 0);
+    reservation.Commit();
+    Kernel::KSession::Register(kernel, session);
+    auto& server = ctx.GetManager()->GetServerManager();
+    auto manager = std::make_shared<SessionRequestManager>(kernel, server);
+    manager->SetSessionHandler(std::make_shared<IGraphicsSupervisor>(system, m_process, m_applet->aruid.pid));
+    server.RegisterSession(&session->GetServerSession(), std::move(manager));
+    LOG_DEBUG(Service_AM, "created graphics-supervisor session");
+    m_graphics_supervisor_session = &session->GetClientSession();
+    IPC::ResponseBuilder rb{ctx, 2, 1};
+    rb.Push(ResultSuccess);
+    rb.PushCopyObjects(ctx, m_graphics_supervisor_session);
 }
 
 Result ISelfController::Exit() {
@@ -449,6 +543,12 @@ Result ISelfController::Unknown230(u32 in_val, Out<u16> out_val) {
 Result ISelfController::Unknown240(u32 in_val) {
     LOG_WARNING(Service_AM, "(STUBBED) called, in_val={}", in_val);
 
+    R_SUCCEED();
+}
+
+Result ISelfController::SetRtcScreenSharingAudioEnabled(bool enabled) {
+    // SDK 23.0 serializes this command as one bool input with no output payload.
+    LOG_DEBUG(Service_AM, "called, enabled={}", enabled);
     R_SUCCEED();
 }
 

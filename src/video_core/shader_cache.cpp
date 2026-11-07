@@ -6,9 +6,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <cstdlib>
-#include <exception>
-#include <functional>
 #include <string>
 #include <unordered_set>
 #include <fmt/ranges.h>
@@ -20,7 +17,6 @@
 #include "common/cityhash.h"
 #include "shader_recompiler/frontend/maxwell/control_flow.h"
 #include "shader_recompiler/exception.h"
-#include "shader_recompiler/frontend/ampere/trap_guards.h"
 #include "shader_recompiler/object_pool.h"
 #include "video_core/control/channel_state.h"
 #include "video_core/dirty_flags.h"
@@ -96,24 +92,28 @@ void ShaderCache::RefreshDebugRejections(bool unrejected) {
              unrejected ? ", earlier rejections forgotten" : "");
 }
 
+std::array<u64, 6> ShaderCache::GraphicsNativeKeys(
+    const std::array<u64, NUM_PROGRAMS>& unique_hashes) const {
+    std::array<u64, NUM_PROGRAMS> keys{};
+    for (size_t index = 0; index < NUM_PROGRAMS; ++index) {
+        const ShaderInfo* const info = shader_infos[index];
+        if (unique_hashes[index] != 0 && info && info->lowered_native) {
+            keys[index] = info->lowered_native->native_program_key;
+        }
+    }
+    return keys;
+}
+
+u64 ShaderCache::ComputeNativeKey() {
+    const GPUVAddr program_base{kepler_compute->regs.code_loc.Address()};
+    const GPUVAddr shader_addr{program_base + kepler_compute->launch_description.program_start};
+    const std::optional<VAddr> cpu_shader_addr{gpu_memory->GpuToCpuAddress(shader_addr)};
+    const ShaderInfo* const info{cpu_shader_addr ? TryGet(*cpu_shader_addr) : nullptr};
+    return info && info->lowered_native ? info->lowered_native->native_program_key : 0;
+}
+
 ShaderCache::ShaderCache(Tegra::MaxwellDeviceMemoryManager& device_memory_)
     : device_memory{device_memory_} {}
-
-// Task and mesh programs are translated with the mesh registers and the header of the pass-through
-// geometry program (per-primitive outputs), so pipelines are keyed by them too.
-u64 ShaderCache::MeshStateHash() const {
-    using Regs = Tegra::Engines::Maxwell3D::Regs;
-    const auto& regs{maxwell3d->regs};
-    std::array<u32, 3 + 20> state{regs.reg_array[Regs::MeshShaderA], regs.reg_array[Regs::MeshShaderB],
-                                  regs.reg_array[Regs::MeshInitShader]};
-    if (regs.IsShaderConfigEnabled(Regs::ShaderType::Geometry)) {
-        const auto& geometry{regs.pipelines[static_cast<size_t>(Regs::ShaderType::Geometry)]};
-        const GPUVAddr address{(static_cast<u64>(geometry.reserved[0] & 0xff) << 32) |
-                               geometry.reserved[1]};
-        gpu_memory->ReadBlockUnsafe(address, state.data() + 3, 20 * sizeof(u32));
-    }
-    return Common::CityHash64(reinterpret_cast<const char*>(state.data()), sizeof(state)) | 1;
-}
 
 bool ShaderCache::RefreshStages(std::array<u64, 6>& unique_hashes) try {
     auto& dirty{maxwell3d->dirty.flags};
@@ -121,10 +121,10 @@ bool ShaderCache::RefreshStages(std::array<u64, 6>& unique_hashes) try {
         return last_shaders_valid;
     }
     dirty[VideoCommon::Dirty::Shaders] = false;
+    fragment_color_outputs = 0;
 
     const GPUVAddr base_addr{maxwell3d->regs.program_region.Address()};
     const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
-    const bool mesh{native && maxwell3d->regs.IsMeshEnabled()};
     for (size_t index = 0; index < Tegra::Engines::Maxwell3D::Regs::MaxShaderProgram; ++index) {
         if (!maxwell3d->regs.IsShaderConfigEnabled(index)) {
             unique_hashes[index] = 0;
@@ -134,11 +134,6 @@ bool ShaderCache::RefreshStages(std::array<u64, 6>& unique_hashes) try {
         const auto program{static_cast<Tegra::Engines::Maxwell3D::Regs::ShaderType>(index)};
         if (program == Tegra::Engines::Maxwell3D::Regs::ShaderType::Pixel &&
             !maxwell3d->regs.rasterize_enable) {
-            unique_hashes[index] = 0;
-            continue;
-        }
-        if (mesh && program == Tegra::Engines::Maxwell3D::Regs::ShaderType::Geometry) {
-            // A header without code: the mesh program's environment reads its output map.
             unique_hashes[index] = 0;
             continue;
         }
@@ -162,8 +157,7 @@ bool ShaderCache::RefreshStages(std::array<u64, 6>& unique_hashes) try {
         if (!shader_info) {
             const u32 start_address{native ? 0 : shader_config.offset};
             try {
-                // Native programs are lowered while the environment is built (once: the
-                // ShaderInfo keeps the result for the pipeline's environments).
+                // Native programs are lowered while the environment is built.
                 RethrowIfRejected(*cpu_shader_addr);
                 GraphicsEnvironment env{*maxwell3d, *gpu_memory, program, native ? shader_addr : base_addr, start_address};
                 shader_info = MakeShaderInfo(env, *cpu_shader_addr);
@@ -215,9 +209,8 @@ bool ShaderCache::RefreshStages(std::array<u64, 6>& unique_hashes) try {
         }
         shader_infos[index] = shader_info;
         unique_hashes[index] = shader_info->unique_hash;
-        if (mesh && (program == Tegra::Engines::Maxwell3D::Regs::ShaderType::VertexB ||
-                     program == Tegra::Engines::Maxwell3D::Regs::ShaderType::Tessellation)) {
-            unique_hashes[index] ^= MeshStateHash();
+        if (program == Tegra::Engines::Maxwell3D::Regs::ShaderType::Pixel) {
+            fragment_color_outputs = shader_info->color_outputs;
         }
     }
     last_shaders_valid = true;
@@ -227,27 +220,7 @@ bool ShaderCache::RefreshStages(std::array<u64, 6>& unique_hashes) try {
     if (!native.native_turing) throw;
     native.native_execution_failed = true;
     last_shaders_valid = false;
-    // Each rejected program is logged once (the draws that use it keep failing quietly).
-    static std::unordered_set<std::string> logged;
-    if (logged.insert(error.what()).second) {
-        LOG_ERROR(HW_GPU, "Native graphics shader rejected: {}", error.what());
-    }
-    // Once: show what the vertex stage has bound, to find where an unbound bank's data lives.
-    static std::vector<std::string> dumped_errors;
-    if (const std::string what{error.what()};
-        what.find("constant buffer") != std::string::npos && dumped_errors.size() < 12 &&
-        std::count(dumped_errors.begin(), dumped_errors.end(), what) < 3) {
-        dumped_errors.push_back(what);
-        LOG_INFO(HW_GPU, "VS cbuf dump for: {}", what.substr(0, 40));
-        for (u32 slot = 3; slot < 8; ++slot) {
-            const auto& buffer = maxwell3d->state.shader_stages[0].const_buffers[slot];
-            if (!buffer.enabled) continue;
-            std::array<u32, 24> words{};
-            gpu_memory->ReadBlockUnsafe(buffer.address, words.data(), sizeof(words));
-            LOG_INFO(HW_GPU, "VS cbuf {} at {:#x} size {:#x}: {:08x}", slot, buffer.address, buffer.size,
-                     fmt::join(words, " "));
-        }
-    }
+    LOG_ERROR(HW_GPU, "Native graphics shader rejected: {}", error.what());
     return false;
 }
 
@@ -338,8 +311,7 @@ void ShaderCache::GetGraphicsEnvironments(GraphicsEnvironments& result,
         const GPUVAddr address = native
             ? (static_cast<u64>(config.reserved[0] & 0xff) << 32) | config.reserved[1]
             : base_addr;
-        env = GraphicsEnvironment{*maxwell3d, *gpu_memory, program, address, start_address,
-                                  shader_infos[index]->lowered_native};
+        env = GraphicsEnvironment{*maxwell3d, *gpu_memory, program, address, start_address};
         env.SetCachedSize(shader_infos[index]->size_bytes);
         result.env_ptrs[env_index++] = &env;
     }
@@ -481,12 +453,11 @@ const ShaderInfo* ShaderCache::MakeShaderInfo(GenericEnvironment& env, VAddr cpu
     } else {
         // Slow path, not really hit on commercial games
         // Build a control flow graph to get the real shader size
-        Shader::ObjectPool<Shader::Maxwell::Flow::Block> flow_block;
+        boost::container::stable_vector<Shader::Maxwell::Flow::Block> flow_block;
         Shader::Maxwell::Flow::CFG cfg{env, flow_block, env.StartAddress()};
         info->unique_hash = env.CalculateHash();
         info->size_bytes = env.ReadSizeBytes();
     }
-    info->lowered_native = env.LoweredNative();
     const size_t size_bytes{env.SourceSizeBytes() ? env.SourceSizeBytes() : info->size_bytes};
     const ShaderInfo* const result{info.get()};
     Register(std::move(info), cpu_addr, size_bytes);

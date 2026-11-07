@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-FileCopyrightText: 2016 Citra Emulator Project
@@ -18,10 +18,11 @@
 #include <vulkan/vulkan_core.h>
 #include "common/common_types.h"
 #include "common/settings_enums.h"
-#include "qt_common/config/shared_translation.h"
-#include "qt_common/util/vk.h"
+#include "qt_common/shared_translation.h"
+#include "vk_device_info.h"
 #include "yuzu/configuration/configuration_shared.h"
 
+class QCheckBox;
 class QPushButton;
 class QEvent;
 class QObject;
@@ -42,6 +43,7 @@ class ConfigureGraphics;
 
 namespace ConfigurationShared {
 class Builder;
+class Widget;
 }
 
 class ConfigureGraphics : public ConfigurationShared::Tab {
@@ -81,7 +83,18 @@ private:
 
     Settings::RendererBackend GetCurrentGraphicsBackend() const;
 
+    /// The global value in this tab's profile, or the current value in a custom configuration
+    std::string Current(const Settings::BasicSetting& setting) const;
+    /// Sets the global value in this tab's profile
+    void StoreGlobal(Settings::BasicSetting& setting, u32 value) const;
+
     int FindIndex(u32 enumeration, int value) const;
+
+#ifdef HAS_LSFG
+    void SetupFrameGen(ConfigurationShared::Widget* widget);
+    void InstallLosslessDll();
+    void UpdateLosslessButton();
+#endif
 
     std::unique_ptr<Ui::ConfigureGraphics> ui;
     QColor bg_color;
@@ -100,6 +113,7 @@ private:
 
     const Core::System& system;
     const ConfigurationShared::ComboboxTranslationMap& combobox_translations;
+    const Settings::Profile profile;
 
     QPushButton* api_restore_global_button;
     QComboBox* vulkan_device_combobox;
@@ -110,4 +124,9 @@ private:
     QWidget* api_widget;
     QComboBox* aspect_ratio_combobox;
     QComboBox* resolution_combobox;
+#ifdef HAS_LSFG
+    QCheckBox* frame_gen_checkbox{};
+    QPushButton* lossless_button{};
+    std::vector<QWidget*> frame_gen_widgets;
+#endif
 };

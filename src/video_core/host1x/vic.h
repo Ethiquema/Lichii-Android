@@ -12,7 +12,7 @@
 #include "common/common_types.h"
 #include "common/scratch_buffer.h"
 #include "video_core/cdma_pusher.h"
-#include "video_core/host1x/ffmpeg.h"
+#include "video_core/host1x/host1x.h"
 
 namespace Tegra::Host1x {
 class Host1x;

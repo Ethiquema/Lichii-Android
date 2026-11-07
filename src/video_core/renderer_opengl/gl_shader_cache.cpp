@@ -44,8 +44,8 @@ using Shader::Backend::GLASM::EmitGLASM;
 using Shader::Backend::GLSL::EmitGLSL;
 using Shader::Backend::SPIRV::EmitSPIRV;
 using Shader::Maxwell::ConvertLegacyToGeneric;
-using Shader::Maxwell::GenerateGeometryPassthrough;
 using Shader::Maxwell::MergeDualVertexPrograms;
+using Shader::Maxwell::PrunePassthroughStores;
 using Shader::Maxwell::TranslateProgram;
 using VideoCommon::ComputeEnvironment;
 using VideoCommon::FileEnvironment;
@@ -55,22 +55,54 @@ using VideoCommon::LoadPipelines;
 using VideoCommon::SerializePipeline;
 using Context = ShaderContext::Context;
 
-constexpr u32 CACHE_VERSION = VideoCommon::OpenGLPipelineCacheVersion;
+constexpr u32 CACHE_VERSION = 16;
 
 template <typename Container>
 auto MakeSpan(Container& container) {
     return std::span(container.data(), container.size());
 }
 
-Shader::OutputTopology MaxwellToOutputTopology(Maxwell::PrimitiveTopology topology) {
+Shader::OutputTopology InputToOutputTopology(Shader::InputTopology topology) {
     switch (topology) {
-    case Maxwell::PrimitiveTopology::Points:
+    case Shader::InputTopology::Points:
         return Shader::OutputTopology::PointList;
-    case Maxwell::PrimitiveTopology::LineStrip:
+    case Shader::InputTopology::Lines:
+    case Shader::InputTopology::LinesAdjacency:
         return Shader::OutputTopology::LineStrip;
-    default:
+    case Shader::InputTopology::Triangles:
+    case Shader::InputTopology::TrianglesAdjacency:
         return Shader::OutputTopology::TriangleStrip;
     }
+    return Shader::OutputTopology::TriangleStrip;
+}
+
+Shader::InputTopology MaxwellToInputTopology(Maxwell::PrimitiveTopology topology) {
+    switch (topology) {
+    case Maxwell::PrimitiveTopology::Points:
+        return Shader::InputTopology::Points;
+    case Maxwell::PrimitiveTopology::Lines:
+    case Maxwell::PrimitiveTopology::LineLoop:
+    case Maxwell::PrimitiveTopology::LineStrip:
+        return Shader::InputTopology::Lines;
+    case Maxwell::PrimitiveTopology::LinesAdjacency:
+    case Maxwell::PrimitiveTopology::LineStripAdjacency:
+        return Shader::InputTopology::LinesAdjacency;
+    case Maxwell::PrimitiveTopology::TrianglesAdjacency:
+    case Maxwell::PrimitiveTopology::TriangleStripAdjacency:
+        return Shader::InputTopology::TrianglesAdjacency;
+    default:
+        return Shader::InputTopology::Triangles;
+    }
+}
+
+Shader::InputTopology GeometryInputTopology(const GraphicsPipelineKey& key) {
+    if (key.unique_hashes[static_cast<size_t>(Maxwell::ShaderType::Tessellation)] == 0) {
+        return MaxwellToInputTopology(key.gs_input_topology);
+    }
+    if (key.tessellation_primitive == Maxwell::Tessellation::DomainType::Isolines) {
+        return Shader::InputTopology::Lines;
+    }
+    return Shader::InputTopology::Triangles;
 }
 
 Shader::RuntimeInfo MakeRuntimeInfo(const GraphicsPipelineKey& key,
@@ -128,33 +160,7 @@ Shader::RuntimeInfo MakeRuntimeInfo(const GraphicsPipelineKey& key,
     default:
         break;
     }
-    switch (key.gs_input_topology) {
-    case Maxwell::PrimitiveTopology::Points:
-        info.input_topology = Shader::InputTopology::Points;
-        break;
-    case Maxwell::PrimitiveTopology::Lines:
-    case Maxwell::PrimitiveTopology::LineLoop:
-    case Maxwell::PrimitiveTopology::LineStrip:
-        info.input_topology = Shader::InputTopology::Lines;
-        break;
-    case Maxwell::PrimitiveTopology::Triangles:
-    case Maxwell::PrimitiveTopology::TriangleStrip:
-    case Maxwell::PrimitiveTopology::TriangleFan:
-    case Maxwell::PrimitiveTopology::Quads:
-    case Maxwell::PrimitiveTopology::QuadStrip:
-    case Maxwell::PrimitiveTopology::Polygon:
-    case Maxwell::PrimitiveTopology::Patches:
-        info.input_topology = Shader::InputTopology::Triangles;
-        break;
-    case Maxwell::PrimitiveTopology::LinesAdjacency:
-    case Maxwell::PrimitiveTopology::LineStripAdjacency:
-        info.input_topology = Shader::InputTopology::LinesAdjacency;
-        break;
-    case Maxwell::PrimitiveTopology::TrianglesAdjacency:
-    case Maxwell::PrimitiveTopology::TriangleStripAdjacency:
-        info.input_topology = Shader::InputTopology::TrianglesAdjacency;
-        break;
-    }
+    info.input_topology = GeometryInputTopology(key);
     info.glasm_use_storage_buffers = glasm_use_storage_buffers;
     return info;
 }
@@ -232,6 +238,7 @@ ShaderCache::ShaderCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
           .has_broken_unsigned_image_offsets = true,
           .has_broken_signed_operations = true,
           .has_broken_fp16_float_controls = false,
+          .has_broken_fp32_signed_zero_nan_preserve = false,
           .has_broken_fp32_denorm_flush = false,
           .has_gl_component_indexing_bug = device.HasComponentIndexingBug(),
           .has_gl_precise_bug = device.HasPreciseBug(),
@@ -239,6 +246,7 @@ ShaderCache::ShaderCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
           .has_gl_bool_ref_bug = device.HasBoolRefBug(),
           .ignore_nan_fp_comparisons = true,
           .gl_max_compute_smem_size = device.GetMaxComputeSharedMemorySize(),
+          .max_shared_memory_size = device.GetMaxComputeSharedMemorySize(),
           .min_ssbo_alignment = device.GetShaderStorageBufferAlignment(),
           // Use the host limit, but never more than the guest can produce. Maxwell exposes 8 clip
           // distances and the SPIR-V output array is sized for at most 8, so clamping here keeps a
@@ -318,7 +326,7 @@ void ShaderCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading,
         ComputePipelineKey key;
         file.read(reinterpret_cast<char*>(&key), sizeof(key));
         queue_work([this, key, env_ = std::move(env), &state, &callback](Context* ctx) mutable {
-            ctx->pools.ReleaseContents();
+            ctx->pools.clear();
             auto pipeline{CreateComputePipeline(ctx->pools, key, env_, true)};
             std::scoped_lock lock{state.mutex};
             if (pipeline) {
@@ -339,7 +347,7 @@ void ShaderCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading,
             for (auto& env : envs_) {
                 env_ptrs.push_back(&env);
             }
-            ctx->pools.ReleaseContents();
+            ctx->pools.clear();
             auto pipeline{CreateGraphicsPipeline(ctx->pools, key, MakeSpan(env_ptrs), false, true)};
             std::scoped_lock lock{state.mutex};
             if (pipeline) {
@@ -385,6 +393,7 @@ GraphicsPipeline* ShaderCache::CurrentGraphicsPipeline() {
         regs.tessellation.params.output_primitives.Value() ==
         Maxwell::Tessellation::OutputPrimitives::Triangles_CW);
     graphics_key.xfb_enabled.Assign(regs.transform_feedback_enabled != 0 ? 1 : 0);
+    graphics_key.viewport_scale_offset_enabled.Assign(regs.viewport_scale_offset_enabled != 0);
     graphics_key.app_stage.Assign(maxwell3d->engine_state);
     if (graphics_key.xfb_enabled) {
         SetXfbState(graphics_key.xfb_state, regs);
@@ -454,9 +463,8 @@ std::unique_ptr<GraphicsPipeline> ShaderCache::CreateGraphicsPipeline() {
     GraphicsEnvironments environments;
     GetGraphicsEnvironments(environments, graphics_key.unique_hashes);
 
-    main_pools.ReleaseContents();
-    auto pipeline{CreateGraphicsPipeline(main_pools, graphics_key, environments.Span(),
-                                         use_asynchronous_shaders)};
+    main_pools.clear();
+    auto pipeline{CreateGraphicsPipeline(main_pools, graphics_key, environments.Span(), use_asynchronous_shaders)};
     if (!pipeline || shader_cache_filename.empty()) {
         return pipeline;
     }
@@ -470,10 +478,7 @@ std::unique_ptr<GraphicsPipeline> ShaderCache::CreateGraphicsPipeline() {
     return pipeline;
 }
 
-std::unique_ptr<GraphicsPipeline> ShaderCache::CreateGraphicsPipeline(
-    ShaderContext::ShaderPools& pools, const GraphicsPipelineKey& key,
-    std::span<Shader::Environment* const> envs, bool use_shader_workers,
-    bool force_context_flush) try {
+std::unique_ptr<GraphicsPipeline> ShaderCache::CreateGraphicsPipeline(Shader::Maxwell::ShaderPools& pools, const GraphicsPipelineKey& key, std::span<Shader::Environment* const> envs, bool use_shader_workers, bool force_context_flush) try {
     auto hash = key.Hash();
     LOG_INFO(Render_OpenGL, "{:#016x}", hash);
     size_t env_index{};
@@ -486,12 +491,12 @@ std::unique_ptr<GraphicsPipeline> ShaderCache::CreateGraphicsPipeline(
     Shader::IR::Program* layer_source_program{};
 
     for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
-        const bool is_emulated_stage = layer_source_program != nullptr
-            && index == u32(Maxwell::ShaderType::Geometry);
+        const bool is_emulated_stage = layer_source_program != nullptr && index == u32(Maxwell::ShaderType::Geometry);
         if (key.unique_hashes[index] == 0 && is_emulated_stage) {
-            auto topology = MaxwellToOutputTopology(key.gs_input_topology);
-            programs[index] = GenerateGeometryPassthrough(pools.inst, pools.block, host_info,
-                                                          *layer_source_program, topology);
+            const auto input_topology = GeometryInputTopology(key);
+            programs[index] = GenerateGeometryPassthrough(
+                pools.inst, pools.block, host_info, *layer_source_program,
+                InputToOutputTopology(input_topology), input_topology);
             continue;
         }
         if (key.unique_hashes[index] == 0) {
@@ -509,13 +514,15 @@ std::unique_ptr<GraphicsPipeline> ShaderCache::CreateGraphicsPipeline(
 
         if (!uses_vertex_a || index != 1) {
             // Normal path
-            programs[index] = TranslateProgram(pools.inst, pools.block, env, cfg, host_info);
+            programs[index] = TranslateProgram(pools.inst, pools.block, env, cfg, host_info,
+                                              GeometryInputTopology(key));
 
             total_storage_buffers += Shader::NumDescriptors(programs[index].info.storage_buffers_descriptors);
         } else {
             // VertexB path when VertexA is present.
             auto& program_va{programs[0]};
-            auto program_vb{TranslateProgram(pools.inst, pools.block, env, cfg, host_info)};
+            auto program_vb{TranslateProgram(pools.inst, pools.block, env, cfg, host_info,
+                                             GeometryInputTopology(key))};
             total_storage_buffers += Shader::NumDescriptors(program_vb.info.storage_buffers_descriptors);
             programs[index] = MergeDualVertexPrograms(program_va, program_vb, env);
         }
@@ -547,6 +554,9 @@ std::unique_ptr<GraphicsPipeline> ShaderCache::CreateGraphicsPipeline(
         const size_t stage_index{index - 1};
         infos[stage_index] = &program.info;
 
+        if (previous_program) {
+            PrunePassthroughStores(program, previous_program->info.stores);
+        }
         const auto runtime_info = MakeRuntimeInfo(key, program, previous_program, glasm_use_storage_buffers, use_glasm);
         switch (::Settings::values.renderer_backend.GetValue()) {
         case Settings::RendererBackend::OpenGL_GLSL:
@@ -583,7 +593,7 @@ std::unique_ptr<ComputePipeline> ShaderCache::CreateComputePipeline(
                            shader->lowered_native};
     env.SetCachedSize(shader->size_bytes);
 
-    main_pools.ReleaseContents();
+    main_pools.clear();
     auto pipeline{CreateComputePipeline(main_pools, key, env)};
     if (!pipeline || shader_cache_filename.empty()) {
         return pipeline;
@@ -593,9 +603,7 @@ std::unique_ptr<ComputePipeline> ShaderCache::CreateComputePipeline(
     return pipeline;
 }
 
-std::unique_ptr<ComputePipeline> ShaderCache::CreateComputePipeline(
-    ShaderContext::ShaderPools& pools, const ComputePipelineKey& key, Shader::Environment& env,
-    bool force_context_flush) try {
+std::unique_ptr<ComputePipeline> ShaderCache::CreateComputePipeline(Shader::Maxwell::ShaderPools& pools, const ComputePipelineKey& key, Shader::Environment& env, bool force_context_flush) try {
     auto hash = key.Hash();
     LOG_INFO(Render_OpenGL, "{:#016x}", hash);
 
@@ -605,7 +613,8 @@ std::unique_ptr<ComputePipeline> ShaderCache::CreateComputePipeline(
         env.Dump(hash, key.unique_hash);
     }
 
-    auto program{TranslateProgram(pools.inst, pools.block, env, cfg, host_info)};
+    auto program{TranslateProgram(pools.inst, pools.block, env, cfg, host_info,
+                                  Shader::InputTopology::Points)};
     const u32 num_storage_buffers{Shader::NumDescriptors(program.info.storage_buffers_descriptors)};
     Shader::RuntimeInfo info;
     info.glasm_use_storage_buffers = num_storage_buffers <= device.GetMaxGLASMStorageBufferBlocks();

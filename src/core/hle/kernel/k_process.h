@@ -6,8 +6,9 @@
 
 #pragma once
 
-#include <atomic>
+#include <array>
 #include <map>
+#include <string_view>
 
 #include "core/arm/arm_interface.h"
 #include "core/file_sys/program_metadata.h"
@@ -88,6 +89,10 @@ private:
     KProcessAddress m_arg_pointer{};
     KProcessAddress m_arg_return_address{};
     KProcessAddress m_main_thread_handle_addr{};
+    KProcessAddress m_process_handle_addr{};
+    KProcessAddress m_homebrew_next_load_path_addr{};
+    KProcessAddress m_homebrew_next_load_argv_addr{};
+    std::array<char, 16> m_homebrew_nxlink_argv_marker{};
     KHandleTable m_handle_table;
     KProcessAddress m_plr_address{};
     ThreadList m_thread_list{};
@@ -113,6 +118,7 @@ private:
 
     size_t m_code_size{};
     size_t m_main_thread_stack_size{};
+    KProcessAddress m_main_thread_stack_top{};
     size_t m_max_process_memory{};
     size_t m_memory_release_hint{};
     s64 m_schedule_count{};
@@ -137,11 +143,13 @@ private:
     bool m_is_signaled : 1 = false;
     bool m_is_initialized : 1 = false;
     bool m_is_application : 1 = false;
-    bool m_is_switch2 : 1 = false;
+    bool m_uses_pauth_returns : 1 = false;
     bool m_is_default_application_system_resource : 1 = false;
     bool m_is_suspended : 1 = false;
     bool m_is_immortal : 1 = false;
     bool m_is_handle_table_initialized : 1 = false;
+    bool m_is_homebrew_in_place_next_load : 1 = false;
+    bool m_has_homebrew_nxlink_argv_marker : 1 = false;
 
 private:
     Result StartTermination(KernelCore& kernel);
@@ -242,6 +250,49 @@ public:
     void SetMainThreadHandleAddr(KProcessAddress addr) {
         m_main_thread_handle_addr = addr;
     }
+    void SetProcessHandleAddr(KProcessAddress addr) {
+        m_process_handle_addr = addr;
+    }
+    void SetHomebrewNextLoadBufferAddrs(KProcessAddress path_addr, KProcessAddress argv_addr) {
+        m_homebrew_next_load_path_addr = path_addr;
+        m_homebrew_next_load_argv_addr = argv_addr;
+    }
+    void SetHomebrewInPlaceNextLoad(bool enabled) {
+        m_is_homebrew_in_place_next_load = enabled;
+    }
+    void SetHomebrewNxlinkArgvMarker(std::string_view marker) {
+        if (marker.size() != m_homebrew_nxlink_argv_marker.size()) {
+            m_has_homebrew_nxlink_argv_marker = false;
+            return;
+        }
+
+        marker.copy(m_homebrew_nxlink_argv_marker.data(), m_homebrew_nxlink_argv_marker.size());
+        m_has_homebrew_nxlink_argv_marker = true;
+    }
+    void ClearHomebrewNxlinkArgvMarker() {
+        m_has_homebrew_nxlink_argv_marker = false;
+    }
+    std::string_view GetHomebrewNxlinkArgvMarker() const {
+        if (!m_has_homebrew_nxlink_argv_marker) {
+            return {};
+        }
+        return {m_homebrew_nxlink_argv_marker.data(), m_homebrew_nxlink_argv_marker.size()};
+    }
+    bool IsHomebrewInPlaceNextLoad() const {
+        return m_is_homebrew_in_place_next_load;
+    }
+    KProcessAddress GetHomebrewNextLoadPathAddr() const {
+        return m_homebrew_next_load_path_addr;
+    }
+    KProcessAddress GetHomebrewNextLoadArgvAddr() const {
+        return m_homebrew_next_load_argv_addr;
+    }
+    size_t GetCodeSize() const {
+        return m_code_size;
+    }
+    KProcessAddress GetMainThreadStackTop() const {
+        return m_main_thread_stack_top;
+    }
 
     size_t GetMainStackSize() const {
         return m_main_thread_stack_size;
@@ -259,8 +310,8 @@ public:
         return m_is_application;
     }
 
-    bool IsSwitch2() const {
-        return m_is_switch2;
+    bool UsesPAuthReturns() const {
+        return m_uses_pauth_returns;
     }
 
     bool IsDefaultApplicationSystemResource() const {

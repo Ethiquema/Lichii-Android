@@ -20,6 +20,7 @@
 #include "common/common_types.h"
 #include <ranges>
 #include "video_core/textures/astc.h"
+#include "video_core/textures/decoders.h"
 #include "video_core/textures/workers.h"
 
 class InputBitStream {
@@ -1283,6 +1284,9 @@ static constexpr bool IsHDRColorEndpointMode(u32 cem) {
     }
 }
 
+// Sign-extends the low nbits of value (a 2's complement field packed into
+// the bottom of an otherwise-unsigned integer), per C.2.15's HDR endpoint
+// bitfield unpacking.
 static constexpr s32 SignExtend(s32 value, u32 nbits) {
     const s32 sign_bit = 1 << (nbits - 1);
     return (value ^ sign_bit) - sign_bit;
@@ -1293,6 +1297,7 @@ struct HDREndpointRGB {
     s32 r1, g1, b1;
 };
 
+// HDR Endpoint Mode 7 (C.2.15): base RGB + scale factor.
 static void DecodeHDREndpointMode7(u32 v0, u32 v1, u32 v2, u32 v3, s32& r0, s32& g0, s32& b0,
                                     s32& r1, s32& g1, s32& b1) {
     const u32 modeval = ((v0 & 0xC0) >> 6) | ((v1 & 0x80) >> 5) | ((v2 & 0x80) >> 4);
@@ -1385,6 +1390,8 @@ static void DecodeHDREndpointMode7(u32 v0, u32 v1, u32 v2, u32 v3, s32& r0, s32&
     b0 = std::clamp(blue - scale, 0, 0xFFF);
 }
 
+// HDR Endpoint Mode 11 (C.2.15): direct RGB pair. Shared by modes 11, 14 and 15,
+// which all decode their RGB the same way and only differ in how alpha is filled in.
 static HDREndpointRGB DecodeHDREndpointMode11(u32 v0, u32 v1, u32 v2, u32 v3, u32 v4, u32 v5) {
     const u32 majcomp = ((v4 & 0x80) >> 7) | ((v5 & 0x80) >> 6);
     if (majcomp == 3) {
@@ -1445,6 +1452,11 @@ static HDREndpointRGB DecodeHDREndpointMode11(u32 v0, u32 v1, u32 v2, u32 v3, u3
     if (ohm & 0x12)
         vb1 |= static_cast<s32>(x3 << 7);
 
+    // NOTE: the published spec text says "modeval >> 1" here, but no "modeval" is defined
+    // in this decode (that name belongs to Mode 7's unrelated decode) -- substituting the
+    // "mode" computed just above reproduces exactly Table C.2.23's per-mode shift amounts
+    // (3,3,2,2,1,1,0,0 for modes 0..7), so this is a spec transcription error, not a real
+    // "modeval" this function forgot to compute.
     const s32 shamt = (static_cast<s32>(mode) >> 1) ^ 3;
     va <<= shamt;
     vb0 <<= shamt;
@@ -1632,6 +1644,7 @@ static void ComputeEndpoints(Pixel& ep1, Pixel& ep2, const u32*& colorValues,
     case 14: {
         READ_UINT_VALUES(8)
         const HDREndpointRGB rgb = DecodeHDREndpointMode11(v[0], v[1], v[2], v[3], v[4], v[5]);
+        // Only mode with LDR (8-bit UNORM)-interpreted alpha; left as-is (0-255).
         ep1 = Pixel(v[6], rgb.r0, rgb.g0, rgb.b0);
         ep2 = Pixel(v[7], rgb.r1, rgb.g1, rgb.b1);
     } break;
@@ -1671,7 +1684,7 @@ static void ComputeEndpoints(Pixel& ep1, Pixel& ep2, const u32*& colorValues,
 }
 
 static void FillVoidExtentLDR(InputBitStream& strm, std::span<u32> outBuf, u32 blockWidth,
-                              u32 blockHeight) {
+                              u32 blockHeight, u32 stride) {
     // Don't actually care about the void extent, just read the bits...
     for (s32 i = 0; i < 4; ++i) {
         strm.ReadBits<13>();
@@ -1688,7 +1701,7 @@ static void FillVoidExtentLDR(InputBitStream& strm, std::span<u32> outBuf, u32 b
 
     for (u32 j = 0; j < blockHeight; j++) {
         for (u32 i = 0; i < blockWidth; i++) {
-            outBuf[j * blockWidth + i] = rgba;
+            outBuf[j * stride + i] = rgba;
         }
     }
 }
@@ -1726,52 +1739,52 @@ static u16 HalfToClampedByte(u16 half_bits) {
     return static_cast<u16>(clamped * 255.0f + 0.5f);
 }
 
-static void FillError(std::span<u32> outBuf, u32 blockWidth, u32 blockHeight) {
+static void FillError(std::span<u32> outBuf, u32 blockWidth, u32 blockHeight, u32 stride) {
     for (u32 j = 0; j < blockHeight; j++) {
         for (u32 i = 0; i < blockWidth; i++) {
-            outBuf[j * blockWidth + i] = 0x00000000;
+            outBuf[j * stride + i] = 0x00000000;
         }
     }
 }
 
 static void DecompressBlock(std::span<const u8, 16> inBuf, const u32 blockWidth,
-                            const u32 blockHeight, std::span<u32, 12 * 12> outBuf) {
+                            const u32 blockHeight, std::span<u32> outBuf, u32 stride) {
     InputBitStream strm(inBuf);
     TexelWeightParams weightParams = DecodeBlockInfo(strm);
 
     // Was there an error?
     if (weightParams.m_bError) {
         assert(false && "Invalid block mode");
-        FillError(outBuf, blockWidth, blockHeight);
+        FillError(outBuf, blockWidth, blockHeight, stride);
         return;
     }
 
     if (weightParams.m_bVoidExtentLDR) {
-        FillVoidExtentLDR(strm, outBuf, blockWidth, blockHeight);
+        FillVoidExtentLDR(strm, outBuf, blockWidth, blockHeight, stride);
         return;
     }
 
     if (weightParams.m_bVoidExtentHDR) {
         assert(false && "HDR void extent blocks are unsupported!");
-        FillError(outBuf, blockWidth, blockHeight);
+        FillError(outBuf, blockWidth, blockHeight, stride);
         return;
     }
 
     if (weightParams.m_Width > blockWidth) {
         assert(false && "Texel weight grid width should be smaller than block width");
-        FillError(outBuf, blockWidth, blockHeight);
+        FillError(outBuf, blockWidth, blockHeight, stride);
         return;
     }
 
     if (weightParams.m_Height > blockHeight) {
         assert(false && "Texel weight grid height should be smaller than block height");
-        FillError(outBuf, blockWidth, blockHeight);
+        FillError(outBuf, blockWidth, blockHeight, stride);
         return;
     }
 
     if (weightParams.GetNumWeightValues() > 64) {
         assert(false && "Too many weights in the weight grid");
-        FillError(outBuf, blockWidth, blockHeight);
+        FillError(outBuf, blockWidth, blockHeight, stride);
         return;
     }
 
@@ -1781,7 +1794,7 @@ static void DecompressBlock(std::span<const u8, 16> inBuf, const u32 blockWidth,
 
     if (nPartitions == 4 && weightParams.m_bDualPlane) {
         assert(false && "Dual plane mode is incompatible with four partition blocks");
-        FillError(outBuf, blockWidth, blockHeight);
+        FillError(outBuf, blockWidth, blockHeight, stride);
         return;
     }
 
@@ -1813,7 +1826,7 @@ static void DecompressBlock(std::span<const u8, 16> inBuf, const u32 blockWidth,
     u32 nWeightBits = weightParams.GetPackedBitSize();
     if (nWeightBits < 24 || nWeightBits > 96) {
         assert(false && "Invalid weight bit count");
-        FillError(outBuf, blockWidth, blockHeight);
+        FillError(outBuf, blockWidth, blockHeight, stride);
         return;
     }
     s32 remainingBits = 128 - nWeightBits - static_cast<int>(strm.GetBitsRead());
@@ -1962,10 +1975,14 @@ static void DecompressBlock(std::span<const u8, 16> inBuf, const u32 blockWidth,
                 }
                 u32 weight = weights[plane][j * blockWidth + i];
 
+                // Mode 14 is RGB-HDR but keeps an LDR (8-bit UNORM)-interpreted alpha
+                // (component 0 here, see Pixel::A()) -- the only HDR mode with this split.
                 const bool is_hdr = IsHDRColorEndpointMode(colorEndpointMode[partition]) &&
                                     !(colorEndpointMode[partition] == 14 && c == 0);
 
                 if (is_hdr) {
+                    // Endpoints are raw 12-bit pseudo-logarithmic values; shift left 4 bits
+                    // to become 16-bit before interpolating, per C.2.19.
                     C0 <<= 4;
                     C1 <<= 4;
                     const u32 C = (C0 * (64 - weight) + C1 * weight + 32) / 64;
@@ -1980,6 +1997,7 @@ static void DecompressBlock(std::span<const u8, 16> inBuf, const u32 blockWidth,
                         Mt = 4 * M - 512;
                     }
                     const u32 Cf = (E << 10) + (Mt >> 3);
+                    // +Inf/NaN clamps to the largest finite FP16 value (0x7BFF).
                     const u16 half_bits = (Cf >= 0x7C00) ? u16{0x7BFF} : static_cast<u16>(Cf);
                     p.Component(c) = HalfToClampedByte(half_bits);
                 } else {
@@ -1995,8 +2013,33 @@ static void DecompressBlock(std::span<const u8, 16> inBuf, const u32 blockWidth,
                 }
             }
 
-            outBuf[j * blockWidth + i] = p.Pack();
+            outBuf[j * stride + i] = p.Pack();
         }
+}
+
+static void DecodeAndStoreBlock(std::span<const uint8_t> data, size_t src_offset, u32 x, u32 y,
+                                u32 width, u32 height, u32 block_width, u32 block_height,
+                                std::span<u32> out_slice) {
+    const u32 decomp_width = (std::min)(block_width, width - x);
+    const u32 decomp_height = (std::min)(block_height, height - y);
+    u32* const dst = out_slice.data() + size_t{y} * width + x;
+    if (src_offset + 16 > data.size()) {
+        for (u32 h = 0; h < decomp_height; ++h) {
+            std::memset(dst + size_t{h} * width, 0, decomp_width * 4);
+        }
+        return;
+    }
+    const std::span<const u8, 16> block_ptr{data.subspan(src_offset, 16)};
+    if (decomp_width == block_width && decomp_height == block_height) {
+        const size_t touched = size_t{block_height - 1} * width + block_width;
+        DecompressBlock(block_ptr, block_width, block_height, std::span<u32>{dst, touched}, width);
+        return;
+    }
+    std::array<u32, 12 * 12> staging;
+    DecompressBlock(block_ptr, block_width, block_height, staging, block_width);
+    for (u32 h = 0; h < decomp_height; ++h) {
+        std::memcpy(dst + size_t{h} * width, staging.data() + h * block_width, decomp_width * 4);
+    }
 }
 
 void Decompress(std::span<const uint8_t> data, uint32_t width, uint32_t height, uint32_t depth,
@@ -2005,31 +2048,19 @@ void Decompress(std::span<const uint8_t> data, uint32_t width, uint32_t height, 
     const u32 cols = Common::DivideUp(width, block_width);
 
     Common::ThreadWorker& workers{GetThreadWorkers()};
+    const std::span<u32> out{reinterpret_cast<u32*>(output.data()), output.size() / 4};
+    const size_t slice_texels = size_t{height} * width;
 
     for (u32 z = 0; z < depth; ++z) {
-        const u32 depth_offset = z * height * width * 4;
+        const std::span<u32> out_slice = out.subspan(z * slice_texels);
         for (u32 y_index = 0; y_index < rows; ++y_index) {
-            auto decompress_stride = [data, width, height, block_width, block_height, output, rows,
-                                      cols, z, depth_offset, y_index] {
+            auto decompress_stride = [data, width, height, block_width, block_height, out_slice,
+                                      rows, cols, z, y_index] {
                 const u32 y = y_index * block_height;
                 for (u32 x_index = 0; x_index < cols; ++x_index) {
                     const u32 block_index = (z * rows * cols) + (y_index * cols) + x_index;
-                    const u32 x = x_index * block_width;
-
-                    const std::span<const u8, 16> blockPtr{data.subspan(block_index * 16, 16)};
-
-                    // Blocks can be at most 12x12
-                    std::array<u32, 12 * 12> uncompData;
-                    DecompressBlock(blockPtr, block_width, block_height, uncompData);
-
-                    u32 decompWidth = (std::min)(block_width, width - x);
-                    u32 decompHeight = (std::min)(block_height, height - y);
-
-                    const std::span<u8> outRow = output.subspan(depth_offset + (y * width + x) * 4);
-                    for (u32 h = 0; h < decompHeight; ++h) {
-                        std::memcpy(outRow.data() + h * width * 4,
-                                    uncompData.data() + h * block_width, decompWidth * 4);
-                    }
+                    DecodeAndStoreBlock(data, size_t{block_index} * 16, x_index * block_width, y,
+                                        width, height, block_width, block_height, out_slice);
                 }
             };
             workers.QueueWork(std::move(decompress_stride));
@@ -2038,105 +2069,50 @@ void Decompress(std::span<const uint8_t> data, uint32_t width, uint32_t height, 
     }
 }
 
-// What IsOpaque needs from a block's 11 mode bits, which are all DecodeBlockInfo reads (a void
-// extent block also needs bits 10 and 11 set, checked per block).
-struct BlockModeInfo {
-    bool error;
-    bool void_extent;
-    bool void_extent_hdr;
-    bool dual_plane;
-    u16 weight_bits;
-};
+void DecompressBlockLinear(std::span<const uint8_t> data, uint32_t width, uint32_t height,
+                           uint32_t depth, uint32_t layers, uint32_t block_width,
+                           uint32_t block_height, const BlockLinearLayout& layout,
+                           std::span<uint8_t> output) {
+    const u32 rows = Common::DivideUp(height, block_height);
+    const u32 cols = Common::DivideUp(width, block_width);
+    const size_t slice_texels = size_t{height} * width;
 
-static std::array<BlockModeInfo, 2048> MakeBlockModeInfos() {
-    std::array<BlockModeInfo, 2048> infos{};
-    for (u32 mode = 0; mode < infos.size(); ++mode) {
-        // Bit 11 set, so a void extent mode decodes without its reserved-bit error.
-        const std::array<u8, 16> block{static_cast<u8>(mode), static_cast<u8>((mode >> 8) | 0x8)};
-        InputBitStream strm(block);
-        const TexelWeightParams params = DecodeBlockInfo(strm);
-        BlockModeInfo& info = infos[mode];
-        info.void_extent = params.m_bVoidExtentLDR || params.m_bVoidExtentHDR;
-        info.void_extent_hdr = params.m_bVoidExtentHDR;
-        info.error = params.m_bError && !info.void_extent;
-        info.dual_plane = params.m_bDualPlane;
-        info.weight_bits = info.error || info.void_extent
-                               ? u16{0}
-                               : static_cast<u16>(params.GetPackedBitSize());
-    }
-    return infos;
-}
+    Common::ThreadWorker& workers{GetThreadWorkers()};
+    const std::span<u32> out{reinterpret_cast<u32*>(output.data()), output.size() / 4};
 
-bool IsOpaque(std::span<const uint8_t> data) {
-    // Endpoint modes with an alpha channel: LDR luminance+alpha (4, 5), RGB scale + two alpha
-    // (10), LDR RGBA (12, 13) and HDR RGBA (14, 15).
-    constexpr u32 AlphaModes = (1U << 4) | (1U << 5) | (1U << 10) | (1U << 12) | (1U << 13) |
-                               (1U << 14) | (1U << 15);
-    // Decoding each block's mode bit by bit took ~12% of title 1's long frames, where every
-    // new ASTC texture is scanned (its title screen streams them in by the thousand).
-    static const std::array<BlockModeInfo, 2048> mode_infos = MakeBlockModeInfos();
-    for (size_t offset = 0; offset + 16 <= data.size(); offset += 16) {
-        const std::span<const u8> block = data.subspan(offset, 16);
-        u32 low;
-        std::memcpy(&low, block.data(), sizeof(low));
-        const BlockModeInfo& info = mode_infos[low & 0x7FF];
-        if (info.error) {
-            continue; // decodes to the opaque error colour
-        }
-        if (info.void_extent) {
-            if ((low & 0xC00) != 0xC00) {
-                continue; // reserved bits clear: the error colour too
-            }
-            // One RGBA16 colour in bits 64-127: UNORM16, or FP16 for HDR.
-            const u32 alpha = block[14] | (u32{block[15]} << 8);
-            if (alpha != (info.void_extent_hdr ? 0x3C00U : 0xFFFFU)) {
-                return false;
-            }
-            continue;
-        }
-        const u32 partitions = ((low >> 11) & 3) + 1;
-        if (partitions == 4 && info.dual_plane) {
-            continue;
-        }
-        if (partitions == 1) {
-            if ((AlphaModes >> ((low >> 13) & 0xF)) & 1) {
-                return false;
-            }
-            continue;
-        }
-        // Bits 13-22 are the partition index.
-        const u32 base_cem = (low >> 23) & 0x3F;
-        const u32 base_mode = base_cem & 3;
-        if (base_mode == 0) {
-            if ((AlphaModes >> (base_cem >> 2)) & 1) {
-                return false;
-            }
-            continue;
-        }
-        // The rest of the per-partition modes sit just below the weights (DecompressBlock).
-        const u32 weight_bits = info.weight_bits;
-        if (weight_bits < 24 || weight_bits > 96) {
-            continue;
-        }
-        const u32 extra_bits = partitions == 2 ? 2 : partitions == 3 ? 5 : 8;
-        const u32 extra_offset = 128 - weight_bits - extra_bits;
-        u32 extra = 0;
-        for (u32 bit = 0; bit < extra_bits; ++bit) {
-            const u32 position = extra_offset + bit;
-            extra |= ((block[position / 8] >> (position % 8)) & 1U) << bit;
-        }
-        u32 cem = ((extra << 6) | base_cem) >> 2;
-        const u32 classes = cem;
-        cem >>= partitions;
-        for (u32 i = 0; i < partitions; ++i) {
-            const u32 mode = ((base_mode - (((classes >> i) & 1) != 0 ? 0 : 1)) << 2) |
-                             ((cem >> (2 * i)) & 3);
-            if ((AlphaModes >> mode) & 1) {
-                return false;
+    for (u32 layer = 0; layer < layers; ++layer) {
+        const size_t layer_offset = size_t{layer} * layout.layer_stride;
+        for (u32 z = 0; z < depth; ++z) {
+            const size_t slice_offset =
+                layer_offset + (z >> layout.gob_depth) * size_t{layout.slice_size} +
+                ((z & layout.gob_depth_mask) << (GOB_SIZE_SHIFT + layout.gob_height));
+            const std::span<u32> out_slice =
+                out.subspan((size_t{layer} * depth + z) * slice_texels);
+            for (u32 y_index = 0; y_index < rows; ++y_index) {
+                auto decompress_stride = [data, width, height, block_width, block_height, out_slice,
+                                          cols, layout, slice_offset, y_index] {
+                    const u32 y = y_index * block_height;
+                    const u32 gob_y = y_index >> GOB_SIZE_Y_SHIFT;
+                    const size_t offset_y =
+                        (gob_y >> layout.gob_height) * size_t{layout.block_size} +
+                        ((gob_y & layout.gob_height_mask) << GOB_SIZE_SHIFT);
+                    const u32 swizzled_y = ((y_index & 1) << 4) | ((y_index & 6) << 5);
+                    for (u32 x_index = 0; x_index < cols; ++x_index) {
+                        const u32 byte_x = x_index * 16;
+                        const size_t offset_x = size_t{byte_x >> GOB_SIZE_X_SHIFT}
+                                                << layout.x_shift;
+                        const u32 swizzled_x = ((x_index & 1) << 5) | ((x_index & 2) << 7);
+                        const size_t src_offset = slice_offset + offset_y + offset_x +
+                                                  (swizzled_x | swizzled_y);
+                        DecodeAndStoreBlock(data, src_offset, x_index * block_width, y, width,
+                                            height, block_width, block_height, out_slice);
+                    }
+                };
+                workers.QueueWork(std::move(decompress_stride));
             }
         }
     }
-    return true;
+    workers.WaitForRequests();
 }
 
 } // namespace Tegra::Texture::ASTC

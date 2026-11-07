@@ -6,10 +6,8 @@
 
 #pragma once
 
-#include <array>
+#include <algorithm>
 #include <atomic>
-#include <cstdlib>
-#include <mutex>
 #include <optional>
 #include <set>
 #include <span>
@@ -21,6 +19,7 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#include "vulkan/vulkan_core.h"
 
 VK_DEFINE_HANDLE(VmaAllocator)
 VK_DEFINE_HANDLE(VmaPool)
@@ -46,10 +45,12 @@ VK_DEFINE_HANDLE(VmaPool)
     FEATURE(KHR, VulkanMemoryModel, VULKAN_MEMORY_MODEL, vulkan_memory_model)
 
 #define FOR_EACH_VK_FEATURE_1_3(FEATURE)                                                           \
+    FEATURE(KHR, DynamicRendering, DYNAMIC_RENDERING, dynamic_rendering)                           \
     FEATURE(EXT, ImageRobustness, IMAGE_ROBUSTNESS, robust_image_access)                           \
     FEATURE(EXT, ShaderDemoteToHelperInvocation, SHADER_DEMOTE_TO_HELPER_INVOCATION,               \
             shader_demote_to_helper_invocation)                                                    \
     FEATURE(EXT, SubgroupSizeControl, SUBGROUP_SIZE_CONTROL, subgroup_size_control)                \
+    FEATURE(KHR, DynamicRendering, DYNAMIC_RENDERING, dynamic_rendering)                           \
     FEATURE(KHR, Maintenance4, MAINTENANCE_4, maintenance4)                                        \
     FEATURE(KHR, Synchronization2, SYNCHRONIZATION_2, synchronization2)
 
@@ -59,14 +60,20 @@ VK_DEFINE_HANDLE(VmaPool)
 #define FOR_EACH_VK_FEATURE_EXT(FEATURE)                                                           \
     FEATURE(EXT, BorderColorSwizzle, BORDER_COLOR_SWIZZLE, border_color_swizzle)                   \
     FEATURE(EXT, ColorWriteEnable, COLOR_WRITE_ENABLE, color_write_enable)                         \
+    FEATURE(EXT, ConditionalRendering, CONDITIONAL_RENDERING, conditional_rendering)               \
     FEATURE(EXT, CustomBorderColor, CUSTOM_BORDER_COLOR, custom_border_color)                      \
     FEATURE(EXT, DepthBiasControl, DEPTH_BIAS_CONTROL, depth_bias_control)                         \
+    FEATURE(EXT, DepthClampZeroOne, DEPTH_CLAMP_ZERO_ONE, depth_clamp_zero_one)                   \
     FEATURE(EXT, DepthClipControl, DEPTH_CLIP_CONTROL, depth_clip_control)                         \
+    FEATURE(EXT, DepthClipEnable, DEPTH_CLIP_ENABLE, depth_clip_enable)                            \
     FEATURE(EXT, DescriptorBuffer, DESCRIPTOR_BUFFER, descriptor_buffer)                           \
+    FEATURE(EXT, DynamicRenderingUnusedAttachments, DYNAMIC_RENDERING_UNUSED_ATTACHMENTS,          \
+            dynamic_rendering_unused_attachments)                                                  \
     FEATURE(EXT, ExtendedDynamicState, EXTENDED_DYNAMIC_STATE, extended_dynamic_state)             \
     FEATURE(EXT, ExtendedDynamicState2, EXTENDED_DYNAMIC_STATE_2, extended_dynamic_state2)         \
     FEATURE(EXT, ExtendedDynamicState3, EXTENDED_DYNAMIC_STATE_3, extended_dynamic_state3)         \
     FEATURE(EXT, 4444Formats, 4444_FORMATS, format_a4b4g4r4)                                       \
+    FEATURE(EXT, HostImageCopy, HOST_IMAGE_COPY, host_image_copy)                                  \
     FEATURE(EXT, IndexTypeUint8, INDEX_TYPE_UINT8, index_type_uint8)                               \
     FEATURE(EXT, LineRasterization, LINE_RASTERIZATION, line_rasterization)                        \
     FEATURE(EXT, MeshShader, MESH_SHADER, mesh_shader)                                             \
@@ -74,34 +81,39 @@ VK_DEFINE_HANDLE(VmaPool)
             primitive_topology_list_restart)                                                       \
     FEATURE(EXT, ProvokingVertex, PROVOKING_VERTEX, provoking_vertex)                              \
     FEATURE(EXT, Robustness2, ROBUSTNESS_2, robustness2)                                           \
+    FEATURE(EXT, TexelBufferAlignment, TEXEL_BUFFER_ALIGNMENT, texel_buffer_alignment)             \
     FEATURE(EXT, TransformFeedback, TRANSFORM_FEEDBACK, transform_feedback)                        \
+    FEATURE(EXT, VertexAttributeDivisor, VERTEX_ATTRIBUTE_DIVISOR, vertex_attribute_divisor)       \
     FEATURE(EXT, VertexInputDynamicState, VERTEX_INPUT_DYNAMIC_STATE, vertex_input_dynamic_state)  \
     FEATURE(KHR, Maintenance5, MAINTENANCE_5, maintenance5)                                        \
-    FEATURE(KHR, Maintenance6, MAINTENANCE_6, maintenance6)                                        \
     FEATURE(KHR, PipelineExecutableProperties, PIPELINE_EXECUTABLE_PROPERTIES,                     \
             pipeline_executable_properties)                                                        \
     FEATURE(KHR, ShaderQuadControl, SHADER_QUAD_CONTROL, shader_quad_control)                      \
-    FEATURE(KHR, ShaderMaximalReconvergence, SHADER_MAXIMAL_RECONVERGENCE,                        \
-            shader_maximal_reconvergence)                                                        \
     FEATURE(KHR, WorkgroupMemoryExplicitLayout, WORKGROUP_MEMORY_EXPLICIT_LAYOUT,                  \
-            workgroup_memory_explicit_layout)
+            workgroup_memory_explicit_layout)                                                      \
+    FEATURE(EXT, TextureCompressionASTCHDR, TEXTURE_COMPRESSION_ASTC_HDR,                          \
+            texture_compression_astc_hdr)
 
 
 // Define miscellaneous extensions which may be used by the implementation here.
 #define FOR_EACH_VK_EXTENSION(EXTENSION)                                                           \
     EXTENSION(EXT, ASTC_DECODE_MODE, astc_decode_mode)                                             \
-    EXTENSION(EXT, CONDITIONAL_RENDERING, conditional_rendering)                                   \
     EXTENSION(EXT, CONSERVATIVE_RASTERIZATION, conservative_rasterization)                         \
     EXTENSION(EXT, DEPTH_RANGE_UNRESTRICTED, depth_range_unrestricted)                             \
+    EXTENSION(EXT, EXTERNAL_MEMORY_HOST, external_memory_host)                                     \
     EXTENSION(EXT, MEMORY_BUDGET, memory_budget)                                                   \
+    EXTENSION(EXT, PIPELINE_CREATION_FEEDBACK, pipeline_creation_feedback)                         \
     EXTENSION(EXT, ROBUSTNESS_2, robustness_2)                                                     \
     EXTENSION(EXT, SAMPLER_FILTER_MINMAX, sampler_filter_minmax)                                   \
     EXTENSION(EXT, SHADER_STENCIL_EXPORT, shader_stencil_export)                                   \
     EXTENSION(EXT, SHADER_VIEWPORT_INDEX_LAYER, shader_viewport_index_layer)                       \
     EXTENSION(EXT, TOOLING_INFO, tooling_info)                                                     \
-    EXTENSION(EXT, VERTEX_ATTRIBUTE_DIVISOR, vertex_attribute_divisor)                             \
+    EXTENSION(KHR, COPY_COMMANDS_2, copy_commands2)                                                \
     EXTENSION(KHR, CREATE_RENDERPASS_2, create_renderpass2)                                        \
     EXTENSION(KHR, DEPTH_STENCIL_RESOLVE, depth_stencil_resolve)                                   \
+=======
+    EXTENSION(EXT, DEVICE_FAULT, device_fault)                                                     \
+>>>>>>> /tmp/tmpctn1l5_p/t
     EXTENSION(KHR, DRAW_INDIRECT_COUNT, draw_indirect_count)                                       \
     EXTENSION(KHR, DRIVER_PROPERTIES, driver_properties)                                           \
     EXTENSION(KHR, PUSH_DESCRIPTOR, push_descriptor)                                               \
@@ -111,17 +123,13 @@ VK_DEFINE_HANDLE(VmaPool)
     EXTENSION(KHR, SWAPCHAIN, swapchain)                                                           \
     EXTENSION(KHR, SWAPCHAIN_MUTABLE_FORMAT, swapchain_mutable_format)                             \
     EXTENSION(KHR, IMAGE_FORMAT_LIST, image_format_list)                                           \
-    EXTENSION(KHR, MAINTENANCE_1, maintenance1)                                                    \
-    EXTENSION(KHR, MAINTENANCE_2, maintenance2)                                                    \
-    EXTENSION(KHR, MAINTENANCE_3, maintenance3)                                                    \
-    EXTENSION(KHR, MAINTENANCE_7, maintenance7)                                                    \
-    EXTENSION(KHR, MAINTENANCE_8, maintenance8)                                                    \
+    EXTENSION(KHR, LOAD_STORE_OP_NONE, load_store_op_none)                                         \
+    EXTENSION(EXT, LOAD_STORE_OP_NONE, load_store_op_none_ext)                                     \
     EXTENSION(NV, DEVICE_DIAGNOSTICS_CONFIG, device_diagnostics_config)                            \
     EXTENSION(NV, GEOMETRY_SHADER_PASSTHROUGH, geometry_shader_passthrough)                        \
     EXTENSION(NV, VIEWPORT_ARRAY2, viewport_array2)                                                \
     EXTENSION(NV, VIEWPORT_SWIZZLE, viewport_swizzle)                                              \
     EXTENSION(EXT, FILTER_CUBIC, filter_cubic)                                                     \
-    EXTENSION(IMG, FILTER_CUBIC, filter_cubic_img)                                                 \
     EXTENSION(QCOM, FILTER_CUBIC_WEIGHTS, filter_cubic_weights)
 
 // Define extensions which must be supported.
@@ -140,7 +148,6 @@ VK_DEFINE_HANDLE(VmaPool)
     EXTENSION_NAME(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME)                                   \
     EXTENSION_NAME(VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME)                                 \
     EXTENSION_NAME(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME)                                 \
-    EXTENSION_NAME(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME)                                     \
     EXTENSION_NAME(VK_EXT_4444_FORMATS_EXTENSION_NAME)                                             \
     EXTENSION_NAME(VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME)                                       \
     EXTENSION_NAME(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME)                                             \
@@ -270,16 +277,16 @@ public:
         return allocator;
     }
 
-    /// Allocations kept out of the default blocks, which then hold images only: churned buffers
-    /// and long-lived sparse pages left holes the texture cache's collector couldn't drain.
-    enum class SeparatePool : u32 {
-        SparsePages,
-        DeviceBuffers,
+    struct MemoryBudgetInfo {
+        u64 usage;
+        u64 budget;
+        u64 block_bytes;
+        u64 allocation_bytes;
     };
-    static constexpr VkDeviceSize SeparatePoolBlockSize = 16ULL << 20;
 
-    /// The pool of that kind for a memory type, created on first use (null if that failed).
-    VmaPool GetSeparatePool(SeparatePool kind, u32 memory_type) const;
+    MemoryBudgetInfo GetMemoryBudgetInfo() const;
+
+    void TickAllocatorFrame() const;
 
     /// Returns the logical device.
     const vk::Device& GetLogical() const {
@@ -289,15 +296,6 @@ public:
     /// Returns the physical device.
     vk::PhysicalDevice GetPhysical() const {
         return physical;
-    }
-
-    /// Returns the instance the device was created from.
-    VkInstance GetInstance() const {
-        return instance;
-    }
-
-    VkPipelineCache StaticPipelineCache() const noexcept {
-        return *static_pipeline_cache;
     }
 
     /// Returns the main graphics queue.
@@ -323,6 +321,23 @@ public:
     /// Returns the current Vulkan API version provided in Vulkan-formatted version numbers.
     u32 ApiVersion() const {
         return properties.properties.apiVersion;
+    }
+
+    VkDeviceSize TexelBufferAlignment(u32 texel_size) const {
+        VkDeviceSize texel = texel_size;
+        if (texel % 3 == 0) {
+            texel /= 3;
+        }
+        const auto& limits = properties.texel_buffer_alignment;
+        VkDeviceSize storage = limits.storageTexelBufferOffsetAlignmentBytes;
+        if (limits.storageTexelBufferOffsetSingleTexelAlignment != VK_FALSE) {
+            storage = (std::min)(storage, texel);
+        }
+        VkDeviceSize uniform = limits.uniformTexelBufferOffsetAlignmentBytes;
+        if (limits.uniformTexelBufferOffsetSingleTexelAlignment != VK_FALSE) {
+            uniform = (std::min)(uniform, texel);
+        }
+        return (std::max)((std::max)(storage, uniform), VkDeviceSize{1});
     }
 
     /// Returns the current driver version provided in Vulkan-formatted version numbers.
@@ -406,14 +421,11 @@ public:
         return {count[0], count[1], count[2]};
     }
 
-    /// Returns the maximum size for push constants.
-    VkDeviceSize GetMaxPushConstantsSize() const {
-        return properties.properties.limits.maxPushConstantsSize;
-    }
-
 #define FN_MAX_LIMIT_LIST \
     FN_MAX_LIMIT_ELEM(ComputeSharedMemorySize) \
+    FN_MAX_LIMIT_ELEM(ComputeWorkGroupInvocations) \
     FN_MAX_LIMIT_ELEM(PerStageDescriptorSampledImages) \
+    FN_MAX_LIMIT_ELEM(PerStageDescriptorStorageBuffers) \
     FN_MAX_LIMIT_ELEM(PerStageResources) \
     FN_MAX_LIMIT_ELEM(DescriptorSetSamplers) \
     FN_MAX_LIMIT_ELEM(DescriptorSetUniformBuffers) \
@@ -434,13 +446,9 @@ FN_MAX_LIMIT_LIST
         return properties.float_controls;
     }
 
+    /// Returns true if ASTC is natively supported, including HDR-profile (non-LDR-only)
     bool IsOptimalAstcSupported() const {
         return is_optimal_astc_supported;
-    }
-
-    /// Returns true if geometry shaders are supported.
-    bool IsGeometryShaderSupported() const {
-        return features.features.geometryShader;
     }
 
     /// Returns true if BCn is natively supported.
@@ -455,7 +463,8 @@ FN_MAX_LIMIT_LIST
 
     /// Returns true if descriptor aliasing is natively supported.
     bool IsDescriptorAliasingSupported() const {
-        return !has_broken_descriptor_aliasing;
+        return features.descriptor_indexing.descriptorBindingPartiallyBound &&
+               features.descriptor_indexing.descriptorBindingVariableDescriptorCount;
     }
 
     bool IsSampledImageArrayNonUniformIndexingSupported() const {
@@ -474,6 +483,10 @@ FN_MAX_LIMIT_LIST
         return features.descriptor_indexing.shaderStorageTexelBufferArrayNonUniformIndexing;
     }
 
+    bool IsStorageBufferArrayNonUniformIndexingSupported() const {
+        return features.descriptor_indexing.shaderStorageBufferArrayNonUniformIndexing;
+    }
+
     /// Returns true if the device supports float64 natively.
     bool IsFloat64Supported() const {
         return features.features.shaderFloat64;
@@ -481,6 +494,10 @@ FN_MAX_LIMIT_LIST
 
     /// Returns true if the device supports float16 natively.
     bool IsFloat16Supported() const {
+        return features.shader_float16_int8.shaderFloat16 && !has_broken_float16_math;
+    }
+
+    bool IsNativeFloat16Enabled() const {
         return features.shader_float16_int8.shaderFloat16;
     }
 
@@ -548,12 +565,15 @@ FN_MAX_LIMIT_LIST
         return properties.push_descriptor.maxPushDescriptors;
     }
 
-    /// Returns true if robust buffer access is enabled on the device.
+    /// Returns true if the device supports descriptor buffers.
+    bool IsExtPipelineCreationFeedbackSupported() const {
+        return extensions.pipeline_creation_feedback;
+    }
+
     bool IsRobustBufferAccessEnabled() const {
         return features.features.robustBufferAccess == VK_TRUE;
     }
 
-    /// Returns true if the device supports descriptor buffers.
     bool IsExtDescriptorBufferSupported() const {
         return extensions.descriptor_buffer;
     }
@@ -571,11 +591,6 @@ FN_MAX_LIMIT_LIST
     /// Returns true if formatless image load is supported.
     bool IsFormatlessImageLoadSupported() const {
         return features.features.shaderStorageImageReadWithoutFormat;
-    }
-
-    /// Returns true if storage images of the extended formats (e.g. R16F, RG16F, R8) are supported.
-    bool IsStorageImageExtendedFormatsSupported() const {
-        return features.features.shaderStorageImageExtendedFormats;
     }
 
     /// Returns true if shader int64 is supported.
@@ -618,11 +633,6 @@ FN_MAX_LIMIT_LIST
         return extensions.geometry_shader_passthrough;
     }
 
-    /// Returns true if the device supports VK_KHR_uniform_buffer_standard_layout.
-    bool IsKhrUniformBufferStandardLayoutSupported() const {
-        return extensions.uniform_buffer_standard_layout;
-    }
-
     /// Returns true if the device supports VK_KHR_push_descriptor.
     bool IsKhrPushDescriptorSupported() const {
         return extensions.push_descriptor;
@@ -643,42 +653,76 @@ FN_MAX_LIMIT_LIST
         return extensions.shader_float_controls;
     }
 
+    /// Returns true if VK_KHR_maintenance1 is enabled.
+    bool IsKhrMaintenance1Supported() const {
+        return extensions.maintenance1;
+    }
+
+    /// Returns true if VK_KHR_maintenance2 is enabled.
+    bool IsKhrMaintenance2Supported() const {
+        return extensions.maintenance2;
+    }
+
+    /// Returns true if VK_KHR_maintenance3 is enabled.
+    bool IsKhrMaintenance3Supported() const {
+        return extensions.maintenance3;
+    }
+
+    /// Returns true if VK_KHR_maintenance4 is enabled.
+    bool IsKhrMaintenance4Supported() const {
+        return extensions.maintenance4;
+    }
+
+    /// Returns true if VK_KHR_maintenance5 is enabled.
+    bool IsKhrMaintenance5Supported() const {
+        return extensions.maintenance5;
+    }
+
+    /// Returns true if VK_KHR_maintenance6 is enabled.
+    bool IsKhrMaintenance6Supported() const {
+        return extensions.maintenance6;
+    }
+
+    /// Returns true if VK_KHR_maintenance7 is enabled.
+    bool IsKhrMaintenance7Supported() const {
+        return extensions.maintenance7;
+    }
+
+    /// Returns true if VK_KHR_maintenance8 is enabled.
+    bool IsKhrMaintenance8Supported() const {
+        return extensions.maintenance8;
+    }
+
+    /// Returns true if VK_KHR_maintenance9 is enabled.
+    bool IsKhrMaintenance9Supported() const {
+        return extensions.maintenance9;
+    }
+
+    /// Returns true if VK_KHR_sampler_mirror_clamp_to_edge is enabled.
+    bool IsKhrSamplerMirrorClampToEdgeSupported() const {
+        return extensions.sampler_mirror_clamp_to_edge;
+    }
+
     /// Returns true if the device supports VK_KHR_workgroup_memory_explicit_layout.
     bool IsKhrWorkgroupMemoryExplicitLayoutSupported() const {
         return extensions.workgroup_memory_explicit_layout;
     }
 
-    bool IsWorkgroupMemoryExplicitLayout8BitAccessSupported() const {
+    /// Returns true if the device supports 8-bit accesses to workgroup explicit layout memory.
+    bool IsWorkgroupMemoryExplicitLayout8BitSupported() const {
         return extensions.workgroup_memory_explicit_layout &&
-               features.workgroup_memory_explicit_layout.workgroupMemoryExplicitLayout8BitAccess &&
-               features.shader_float16_int8.shaderInt8;
+               features.workgroup_memory_explicit_layout.workgroupMemoryExplicitLayout8BitAccess;
     }
 
-    bool IsWorkgroupMemoryExplicitLayout16BitAccessSupported() const {
-        return extensions.workgroup_memory_explicit_layout &&
-               features.workgroup_memory_explicit_layout.workgroupMemoryExplicitLayout16BitAccess &&
-               features.features.shaderInt16;
+    /// Returns true if the device supports 16-bit accesses to workgroup explicit layout memory.
+    bool IsWorkgroupMemoryExplicitLayout16BitSupported() const {
+        return extensions.workgroup_memory_explicit_layout && features.features.shaderInt16 &&
+               features.workgroup_memory_explicit_layout.workgroupMemoryExplicitLayout16BitAccess;
     }
-
+ 
     /// Returns true if the device supports VK_KHR_shader_quad_control.
     bool IsKhrShaderQuadControlSupported() const {
         return extensions.shader_quad_control && features.shader_quad_control.shaderQuadControl;
-    }
-
-    /// Returns true if the device can build tessellation pipelines.
-    bool IsTessellationSupported() const {
-        return features.features.tessellationShader;
-    }
-
-    /// Returns the largest patch size (control points, and TCS output vertices) a pipeline allows.
-    u32 GetMaxTessellationPatchSize() const {
-        return properties.properties.limits.maxTessellationPatchSize;
-    }
-
-    /// Returns true if the device supports task and mesh shaders (VK_EXT_mesh_shader).
-    bool IsExtMeshShaderSupported() const {
-        return extensions.mesh_shader && features.mesh_shader.taskShader &&
-               features.mesh_shader.meshShader;
     }
 
     /// Returns true if the device supports VK_KHR_image_format_list.
@@ -711,15 +755,9 @@ FN_MAX_LIMIT_LIST
         return extensions.shader_stencil_export;
     }
 
-    /// Returns true if the device supports VK_KHR_create_renderpass2.
-    bool IsKhrCreateRenderPass2Supported() const {
-        return extensions.create_renderpass2 || instance_version >= VK_API_VERSION_1_2;
-    }
-
     /// Returns true if the device supports VK_KHR_depth_stencil_resolve.
     bool IsKhrDepthStencilResolveSupported() const {
-        return (extensions.depth_stencil_resolve || instance_version >= VK_API_VERSION_1_2) &&
-               IsKhrCreateRenderPass2Supported();
+        return extensions.depth_stencil_resolve || instance_version >= VK_API_VERSION_1_2;
     }
 
     /// Returns the supported resolve modes for the depth aspect.
@@ -737,13 +775,6 @@ FN_MAX_LIMIT_LIST
         return properties.depth_stencil_resolve.independentResolveNone == VK_TRUE;
     }
 
-    /// Returns true if depth/stencil operations can be performed efficiently.
-    /// Either through shader export or hardware blits.
-    bool CanPerformDepthStencilOperations() const {
-        return extensions.shader_stencil_export || is_blit_depth24_stencil8_supported ||
-               is_blit_depth32_stencil8_supported;
-    }
-
     /// Returns true if the device supports VK_EXT_depth_range_unrestricted.
     bool IsExtDepthRangeUnrestrictedSupported() const {
         return extensions.depth_range_unrestricted;
@@ -752,6 +783,14 @@ FN_MAX_LIMIT_LIST
     /// Returns true if the device supports VK_EXT_depth_clip_control.
     bool IsExtDepthClipControlSupported() const {
         return extensions.depth_clip_control;
+    }
+
+    bool IsLoadOpNoneSupported() const {
+        return extensions.load_store_op_none || extensions.load_store_op_none_ext;
+    }
+
+    bool IsExtDynamicRenderingUnusedAttachmentsSupported() const {
+        return extensions.dynamic_rendering_unused_attachments;
     }
 
     /// Returns true if the device supports VK_EXT_depth_bias_control.
@@ -774,6 +813,32 @@ FN_MAX_LIMIT_LIST
         return features.host_query_reset.hostQueryReset != VK_FALSE;
     }
 
+    u32 GetMaxVertexAttribDivisor() const {
+        const u32 reported = properties.vertex_attribute_divisor.maxVertexAttribDivisor;
+        if (reported == 0) {
+            return 1;
+        }
+        return reported;
+    }
+
+    bool IsVertexAttributeInstanceRateZeroDivisorSupported() const {
+        return features.vertex_attribute_divisor.vertexAttributeInstanceRateZeroDivisor == VK_TRUE;
+    }
+
+    u32 GetVertexAttribDivisor(u32 frequency) const {
+        const u32 max_divisor = GetMaxVertexAttribDivisor();
+        if (frequency == 0) {
+            if (IsVertexAttributeInstanceRateZeroDivisorSupported()) {
+                return 0;
+            }
+            return max_divisor;
+        }
+        if (frequency > max_divisor) {
+            return max_divisor;
+        }
+        return frequency;
+    }
+
     /// Returns true if the device supports VK_EXT_transform_feedback.
     bool IsExtTransformFeedbackSupported() const {
         return extensions.transform_feedback;
@@ -782,12 +847,6 @@ FN_MAX_LIMIT_LIST
     /// Returns true if transform feedback draw commands are supported.
     bool IsTransformFeedbackDrawSupported() const {
         return extensions.transform_feedback && properties.transform_feedback.transformFeedbackDraw;
-    }
-
-    /// Returns true if transform feedback query types are supported.
-    bool IsTransformFeedbackQueriesSupported() const {
-        return extensions.transform_feedback &&
-               properties.transform_feedback.transformFeedbackQueries;
     }
 
     /// Returns true if the device supports VK_EXT_transform_feedback properly.
@@ -824,11 +883,6 @@ FN_MAX_LIMIT_LIST
                !features.border_color_swizzle.borderColorSwizzleFromImage;
     }
 
-    /// Returns true if borderColorSwizzleFromImage is available.
-    bool IsBorderColorSwizzleFromImageSupported() const {
-        return features.border_color_swizzle.borderColorSwizzleFromImage;
-    }
-
     /// Returns true if the device supports VK_EXT_extended_dynamic_state.
     bool IsExtExtendedDynamicStateSupported() const {
         return extensions.extended_dynamic_state;
@@ -841,11 +895,6 @@ FN_MAX_LIMIT_LIST
 
     bool IsExtExtendedDynamicState2ExtrasSupported() const {
         return features.extended_dynamic_state2.extendedDynamicState2LogicOp;
-    }
-
-    /// Returns true if the device supports VK_EXT_extended_dynamic_state3.
-    bool IsExtExtendedDynamicState3Supported() const {
-        return extensions.extended_dynamic_state3;
     }
 
     /// Returns true if the device supports VK_EXT_4444_formats.
@@ -888,6 +937,38 @@ FN_MAX_LIMIT_LIST
 
     bool SupportsStippledRectangularLines() const {
         return features.line_rasterization.stippledRectangularLines != VK_FALSE;
+    }
+
+    VkLineRasterizationModeEXT GetLineRasterizationMode(bool wants_smooth) const {
+        if (wants_smooth && SupportsSmoothLines()) {
+            return VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH_EXT;
+        }
+        if (SupportsRectangularLines()) {
+            return VK_LINE_RASTERIZATION_MODE_RECTANGULAR_EXT;
+        }
+        return VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT;
+    }
+
+    bool SupportsStippleForMode(VkLineRasterizationModeEXT mode) const {
+        switch (mode) {
+        case VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH_EXT:
+            return features.line_rasterization.stippledSmoothLines != VK_FALSE;
+        case VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT:
+            return features.line_rasterization.stippledBresenhamLines != VK_FALSE;
+        default:
+            return features.line_rasterization.stippledRectangularLines != VK_FALSE;
+        }
+    }
+
+    float ClampLineWidth(float width) const {
+        if (!features.features.wideLines) {
+            return 1.0f;
+        }
+        const auto& range = properties.properties.limits.lineWidthRange;
+        if (!(width >= range[0])) {
+            return range[0];
+        }
+        return width > range[1] ? range[1] : width;
     }
 
     bool SupportsAlphaToOne() const {
@@ -958,9 +1039,16 @@ FN_MAX_LIMIT_LIST
                features.provoking_vertex.transformFeedbackPreservesProvokingVertex;
     }
 
-    /// Returns true if the device supports VK_KHR_shader_atomic_int64.
+    /// Returns true if the device supports int64 atomics on storage buffers.
     bool IsExtShaderAtomicInt64Supported() const {
-        return extensions.shader_atomic_int64;
+        return extensions.shader_atomic_int64 &&
+               features.shader_atomic_int64.shaderBufferInt64Atomics;
+    }
+
+    /// Returns true if the device supports int64 atomics on workgroup (shared) memory.
+    bool IsSharedInt64AtomicsSupported() const {
+        return extensions.shader_atomic_int64 &&
+               features.shader_atomic_int64.shaderSharedInt64Atomics;
     }
 
     bool IsSharedInt64AtomicsSupported() const {
@@ -968,25 +1056,73 @@ FN_MAX_LIMIT_LIST
                features.shader_atomic_int64.shaderSharedInt64Atomics;
     }
 
+    /// Returns true if the device supports VK_EXT_conditional_rendering.
     bool IsExtConditionalRendering() const {
         return extensions.conditional_rendering;
+    }
+
+    VkPipelineStageFlags2 GetBufferUserStages() const {
+        VkPipelineStageFlags2 stages = vk::PIPELINE_STAGE_BUFFER_USERS;
+        if (IsExtConditionalRendering()) {
+            stages |= VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT;
+        }
+        if (IsExtTransformFeedbackSupported()) {
+            stages |= VK_PIPELINE_STAGE_2_TRANSFORM_FEEDBACK_BIT_EXT;
+        }
+        return stages;
+    }
+
+    VkPipelineStageFlags2 GetBufferConsumerStages() const {
+        return GetBufferUserStages() | VK_PIPELINE_STAGE_2_HOST_BIT;
+    }
+
+    VkAccessFlags2 GetBufferConsumerAccess() const {
+        VkAccessFlags2 access = vk::ACCESS_BUFFER_CONSUMERS;
+        if (IsExtConditionalRendering()) {
+            access |= VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT;
+        }
+        if (IsExtTransformFeedbackSupported()) {
+            access |= VK_ACCESS_2_TRANSFORM_FEEDBACK_WRITE_BIT_EXT |
+                      VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT |
+                      VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT;
+        }
+        return access;
     }
 
     bool IsExtAstcDecodeModeSupported() const {
         return extensions.astc_decode_mode;
     }
 
-    /// Returns true if descriptor bindings is partially bound.
+    /// Returns true if the device supports VK_EXT_external_memory_host.
+    bool IsExtExternalMemoryHostSupported() const {
+        return extensions.external_memory_host;
+    }
+
+    bool IsExtExternalMemoryAhbSupported() const {
+#ifdef __ANDROID__
+        return extensions.external_memory_ahb && extensions.queue_family_foreign;
+#else
+        return false;
+#endif
+    }
+
     bool IsDescriptorBindingPartiallyBoundSupported() const {
         return features.descriptor_indexing.descriptorBindingPartiallyBound;
     }
 
-    bool HasTimelineSemaphore() const;
-
-    /// Returns true if the device supports VK_KHR_synchronization2.
-    bool HasSynchronization2() const {
-        return extensions.synchronization2;
+    u64 GetMinImportedHostPointerAlignment() const {
+        return properties.external_memory_host.minImportedHostPointerAlignment;
     }
+
+    u64 GetMaxBufferSize() const {
+        return properties.maintenance4.maxBufferSize;
+    }
+
+    u64 GetMaxMemoryAllocationSize() const {
+        return properties.maintenance3.maxMemoryAllocationSize;
+    }
+
+    bool HasTimelineSemaphore() const;
 
     /// Returns the minimum supported version of SPIR-V.
     u32 SupportedSpirvVersion() const {
@@ -1044,16 +1180,9 @@ FN_MAX_LIMIT_LIST
 
     u64 GetDeviceMemoryUsage() const;
 
-    /// The driver's current memory budget for this process (VK_EXT_memory_budget), in
-    /// GetDeviceMemoryUsage() terms: the usage at which the main device-local heap reaches its
-    /// budget. 0 without the extension. The unused part of the allocator's blocks is not
-    /// subtracted: see GetDeviceMemorySlack().
-    u64 GetDeviceMemoryBudget() const;
-
-    /// Memory the allocator holds from the driver in the main device-local heap but has no
-    /// allocation in (the unused part of its blocks). GetDeviceMemoryUsage() does not count it,
-    /// yet the driver does: with the heap at its budget it is not available to new images.
-    u64 GetDeviceMemorySlack() const;
+    VkSampleCountFlags GetStorageImageSampleCounts() const {
+        return properties.properties.limits.storageImageSampleCounts;
+    }
 
     u32 GetSetsPerPool() const {
         return sets_per_pool;
@@ -1067,15 +1196,19 @@ FN_MAX_LIMIT_LIST
         return must_emulate_scaled_formats;
     }
 
+    bool IsUMA() const {
+        return is_uma;
+    }
+
+    bool IsHostImageCopySupported() const {
+        return extensions.host_image_copy;
+    }
+
     bool HasNullDescriptor() const {
         return features.robustness2.nullDescriptor;
     }
 
     bool MustEmulateBGR565() const;
-
-    bool HasExactDepthBiasControl() const {
-        return features.depth_bias_control.depthBiasExact;
-    }
 
     u32 GetMaxVertexInputAttributes() const {
         return properties.properties.limits.maxVertexInputAttributes;
@@ -1083,6 +1216,10 @@ FN_MAX_LIMIT_LIST
 
     u32 GetMaxVertexInputBindings() const {
         return properties.properties.limits.maxVertexInputBindings;
+    }
+
+    u32 GetMaxVertexAttribDivisor() const {
+        return max_vertex_attrib_divisor;
     }
 
     u32 GetMaxViewports() const {
@@ -1101,34 +1238,28 @@ FN_MAX_LIMIT_LIST
         return features2.features.multiViewport;
     }
 
-    /// Returns true if the device supports VK_KHR_maintenance1.
-    bool IsKhrMaintenance1Supported() const {
-        return extensions.maintenance1;
-    }
-
-    /// Returns true if the device supports VK_KHR_maintenance2.
-    bool IsKhrMaintenance2Supported() const {
-        return extensions.maintenance2;
-    }
-
-    /// Returns true if the device supports VK_KHR_maintenance3.
-    bool IsKhrMaintenance3Supported() const {
-        return extensions.maintenance3;
-    }
-
     /// Returns true if the device supports VK_KHR_maintenance4.
     bool IsKhrMaintenance4Supported() const {
         return extensions.maintenance4;
     }
 
-    /// Returns true if the device supports VK_KHR_maintenance5.
-    bool IsKhrMaintenance5Supported() const {
-        return extensions.maintenance5;
+    /// Returns true if the device can read the draw count from a buffer.
+    bool IsDrawIndirectCountSupported() const {
+        return extensions.draw_indirect_count;
     }
 
-    /// Returns true if polygon mode POINT supports gl_PointSize.
-    bool SupportsPolygonModePointSize() const {
-        return extensions.maintenance5 && properties.maintenance5.polygonModePointSize;
+    /// Returns true if the device supports VK_EXT_vertex_attribute_divisor.
+    bool IsExtVertexAttributeDivisorSupported() const {
+        return extensions.vertex_attribute_divisor;
+    }
+
+    /// Returns true if the device supports VK_KHR_sampler_mirror_clamp_to_edge.
+    bool IsKhrSamplerMirrorClampToEdgeSupported() const {
+        return extensions.sampler_mirror_clamp_to_edge;
+    }
+
+    bool IsKhrMaintenance5Supported() const {
+        return extensions.maintenance5;
     }
 
     /// Returns true if depth/stencil swizzle ONE is supported.
@@ -1136,32 +1267,20 @@ FN_MAX_LIMIT_LIST
         return extensions.maintenance5 && properties.maintenance5.depthStencilSwizzleOneSupport;
     }
 
-    /// Returns true if early fragment tests optimizations are available.
-    bool SupportsEarlyFragmentTests() const {
-        return extensions.maintenance5 &&
-               properties.maintenance5.earlyFragmentMultisampleCoverageAfterSampleCounting &&
-               properties.maintenance5.earlyFragmentSampleMaskTestBeforeSampleCounting;
-    }
-
-    /// Returns true if the device supports VK_KHR_maintenance6.
-    bool IsKhrMaintenance6Supported() const {
-        return extensions.maintenance6;
-    }
-
-    /// Returns true if the device supports VK_KHR_maintenance7.
-    bool IsKhrMaintenance7Supported() const {
-        return extensions.maintenance7;
-    }
-
-    /// Returns true if the device supports VK_KHR_maintenance8.
-    bool IsKhrMaintenance8Supported() const {
-        return extensions.maintenance8;
-    }
-
     /// Returns true if the device supports UINT8 index buffer conversion via compute shader.
     bool SupportsUint8Indices() const {
         return features.bit8_storage.storageBuffer8BitAccess &&
                features.bit16_storage.storageBuffer16BitAccess;
+    }
+
+    /// Returns true if the device supports reading 8-bit values from a storage buffer.
+    bool IsStorageBuffer8BitAccessSupported() const {
+        return features.bit8_storage.storageBuffer8BitAccess;
+    }
+
+    /// Returns true if the device supports reading 16-bit values from a storage buffer.
+    bool IsStorageBuffer16BitAccessSupported() const {
+        return features.bit16_storage.storageBuffer16BitAccess;
     }
 
     [[nodiscard]] static constexpr bool CheckBrokenCompute(VkDriverId driver_id,
@@ -1188,10 +1307,8 @@ FN_MAX_LIMIT_LIST
         return properties.driver.driverID == VK_DRIVER_ID_MOLTENVK;
     }
 
-    /// The multiple vertex input binding strides must be. Metal needs 4 bytes, which MoltenVK
-    /// reports as minVertexInputBindingStrideAlignment through VK_KHR_portability_subset.
-    u32 GetMinVertexInputBindingStrideAlignment() const noexcept {
-        return IsMoltenVK() ? 4 : 1;
+    bool IsQualcomm() const noexcept {
+        return properties.driver.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;
     }
 
     NvidiaArchitecture GetNvidiaArch() const noexcept {
@@ -1203,6 +1320,22 @@ FN_MAX_LIMIT_LIST
     void ShutdownGPULogging();
 
 private:
+    /// Picks a usable resolve mode out of a supported-modes mask. SAMPLE_ZERO is preferred because
+    /// it is the only mode the spec guarantees whenever any depth/stencil resolve is supported,
+    /// and averaging depth samples is not meaningful for depth testing anyway.
+    static VkResolveModeFlagBits PickResolveMode(VkResolveModeFlags supported) {
+        if ((supported & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT) != 0) {
+            return VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+        }
+        if ((supported & VK_RESOLVE_MODE_MIN_BIT) != 0) {
+            return VK_RESOLVE_MODE_MIN_BIT;
+        }
+        if ((supported & VK_RESOLVE_MODE_MAX_BIT) != 0) {
+            return VK_RESOLVE_MODE_MAX_BIT;
+        }
+        return VK_RESOLVE_MODE_NONE;
+    }
+
     /// Checks if the physical device is suitable and configures the object state
     /// with all necessary info about its properties.
     bool GetSuitability(bool requires_swapchain);
@@ -1238,21 +1371,15 @@ private:
     /// Returns true if the device natively supports blitting depth stencil images.
     bool TestDepthStencilBlits(VkFormat format) const;
 
-    void LoadStaticPipelineCache();
-    void SaveStaticPipelineCache() const;
-
 private:
     VkInstance instance;         ///< Vulkan instance.
-    VmaAllocator allocator{};    ///< VMA allocator.
-    mutable std::mutex separate_pools_mutex;
-    mutable std::array<std::array<VmaPool, VK_MAX_MEMORY_TYPES>, 2> separate_pools{};
+    VmaAllocator allocator;      ///< VMA allocator.
+    mutable u32 allocator_frame_index{};
     vk::DeviceDispatch dld;      ///< Device function pointers.
     vk::PhysicalDevice physical; ///< Physical device.
     vk::Device logical;          ///< Logical device.
     vk::Queue graphics_queue;    ///< Main graphics queue.
     vk::Queue present_queue;     ///< Main present queue.
-    vk::PipelineCache static_pipeline_cache;
-    bool owns_static_pipeline_cache{};
     u32 instance_version{};      ///< Vulkan instance version.
     u32 graphics_family{};       ///< Main graphics queue family index.
     u32 present_family{};        ///< Main present queue family index.
@@ -1261,33 +1388,29 @@ private:
     struct Extensions {
 #define EXTENSION(prefix, macro_name, var_name) bool var_name{};
 #define FEATURE(prefix, struct_name, macro_name, var_name) bool var_name{};
-
         FOR_EACH_VK_FEATURE_1_1(FEATURE);
         FOR_EACH_VK_FEATURE_1_2(FEATURE);
         FOR_EACH_VK_FEATURE_1_3(FEATURE);
         FOR_EACH_VK_FEATURE_1_4(FEATURE);
         FOR_EACH_VK_FEATURE_EXT(FEATURE);
         FOR_EACH_VK_EXTENSION(EXTENSION);
+        FOR_EACH_VK_PLATFORM_EXTENSION(EXTENSION);
 
 #undef EXTENSION
 #undef FEATURE
     };
 
     struct Features {
-#define FEATURE_CORE(prefix, struct_name, macro_name, var_name)                                    \
-    VkPhysicalDevice##struct_name##Features var_name{};
-#define FEATURE_EXT(prefix, struct_name, macro_name, var_name)                                     \
-    VkPhysicalDevice##struct_name##Features##prefix var_name{};
-
+#define FEATURE_CORE(prefix, struct_name, macro_name, var_name) VkPhysicalDevice##struct_name##Features var_name{};
+#define FEATURE_EXT(prefix, struct_name, macro_name, var_name) VkPhysicalDevice##struct_name##Features##prefix var_name{};
         FOR_EACH_VK_FEATURE_1_1(FEATURE_CORE);
         FOR_EACH_VK_FEATURE_1_2(FEATURE_CORE);
         FOR_EACH_VK_FEATURE_1_3(FEATURE_CORE);
         FOR_EACH_VK_FEATURE_1_4(FEATURE_CORE);
         FOR_EACH_VK_FEATURE_EXT(FEATURE_EXT);
-
 #undef FEATURE_CORE
 #undef FEATURE_EXT
-
+        VkPhysicalDeviceFaultFeaturesEXT device_fault{};
         VkPhysicalDeviceFeatures features{};
     };
 
@@ -1298,10 +1421,13 @@ private:
         VkPhysicalDevicePushDescriptorPropertiesKHR push_descriptor{};
         VkPhysicalDeviceDescriptorBufferPropertiesEXT descriptor_buffer{};
         VkPhysicalDeviceSubgroupSizeControlProperties subgroup_size_control{};
+        VkPhysicalDeviceTexelBufferAlignmentProperties texel_buffer_alignment{};
         VkPhysicalDeviceTransformFeedbackPropertiesEXT transform_feedback{};
+        VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT vertex_attribute_divisor{};
         VkPhysicalDeviceMaintenance5PropertiesKHR maintenance5{};
         VkPhysicalDeviceDepthStencilResolveProperties depth_stencil_resolve{};
         VkPhysicalDeviceCustomBorderColorPropertiesEXT custom_border_color{};
+        VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT vertex_attribute_divisor{};
 
         VkPhysicalDeviceProperties properties{};
     };
@@ -1309,6 +1435,7 @@ private:
     Extensions extensions{};
     Features features{};
     Properties properties{};
+    u32 max_vertex_attrib_divisor{1};
 
     VkPhysicalDeviceFeatures2 features2{};
     VkPhysicalDeviceProperties2 properties2{};
@@ -1319,10 +1446,10 @@ private:
     bool is_blit_depth32_stencil8_supported{}; ///< Support for blitting from and to D32S8.
     bool is_warp_potentially_bigger{};         ///< Host warp size can be bigger than guest.
     bool is_integrated{};                      ///< Is GPU an iGPU.
-    bool is_virtual{};                         ///< Is GPU a virtual GPU.
-    bool is_non_gpu{};                         ///< Is SoftwareRasterizer, FPGA, non-GPU device.
+    bool is_uma{};
     bool has_broken_compute{};                 ///< Compute shaders can cause crashes
     bool has_broken_cube_compatibility{};      ///< Has broken cube compatibility bit
+    bool has_broken_float16_math{};
     bool has_broken_descriptor_aliasing{};     ///< Miscompiles descriptors aliased on one binding
     bool has_broken_parallel_compiling{};      ///< Has broken parallel shader compiling.
     bool has_renderdoc{};                      ///< Has RenderDoc attached

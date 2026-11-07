@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
@@ -75,14 +75,8 @@ private:
     std::list<System*> systems{};
     /// Main worker thread for generating command lists
     std::jthread thread;
-    /// Mutex for the systems
-    std::mutex mutex1{};
-    /// Mutex for adding/removing systems
-    std::mutex mutex2{};
-    /// Is the system manager thread active?
-    std::atomic<bool> active{};
-    /// Reference to the ADSP's AudioRenderer for communication
-    ::AudioCore::ADSP::AudioRenderer::AudioRenderer& audio_renderer;
+    /// Mutex for the systems list
+    std::mutex mutex{};
 };
 
 } // namespace AudioCore::Renderer

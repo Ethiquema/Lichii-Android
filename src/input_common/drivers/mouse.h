@@ -114,7 +114,6 @@ private:
     Common::Vec<float, 2> last_mouse_change;
     Common::Vec<float, 3> last_motion_change;
     Common::Vec<int, 2> wheel_position;
-    Common::SteadyClock::time_point last_notify_timestamp{};
     bool button_pressed = false;
 };
 

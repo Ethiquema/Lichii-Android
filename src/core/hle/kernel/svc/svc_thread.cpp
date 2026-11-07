@@ -4,19 +4,14 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <chrono>
-#include <thread>
-
 #include "common/scope_exit.h"
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/hle/kernel/k_hardware_timer.h"
 #include "core/hle/kernel/k_process.h"
-#include "core/hle/kernel/k_scheduler.h"
 #include "core/hle/kernel/k_scoped_resource_reservation.h"
 #include "core/hle/kernel/k_thread.h"
 #include "core/hle/kernel/svc.h"
-#include "core/hle/kernel/thread_startup_policy.h"
 
 namespace Kernel::Svc {
 namespace {
@@ -111,44 +106,6 @@ Result StartThread(Core::System& system, Handle thread_handle) {
 
     // Try to start the thread.
     R_TRY(thread->Run(system.Kernel()));
-
-    if (GetCurrentProcess(system.Kernel()).GetProgramId() == MarioTennisFeverProgramId) {
-        KScopedSchedulerLock sl{system.Kernel()};
-        KThread& caller = GetCurrentThread(system.Kernel());
-        if (NeedsStartupGrace(MarioTennisFeverProgramId, caller.GetActiveCore(), caller.GetPriority(),
-                              thread->GetActiveCore(), thread->GetPriority())) {
-            caller.RecordStartupThread(system.Kernel(), thread.GetPointerUnsafe());
-        }
-    }
-
-    // On hardware a started thread that can run begins within microseconds. An emulated core takes
-    // longer (wake-up, JIT), so let the thread reach its first SVC before the caller carries on.
-    // Mario Tennis Fever's boot stub reuses the stack arguments it gave its threads right after
-    // starting them.
-    auto& kernel = system.Kernel();
-    const s32 core = thread->GetActiveCore();
-    if (core == GetCurrentCoreId(kernel) || !kernel.IsMulticore()) {
-        // Sleeping lets this core run the new thread; in single-core mode the idle core passes
-        // control to the next one.
-        for (int i = 0; i < 10 && !thread->HasEnteredKernel() && !thread->IsTerminationRequested();
-             ++i) {
-            const s64 timeout = kernel.HardwareTimer().GetTick() + 100'000 + 2;
-            static_cast<void>(GetCurrentThread(kernel).Sleep(kernel, timeout));
-        }
-    } else if (core >= 0 && core < static_cast<s32>(Core::Hardware::NUM_CPU_CORES)) {
-        const KThread* const running = kernel.Scheduler(core).GetSchedulerCurrentThread();
-        const bool preempts = running == nullptr || running == thread.GetPointerUnsafe() ||
-                              running == kernel.Scheduler(core).GetIdleThread() ||
-                              thread->GetPriority() < running->GetPriority();
-        if (preempts) {
-            const auto deadline =
-                std::chrono::steady_clock::now() + std::chrono::milliseconds(5);
-            while (!thread->HasEnteredKernel() && !thread->IsTerminationRequested() &&
-                   std::chrono::steady_clock::now() < deadline) {
-                std::this_thread::yield();
-            }
-        }
-    }
 
     R_SUCCEED();
 }

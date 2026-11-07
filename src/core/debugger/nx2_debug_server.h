@@ -39,8 +39,9 @@ using Handlers = std::map<std::string, Handler, std::less<>>;
 
 /// Answers one request line, {"id":..,"method":..,"params":{..}}, with one response line (no
 /// newline): {"id":..,"result":..} or {"id":..,"error":"..."}.
-[[nodiscard]] std::string HandleRequest(const Handlers& handlers, std::string_view line,
-                                        const ClientGone& client_gone = [] { return false; });
+[[nodiscard]] std::string HandleRequest(
+    const Handlers& handlers, std::string_view line,
+    const ClientGone& client_gone = [] { return false; });
 
 [[nodiscard]] std::string Base64(std::span<const u8> data);
 

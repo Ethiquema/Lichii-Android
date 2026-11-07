@@ -7,9 +7,11 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <deque>
 #include <limits>
+#include <mutex>
 #include <type_traits>
 #include "common/container/unordered_set.h"
 #include <utility>
@@ -49,6 +51,24 @@ public:
         });
     }
 
+    [[nodiscard]] bool HasCpuModifiedCheap(VAddr query_cpu_addr, u64 query_size) noexcept {
+        std::size_t remaining_size{query_size};
+        std::size_t page_index{query_cpu_addr >> HIGHER_PAGE_BITS};
+        u64 page_offset{query_cpu_addr & HIGHER_PAGE_MASK};
+        while (remaining_size > 0) {
+            const std::size_t copy_amount{
+                std::min<std::size_t>(HIGHER_PAGE_SIZE - page_offset, remaining_size)};
+            const Manager* manager = top_tier[page_index].load(std::memory_order_acquire);
+            if (manager == nullptr || manager->CpuModifiedPageCount() != 0) {
+                return true;
+            }
+            page_index++;
+            page_offset = 0;
+            remaining_size -= copy_amount;
+        }
+        return false;
+    }
+
     /// Returns true if a region has been modified from the CPU
     [[nodiscard]] bool IsRegionCpuModified(VAddr query_cpu_addr, u64 query_size) noexcept {
         return IteratePages<true>(query_cpu_addr, query_size, [](Manager* manager, u64 offset, size_t size) {
@@ -71,9 +91,9 @@ public:
     }
 
     /// Mark region as CPU modified, notifying the device_tracker about this change
-    void MarkRegionAsCpuModified(VAddr dirty_cpu_addr, u64 query_size) {
-        IteratePages<true>(dirty_cpu_addr, query_size, [](Manager* manager, u64 offset, size_t size) {
-            manager->ChangeRegionState(Type::CPU, true, manager->cpu_addr + offset, size);
+    void MarkRegionAsCpuModified(VAddr dirty_cpu_addr, u64 query_size, bool keep_tracking = false) {
+        IteratePages<true>(dirty_cpu_addr, query_size, [keep_tracking](Manager* manager, u64 offset, size_t size) {
+            manager->ChangeRegionState(Type::CPU, true, manager->cpu_addr + offset, size, keep_tracking);
         });
     }
 
@@ -130,10 +150,26 @@ public:
     }
 
     void FlushCachedWrites() noexcept {
+        std::scoped_lock lk{tracker_mutex};
         for (auto id : cached_pages) {
-            top_tier[id]->FlushCachedWrites();
+            top_tier[id].load(std::memory_order_relaxed)->FlushCachedWrites();
         }
         cached_pages.clear();
+    }
+
+    [[nodiscard]] bool CpuMarkIfNotGpuModified(VAddr addr, u64 size) {
+        std::scoped_lock lk{tracker_mutex};
+        const bool gpu = IteratePagesNoLock<false>(
+            addr, size, [](Manager* manager, u64 offset, size_t sz) {
+                return manager->IsRegionModified(Type::GPU, offset, sz);
+            });
+        if (gpu) {
+            return true;
+        }
+        IteratePagesNoLock<true>(addr, size, [](Manager* manager, u64 offset, size_t sz) {
+            manager->ChangeRegionState(Type::CPU, true, manager->cpu_addr + offset, sz);
+        });
+        return false;
     }
 
     /// Call 'func' for each CPU modified range and unmark those pages as CPU modified
@@ -157,6 +193,14 @@ public:
     void ForEachDownloadRange(VAddr query_cpu_range, u64 query_size, bool clear, Func&& func) {
         IteratePages<false>(query_cpu_range, query_size, [&func, clear](Manager* manager, u64 offset, size_t size) {
             manager->ForEachModifiedRange(Type::GPU, clear, manager->cpu_addr + offset, size, func);
+        });
+    }
+
+    /// Call 'func' for each range marked Preflushable
+    template <typename Func>
+    void ForEachPreflushableRange(VAddr query_cpu_range, u64 query_size, Func&& func) {
+        IteratePages<false>(query_cpu_range, query_size, [&func](Manager* manager, u64 offset, size_t size) {
+            manager->ForEachModifiedRange(Type::Preflushable, false, manager->cpu_addr + offset, size, func);
         });
     }
 
@@ -199,6 +243,12 @@ public:
 private:
     template <bool create_region_on_fail, typename Func>
     bool IteratePages(VAddr cpu_address, size_t size, Func&& func) {
+        std::scoped_lock lk{tracker_mutex};
+        return IteratePagesNoLock<create_region_on_fail>(cpu_address, size, std::forward<Func>(func));
+    }
+
+    template <bool create_region_on_fail, typename Func>
+    bool IteratePagesNoLock(VAddr cpu_address, size_t size, Func&& func) {
         using FuncReturn = typename std::invoke_result<Func, Manager*, u64, size_t>::type;
         static constexpr bool BOOL_BREAK = std::is_same_v<FuncReturn, bool>;
         std::size_t remaining_size{size};
@@ -207,7 +257,7 @@ private:
         while (remaining_size > 0) {
             const std::size_t copy_amount{
                 std::min<std::size_t>(HIGHER_PAGE_SIZE - page_offset, remaining_size)};
-            auto* manager{top_tier[page_index]};
+            auto* manager{top_tier[page_index].load(std::memory_order_relaxed)};
             if (manager) {
                 if constexpr (BOOL_BREAK) {
                     if (func(manager, page_offset, copy_amount)) {
@@ -218,7 +268,7 @@ private:
                 }
             } else if constexpr (create_region_on_fail) {
                 CreateRegion(page_index);
-                manager = top_tier[page_index];
+                manager = top_tier[page_index].load(std::memory_order_relaxed);
                 if constexpr (BOOL_BREAK) {
                     if (func(manager, page_offset, copy_amount)) {
                         return true;
@@ -236,6 +286,7 @@ private:
 
     template <bool create_region_on_fail, typename Func>
     std::pair<u64, u64> IteratePairs(VAddr cpu_address, size_t size, Func&& func) {
+        std::scoped_lock lk{tracker_mutex};
         std::size_t remaining_size{size};
         std::size_t page_index{cpu_address >> HIGHER_PAGE_BITS};
         u64 page_offset{cpu_address & HIGHER_PAGE_MASK};
@@ -244,7 +295,7 @@ private:
         while (remaining_size > 0) {
             const std::size_t copy_amount{
                 std::min<std::size_t>(HIGHER_PAGE_SIZE - page_offset, remaining_size)};
-            auto* manager{top_tier[page_index]};
+            auto* manager{top_tier[page_index].load(std::memory_order_relaxed)};
             const auto execute = [&] {
                 auto [new_begin, new_end] = func(manager, page_offset, copy_amount);
                 if (new_begin != 0 || new_end != 0) {
@@ -257,7 +308,7 @@ private:
                 execute();
             } else if constexpr (create_region_on_fail) {
                 CreateRegion(page_index);
-                manager = top_tier[page_index];
+                manager = top_tier[page_index].load(std::memory_order_relaxed);
                 execute();
             }
             page_index++;
@@ -273,7 +324,7 @@ private:
 
     void CreateRegion(std::size_t page_index) {
         const VAddr base_cpu_addr = page_index << HIGHER_PAGE_BITS;
-        top_tier[page_index] = GetNewManager(base_cpu_addr);
+        top_tier[page_index].store(GetNewManager(base_cpu_addr), std::memory_order_release);
     }
 
     Manager* GetNewManager(VAddr base_cpu_address) {
@@ -291,11 +342,12 @@ private:
         return new_manager;
     }
 
-    std::array<Manager*, NUM_HIGH_PAGES> top_tier{};
+    std::array<std::atomic<Manager*>, NUM_HIGH_PAGES> top_tier{};
     std::deque<std::array<Manager, MANAGER_POOL_SIZE>> manager_pool;
     std::deque<Manager*> free_managers;
     ::Common::unordered_set<u32> cached_pages;
     DeviceTracker* device_tracker = nullptr;
+    std::mutex tracker_mutex;
 };
 
 } // namespace VideoCommon

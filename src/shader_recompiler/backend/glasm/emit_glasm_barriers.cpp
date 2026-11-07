@@ -1,11 +1,16 @@
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "shader_recompiler/exception.h"
 #include "shader_recompiler/backend/glasm/emit_glasm_instructions.h"
 #include "shader_recompiler/backend/glasm/glasm_emit_context.h"
 #include "shader_recompiler/shader_info.h"
 
 namespace Shader::Backend::GLASM {
+
+void EmitSubgroupBarrier(EmitContext&) {
+    throw NotImplementedException("Native warp synchronization requires the Vulkan backend");
+}
 
 void EmitBarrier(EmitContext& ctx) {
     if (ctx.info.requires_coherent_global_memory || ctx.info.requires_coherent_image_memory) {

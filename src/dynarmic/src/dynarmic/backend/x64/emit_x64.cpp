@@ -41,9 +41,10 @@ EmitContext::EmitContext(RegAlloc& reg_alloc, IR::Block& block, boost::container
 
 EmitContext::~EmitContext() = default;
 
-EmitX64::EmitX64(BlockOfCode& code)
-        : code(code) {
+EmitX64::EmitX64(BlockOfCode& code) : code(code) {
+#ifndef __OPENORBIS__
     exception_handler.Register(code);
+#endif
 }
 
 EmitX64::~EmitX64() = default;
@@ -148,7 +149,7 @@ void EmitX64::EmitVerboseDebuggingOutput(RegAlloc& reg_alloc) {
 
 void EmitX64::EmitPushRSB(EmitContext& ctx, IR::Inst* inst) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ASSERT(args[0].IsImmediate());
+    DEBUG_ASSERT(args[0].IsImmediate());
     const u64 unique_hash_of_target = args[0].GetImmediateU64();
 
     ctx.reg_alloc.ScratchGpr(code, HostLoc::RCX);
@@ -288,7 +289,7 @@ void EmitX64::EmitNZCVFromPackedFlags(EmitContext& ctx, IR::Inst* inst) {
 }
 
 void EmitX64::EmitAddCycles(size_t cycles) {
-    ASSERT(cycles < (std::numeric_limits<s32>::max)());
+    DEBUG_ASSERT(cycles < (std::numeric_limits<s32>::max)());
     code.sub(qword[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, cycles_remaining)], static_cast<u32>(cycles));
 }
 

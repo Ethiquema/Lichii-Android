@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -219,12 +222,8 @@ public:
 private:
     /// Core system
     Core::System& core;
-    /// Reference to the ADSP's AudioRenderer for communication
-    ::AudioCore::ADSP::AudioRenderer::AudioRenderer& audio_renderer;
     /// Is this system initialized?
     bool initialized{};
-    /// Is this system currently active?
-    std::atomic<bool> active{};
     /// State of the system
     State state{State::Stopped};
     /// Sample rate for the system

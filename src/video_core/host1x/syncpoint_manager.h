@@ -81,6 +81,7 @@ private:
 
     void Wait(std::atomic<u32>& syncpoint, std::condition_variable& wait_cv, u32 expected_value);
 
+
     std::array<std::atomic<u32>, NUM_MAX_SYNCPOINTS> syncpoints_guest{};
     std::array<std::atomic<u32>, NUM_MAX_SYNCPOINTS> syncpoints_host{};
 

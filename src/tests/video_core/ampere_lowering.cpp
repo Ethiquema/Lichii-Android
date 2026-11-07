@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <vector>
 #include <catch2/catch_test_macros.hpp>
 
 #include "shader_recompiler/frontend/ampere/lower_to_maxwell.h"
@@ -107,6 +108,23 @@ TEST_CASE("Ampere SUST.P keeps its channel mask", "[video_core][ampere]") {
     const auto lowered = LowerToMaxwell(code);
     REQUIRE(static_cast<bool>(lowered));
     REQUIRE(((FindMaxwell(lowered, 0xeb2, 52) >> 20) & 0xf) == 1);
+}
+
+TEST_CASE("Ampere SHF.R.U64 immediate shifts keep their amount", "[video_core][ampere]") {
+    // SHF.R.U64 R14, R14, n, R17 (Ocarina vertex shader 1a55fa57a335b963). The Maxwell
+    // translator reads the immediate from bits 20-38, so no max-shift bits may be set there.
+    for (const u32 shift : {0U, 1U, 21U, 31U, 32U}) {
+        const std::array<Instruction, 2> code{{
+            {{0x0e0e7819, shift, 0x00001211, 0x020fe200}},
+            EXIT,
+        }};
+        const auto lowered = LowerToMaxwell(code);
+        REQUIRE(static_cast<bool>(lowered));
+        const u64 shf = FindMaxwell(lowered, 0x38f8, 48);
+        REQUIRE(shf != 0);
+        CHECK(((shf >> 20) & 0x7ffff) == shift);
+        CHECK(((shf >> 39) & 0xff) == 17);
+    }
 }
 
 TEST_CASE("Ampere SHFL with a register lane keeps its mode", "[video_core][ampere]") {
@@ -250,5 +268,263 @@ TEST_CASE("Ampere guarded uniform comparisons keep the output when the guard is 
     INFO(selected.error);
     REQUIRE(static_cast<bool>(selected));
     CHECK(selected.instructions.front() == 0x5ca000000df70403ULL);
+}
+
+TEST_CASE("Ampere gathers take arrays, per-pixel offsets and depth references",
+          "[video_core][ampere]") {
+    const auto lower = [](const Instruction& instruction) {
+        const std::array<Instruction, 2> code{{instruction, EXIT}};
+        return LowerToMaxwell(code);
+    };
+    const auto field = [](u64 word, u32 offset, u32 count) {
+        return (word >> offset) & ((u64{1} << count) - 1);
+    };
+    // Ocarina: TLD4.R.2D.ARRAY R44, R42, R8, R4. Layer and x in R8, R9, y in R4.
+    const auto array = lower({{0x082c7b63, 0xb0801004, 0x001e0f2a, 0x00014200}});
+    INFO(array.error);
+    REQUIRE(static_cast<bool>(array));
+    REQUIRE(array.instructions.size() >= 4);
+    CHECK(array.instructions[0] == 0x5c980780008700faULL);
+    CHECK(array.instructions[1] == 0x5c980780009700fbULL);
+    CHECK(array.instructions[2] == 0x5c980780004700fcULL);
+    CHECK(field(array.instructions[3], 20, 8) == 255);
+    CHECK(field(array.instructions[3], 28, 3) == 3);
+    CHECK(field(array.instructions[3], 50, 1) == 0);
+    CHECK(field(array.instructions[3], 54, 2) == 0);
+
+    // Ocarina: @!P1 TLD4.R.PTP R24, R14, R6, R16: x, y in R6, R7, the offsets in R16, R17.
+    const auto per_pixel = lower({{0x06189b63, 0x30007c10, 0x001e2f0e, 0x000f4600}});
+    INFO(per_pixel.error);
+    REQUIRE(static_cast<bool>(per_pixel));
+    REQUIRE(per_pixel.instructions.size() >= 5);
+    CHECK(field(per_pixel.instructions[2], 20, 8) == 16);
+    CHECK(field(per_pixel.instructions[3], 20, 8) == 17);
+    CHECK(field(per_pixel.instructions[4], 20, 8) == 246);
+    CHECK(field(per_pixel.instructions[4], 28, 3) == 2);
+    CHECK(field(per_pixel.instructions[4], 54, 2) == 2);
+
+    // Ocarina: TLD4.R.DC R12, R14, R24, R28: x, y in R24, R25, the reference in R28.
+    const auto depth = lower({{0x180c7b63, 0x30800e1c, 0x001e4f0e, 0x000f4200}});
+    INFO(depth.error);
+    REQUIRE(static_cast<bool>(depth));
+    REQUIRE(depth.instructions.size() >= 4);
+    CHECK(field(depth.instructions[2], 20, 8) == 28);
+    CHECK(field(depth.instructions[3], 50, 1) == 1);
+    CHECK(field(depth.instructions[3], 54, 2) == 0);
+
+    // Offset mode 3 is not an offset form.
+    CHECK_FALSE(lower({{0x082c7b63, 0xb0801004, 0x001e3f2a, 0x00014200}}));
+}
+
+TEST_CASE("Ampere Ocarina sign extends, uniform shifts and carries, LEA.HI and SURED forms",
+          "[video_core][ampere]") {
+    const auto lower = [](const Instruction& instruction) {
+        const std::array<Instruction, 2> code{{instruction, EXIT}};
+        return LowerToMaxwell(code);
+    };
+    const auto field = [](u64 word, u32 offset, u32 count) {
+        return (word >> offset) & ((u64{1} << count) - 1);
+    };
+    // SGXT R32, R32, 0x1: signed, so BFE.S32 (bit 48).
+    const auto extend = lower({{0x2020781a, 1, 0x00000200, 0x000fe400}});
+    INFO(extend.error);
+    REQUIRE(static_cast<bool>(extend));
+    CHECK(extend.instructions.front() == 0x3801000010072020ULL);
+
+    // USHF.L.U32.HI UR5, URZ, UR4, 0x1: 1 << UR4 into UR5 (R221).
+    const auto shift = lower({{0x3f057499, 1, 0x08010e04, 0x000fe400}});
+    INFO(shift.error);
+    REQUIRE(static_cast<bool>(shift));
+    REQUIRE(shift.instructions.size() >= 2);
+    CHECK(shift.instructions[1] == 0x5c4800800dc7faddULL);
+
+    // UIADD3 UR6, UP2, UR15, UR6, URZ: the carry goes through P4 into R239 bit 4.
+    const auto carry = lower({{0x0f067290, 6, 0x0ff5e03f, 0x000fe200}});
+    INFO(carry.error);
+    REQUIRE(static_cast<bool>(carry));
+    const std::array<u64, 6> expected_carry{
+        0x5c1000000de7e7faULL, 0x38e800000107fffdULL, 0x5b6203800e77fa27ULL,
+        0x38e800000107efefULL, 0x38f000000107fd00ULL, 0x5c9807800fa700deULL};
+    CHECK(std::equal(expected_carry.begin(), expected_carry.end(), carry.instructions.begin()));
+
+    // LEA.HI R1, R1, -R0, RZ, 0x1e: the final add negates R0.
+    const auto lea = lower({{0x01017211, 0x80000000, 0x078ff0ff, 0x000fca00}});
+    INFO(lea.error);
+    REQUIRE(static_cast<bool>(lea));
+    REQUIRE(lea.instructions.size() >= 2);
+    CHECK(lea.instructions[1] == 0x5c1100000007fa01ULL);
+
+    // SURED.OR: op 6 at Maxwell bits 24-26.
+    const auto reduce = lower({{0x0400159f, 0x60008400, 0x0310e000, 0x0001e200}});
+    INFO(reduce.error);
+    REQUIRE(static_cast<bool>(reduce));
+    CHECK(field(reduce.instructions.front(), 24, 3) == 6);
+
+    // LDG.E.128 R216, [R216.64] in a program using uniform registers: R216-R219 are reserved,
+    // so the load goes through a borrowed low quartet.
+    const std::array<Instruction, 3> load{{
+        {{0x00007c02, 0, 0x08000f00, 0}},
+        {{0xd8d87381, 0, 0x001ead00, 0x000f2800}},
+        EXIT,
+    }};
+    const auto loaded = LowerToMaxwell(load);
+    INFO(loaded.error);
+    REQUIRE(static_cast<bool>(loaded));
+    CHECK(std::any_of(loaded.instructions.begin(), loaded.instructions.end(), [&](u64 word) {
+        return (word >> 52) == 0xeed && field(word, 0, 8) < 216 && field(word, 8, 8) < 216;
+    }));
+    // A reserved operand spanning two quartets (R218-R221) cannot be borrowed for.
+    const std::array<Instruction, 3> straddle{{
+        {{0x00007c02, 0, 0x08000f00, 0}},
+        {{0xd8da7381, 0, 0x001ead00, 0x000f2800}},
+        EXIT,
+    }};
+    CHECK_FALSE(LowerToMaxwell(straddle));
+}
+
+TEST_CASE("Ampere Ocarina byte constant loads, ULEA carries to UP3 and two-source F2IP",
+          "[video_core][ampere]") {
+    const auto lower = [](const Instruction& instruction) {
+        const std::array<Instruction, 2> code{{instruction, EXIT}};
+        return LowerToMaxwell(code);
+    };
+    const auto field = [](u64 word, u32 offset, u32 count) {
+        return (word >> offset) & ((u64{1} << count) - 1);
+    };
+    // These forms are lowered by default; EDEN_NX2_LOWER_EXTENDED=0 rejects them again.
+    const auto set_extended = [](const char* value) {
+#ifdef _WIN32
+        _putenv_s("EDEN_NX2_LOWER_EXTENDED", value ? value : "");
+#else
+        if (value) {
+            setenv("EDEN_NX2_LOWER_EXTENDED", value, 1);
+        } else {
+            unsetenv("EDEN_NX2_LOWER_EXTENDED");
+        }
+#endif
+    };
+    constexpr Instruction ByteLoad{0x06087abb, 0x01002080, 0x08000000, 0x000fe400};
+    set_extended("0");
+    CHECK_FALSE(lower({ByteLoad}));
+    set_extended(nullptr);
+    // ULDC.U8 UR8, c[0x4][UR6+0x82]: LDC.U8 (size 0) indexed by UR6's register, odd offset kept.
+    const auto byte_load = lower({{0x06087abb, 0x01002080, 0x08000000, 0x000fe400}});
+    INFO(byte_load.error);
+    REQUIRE(static_cast<bool>(byte_load));
+    const u64 ldc = FindMaxwell(byte_load, 0xef9, 52);
+    REQUIRE(ldc != 0);
+    CHECK(field(ldc, 48, 3) == 0);
+    CHECK(field(ldc, 20, 16) == 0x82);
+    CHECK(field(ldc, 36, 5) == 4);
+
+    // ULEA UR10, UP3, UR7, UR10, 0x2: the carry is computed in P3 (6 - 3) and merged into R239.
+    const auto lea = lower({{0x070a7291, 0x0000000a, 0x0f86103f, 0x000fe200}});
+    INFO(lea.error);
+    REQUIRE(static_cast<bool>(lea));
+    const u64 compare = FindMaxwell(lea, 0x5b6, 52);
+    REQUIRE(compare != 0);
+    CHECK(field(compare, 3, 3) == 3);
+    CHECK(std::any_of(lea.instructions.begin(), lea.instructions.end(), [&](u64 word) {
+        return (word >> 52) == 0x38e && field(word, 0, 8) == 239 && field(word, 20, 8) == 8;
+    }));
+
+    // F2IP.U8.F32.NTZ R45, R44, R21, RZ: two byte conversions, R44's shifted into byte 1.
+    const auto pack = lower({{0x2c2d7243, 0x00000015, 0x000004ff, 0x000fc400}});
+    INFO(pack.error);
+    REQUIRE(static_cast<bool>(pack));
+    CHECK(CountMaxwell(pack, 0x5cb, 52) == 2);
+    CHECK(FindMaxwell(pack, 0x384, 52) != 0);
+
+    // ULDC UR7, c[0x4][UR15+0x29]: only the indexed sum has to be aligned.
+    const auto indexed = lower({{0x0f077abb, 0x01000a40, 0x08000800, 0x000fc600}});
+    INFO(indexed.error);
+    REQUIRE(static_cast<bool>(indexed));
+    CHECK(field(FindMaxwell(indexed, 0xef9, 52), 20, 16) == 0x29);
+
+    // I2F.U8 R0, UR17.B3: Maxwell I2F with byte selector 3 (bits 41-42).
+    const auto convert = lower({{0x00097d06, 0x30000011, 0x08001000, 0x000fe200}});
+    INFO(convert.error);
+    REQUIRE(static_cast<bool>(convert));
+    CHECK(field(FindMaxwell(convert, 0x5cb, 52), 41, 2) == 3);
+}
+
+TEST_CASE("Ampere TLD4 rejects shadowed per-tap offset registers", "[video_core][ampere]") {
+    std::array<Instruction, 2> code{{
+        {{0x040a7b63, 0x338004f2, 0x041e2f08, 0x100fc200}},
+        EXIT,
+    }};
+    REQUIRE(static_cast<bool>(LowerToMaxwell(code)));
+    code[0].words[1] = 0x338004f3;
+    CHECK_FALSE(static_cast<bool>(LowerToMaxwell(code)));
+    code[0].words[1] = 0x338004f4;
+    CHECK_FALSE(static_cast<bool>(LowerToMaxwell(code)));
+}
+
+TEST_CASE("Ampere TLD4 lowers a single offset register", "[video_core][ampere]") {
+    std::array<Instruction, 2> code{{
+        {{0x040a7b63, 0x33800408, 0x041e1f08, 0x100fc200}},
+        EXIT,
+    }};
+    const auto lowered = LowerToMaxwell(code);
+    REQUIRE(static_cast<bool>(lowered));
+    const u64 gather = FindMaxwell(lowered, 0xc8, 56);
+    REQUIRE(gather != 0);
+    CHECK(((gather >> 54) & 3) == 1);
+    code[0].words[2] |= 1U << 13;
+    CHECK_FALSE(static_cast<bool>(LowerToMaxwell(code)));
+}
+
+TEST_CASE("Ampere TLD4 packs half results in component order", "[video_core][ampere]") {
+    const std::array<Instruction, 2> code{{
+        {{0x040a7b63, 0x33800408, 0x041eaf08, 0x100fc200}},
+        EXIT,
+    }};
+    const auto lowered = LowerToMaxwell(code);
+    REQUIRE(static_cast<bool>(lowered));
+    std::vector<u64> conversions;
+    for (const u64 word : lowered.instructions) {
+        if ((word >> 48) == 0x5ca8) {
+            conversions.push_back(word);
+        }
+    }
+    REQUIRE(conversions.size() == 4);
+    CHECK(((conversions[0] >> 20) & 0xff) == 249);
+    CHECK(((conversions[1] >> 20) & 0xff) == 248);
+    CHECK(((conversions[2] >> 20) & 0xff) == 247);
+    CHECK(((conversions[3] >> 20) & 0xff) == 246);
+}
+
+TEST_CASE("Ampere array depth samples use a second descriptor buffer", "[video_core][ampere]") {
+    const std::array<Instruction, 3> code{{
+        {{0x040a7b60, 0xb0000008, 0x000e41ff, 0}},
+        {{0x040a7b60, 0xb0400008, 0x000e41ff, 0}},
+        EXIT,
+    }};
+    const auto lowered = LowerToMaxwell(code);
+    REQUIRE(static_cast<bool>(lowered));
+    CHECK(lowered.required_texture_buffer == 0);
+    constexpr u64 sample_mask = 0xffc0000000000000ULL;
+    const auto count_sample = [&](u64 opcode) {
+        return std::count_if(lowered.instructions.begin(), lowered.instructions.end(),
+                             [=](u64 word) { return (word & sample_mask) == opcode; });
+    };
+    CHECK(count_sample(0xc000000000000000ULL) == 1);
+    CHECK(count_sample(0xde00000000000000ULL) == 0);
+    CHECK(count_sample(0xde80000000000000ULL) == 1);
+    CHECK(count_sample(0xdec0000000000000ULL) == 0);
+    const u64 bound = FindMaxwell(lowered, 0xc0, 56);
+    const u64 bindless = FindMaxwell(lowered, 0xde, 56);
+    REQUIRE(bound != 0);
+    REQUIRE(bindless != 0);
+    CHECK(((bound >> 36) & 0x1fff) == 0);
+    CHECK(((bound >> 20) & 0xff) == 9);
+    CHECK(((bindless >> 20) & 0xff) == 246);
+    const u64 handle_load = FindMaxwell(lowered, 0x4c98, 48);
+    REQUIRE(handle_load != 0);
+    CHECK((handle_load & 0xff) == 246);
+    CHECK(((handle_load >> 34) & 0x1f) == 1);
+    CHECK(((handle_load >> 20) & 0x3fff) == 0);
+    CHECK(std::find(lowered.instructions.begin(), lowered.instructions.end(),
+                    0x5c980780009700f7ULL) != lowered.instructions.end());
 }
 } // namespace

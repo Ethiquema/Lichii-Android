@@ -235,6 +235,10 @@
     <string name="update_install_failed">Installieren der Aktualisierung fehlgeschlagen: %1$s</string>
     <string name="home_search">Suche</string>
     <string name="home_settings">Einstellungen</string>
+    <string name="home_sort">Sortieren</string>
+    <string name="home_layout">Layout</string>
+    <string name="home_start">Start</string>
+    <string name="home_clear">Löschen</string>
     <string name="empty_gamelist">Es wurden keine Dateien gefunden oder es wurde noch kein Spielverzeichnis ausgewählt.</string>
     <string name="manage_game_folders">Spielordner verwalten</string>
     <string name="select_games_folder_description">Ermöglicht es Eden, die Spieleliste zu füllen.</string>
@@ -303,13 +307,17 @@
     <string name="frame_gen_target_rate_60">60 FPS</string>
     <string name="frame_gen_target_rate_90">90 FPS</string>
     <string name="frame_gen_target_rate_120">120 FPS</string>
+    <string name="frame_gen_target_rate_144">144 FPS</string>
+    <string name="frame_gen_target_rate_165">165 FPS</string>
     <string name="frame_gen_queue_target_1">Ausbalanciert (1 Bild)</string>
     <string name="frame_gen_queue_target_2">Flüssigste (2 Bilder)</string>
     <string name="frame_gen_unsupported">Frame-Generation nicht verfügbar</string>
+    <string name="frame_gen_unsupported_description">Dieser GPU-Treiber unterstützt das Vulkan-Memory-Model nicht, welches Lossless Scaling-Shader benötigen.</string>
     <string name="lossless_scaling_setup_description">Optional. Stelle deine eigene Lossless.dll zur Verfügung, um Frame-Generation später zu aktivieren.</string>
     <string name="lossless_scaling_install">Installiere Lossless.dll</string>
     <string name="lossless_scaling_replace_description">Wähle eine andere Kopie von Lossless.dll</string>
     <string name="frame_generation_supported">Unterstützt</string>
+    <string name="frame_generation_unsupported">Nicht unterstützt (kein Vulkan-Memory-Model)</string>
     <string name="lossless_scaling">Lossless Scaling</string>
     <string name="lossless_scaling_installed">Installiert</string>
     <string name="lossless_scaling_not_installed">Nicht installiert</string>
@@ -508,7 +516,6 @@ Wird der Handheld-Modus verwendet, verringert es die Auflösung und erhöht die 
     <string name="skip_cpu_inner_invalidation_description">Überspringt bestimmte Cache-Invalidierungen auf CPU-Seite während Speicherupdates, reduziert die CPU-Auslastung und verbessert die Leistung. Kann in einigen Spielen zu Fehlern oder Abstürzen führen.</string>
     <string name="renderer_asynchronous_shaders">Asynchrone Shader</string>
     <string name="renderer_asynchronous_shaders_description">Kompiliert Shader asynchron. Dies kann Ruckler reduzieren, aber auch Grafikfehler verursachen.</string>
-    <string name="gpu_unswizzle_default_button">Standard</string>
 
 
     <string name="extensions">Erweiterungen</string>
@@ -729,6 +736,11 @@ Wird der Handheld-Modus verwendet, verringert es die Auflösung und erhöht die 
     <string name="path_set">Pfad erfolgreich gesetzt</string>
     <string name="skip_migration">Überspringen</string>
 
+    <!-- Footer actions -->
+    <string name="footer_open">Öffnen</string>
+    <string name="footer_game_info">Spielinfo</string>
+    <string name="footer_back">Zurück</string>
+
     <!-- Game properties -->
     <string name="info">Info</string>
     <string name="info_description">Programm-ID, Entwickler, Version</string>
@@ -918,25 +930,10 @@ Wirklich fortfahren?</string>
     <string name="fast_gpu_high">Übertaktung</string>
 
     <!-- GPU swizzle texture size -->
-    <string name="gpu_texturesizeswizzle_verysmall">Sehr klein (16 MB)</string>
-    <string name="gpu_texturesizeswizzle_small">Klein (32 MB)</string>
-    <string name="gpu_texturesizeswizzle_normal">Normal (128 MB)</string>
-    <string name="gpu_texturesizeswizzle_large">Groß (256 MB)</string>
-    <string name="gpu_texturesizeswizzle_verylarge">Sehr groß (512 MB)</string>
 
     <!-- GPU swizzle streams -->
-    <string name="gpu_swizzle_verylow">Sehr niedrig (4 MB)</string>
-    <string name="gpu_swizzle_low">Niedrig (8 MB)</string>
-    <string name="gpu_swizzle_normal">Normal (16 MB)</string>
-    <string name="gpu_swizzle_medium">Mittel (32 MB)</string>
-    <string name="gpu_swizzle_high">Hoch (64 MB)</string>
 
     <!-- GPU swizzle chunks -->
-    <string name="gpu_swizzlechunk_verylow">Sehr niedrig (32)</string>
-    <string name="gpu_swizzlechunk_low">Niedrig (64)</string>
-    <string name="gpu_swizzlechunk_normal">Normal (128)</string>
-    <string name="gpu_swizzlechunk_medium">Mittel (256)</string>
-    <string name="gpu_swizzlechunk_high">Hoch (512)</string>
 
     <!-- Temperature Units -->
     <string name="temperature_celsius">Celsius</string>
@@ -967,6 +964,7 @@ Wirklich fortfahren?</string>
     <string name="gpu_fence_behavior_immediate">Direkt</string>
     <string name="gpu_fence_behavior_balanced">Ausgewogen</string>
     <string name="gpu_fence_behavior_accurate">Genau</string>
+    <string name="gpu_fence_behavior_strict">Strikt</string>
 
     <string name="vram_usage_conservative">Konservativ</string>
     <string name="vram_usage_aggressive">Aggressiv</string>

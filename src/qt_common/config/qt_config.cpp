@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:src/qt_common/config/qt_config.cpp
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+========
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+>>>>>>>> 5a8929cdd1 ([qt] refactor: qt_common lib (#94)):src/qt_common/qt_config.cpp
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-FileCopyrightText: 2023 yuzu Emulator Project

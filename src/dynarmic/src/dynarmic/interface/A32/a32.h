@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 /* This file is part of the dynarmic project.
@@ -14,8 +14,8 @@
 #include <string>
 #include <vector>
 
-#include "dynarmic/interface/A32/config.h"
-#include "dynarmic/interface/halt_reason.h"
+#include "config.h"
+#include "dynarmic/src/dynarmic/interface/halt_reason.h"
 
 namespace Dynarmic {
 namespace A32 {

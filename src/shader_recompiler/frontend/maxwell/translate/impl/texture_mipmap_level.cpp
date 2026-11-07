@@ -100,10 +100,12 @@ void Impl(TranslatorVisitor& v, u64 insn, bool is_bindless) {
         if (((tmml.mask >> element) & 1) == 0) {
             continue;
         }
+        // Host queries return absolute then relative LOD; TMML returns the reverse
+        // order, with eight fractional bits in unsigned/signed 16-bit results.
         const IR::F32 value{v.ir.CompositeExtract(sample, element ^ 1)};
         const IR::F32 scaled{v.ir.FPMul(value, v.ir.Imm32(256.0f))};
-        const IR::U32 fixed{element == 0 ? v.ir.ConvertFToS(32, scaled)
-                                        : v.ir.ConvertFToU(32, scaled)};
+        const IR::U32 fixed = element == 0 ? v.ir.ConvertFToS(32, scaled)
+                                          : v.ir.ConvertFToU(32, scaled);
         v.X(dest_reg, v.ir.BitwiseAnd(fixed, v.ir.Imm32(0xffff)));
         ++dest_reg;
     }

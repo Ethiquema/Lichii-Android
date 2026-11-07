@@ -15,7 +15,7 @@
 #include <variant>
 
 #include "common/common_types.h"
-#include "common/socket_types.h"
+#include "core/internal_network/socket_types.h"
 #include "core/hle/service/service.h"
 #include "core/hle/service/sockets/sockets.h"
 #include "network/network.h"
@@ -54,8 +54,8 @@ public:
     // These methods are called from SSL; the first two are also called from
     // this class for the corresponding IPC methods.
     // On the real device, the SSL service makes IPC calls to this service.
-    std::variant<s32, Errno> DuplicateSocketImpl(s32 fd);
-    Errno CloseImpl(s32 fd);
+    std::variant<s32, Network::Errno> DuplicateSocketImpl(s32 fd);
+    Network::Errno CloseImpl(s32 fd);
     std::optional<std::shared_ptr<Network::SocketBase>> GetSocket(s32 fd);
 
 private:
@@ -84,10 +84,17 @@ private:
         u32 send_timeout = 0;
     };
 
-    /// What a deferred Select, Poll, RecvMMsg, SendMMsg, Read or Write goes on with when retried.
-    struct SelectRequest;
-    /// What a deferred Select, Poll, RecvMMsg, SendMMsg, Read or Write waits on to be retried.
-    struct SelectWait;
+    struct PollWork {
+        void Execute(BSD_USA* bsd);
+        void Response(HLERequestContext& ctx);
+
+        s32 nfds;
+        s32 timeout;
+        std::span<const u8> read_buffer;
+        std::vector<u8> write_buffer;
+        s32 ret{};
+        Network::Errno bsd_errno{};
+    };
 
     struct AcceptWork {
         void Execute(BSD_USA* bsd);
@@ -96,7 +103,7 @@ private:
         s32 fd;
         std::vector<u8> write_buffer;
         s32 ret{};
-        Errno bsd_errno{};
+        Network::Errno bsd_errno{};
     };
 
     struct ConnectWork {
@@ -105,7 +112,7 @@ private:
 
         s32 fd;
         std::span<const u8> addr;
-        Errno bsd_errno{};
+        Network::Errno bsd_errno{};
     };
 
     struct RecvWork {
@@ -116,7 +123,7 @@ private:
         u32 flags;
         std::vector<u8> message;
         s32 ret{};
-        Errno bsd_errno{};
+        Network::Errno bsd_errno{};
     };
 
     struct RecvFromWork {
@@ -128,7 +135,7 @@ private:
         std::vector<u8> message;
         std::vector<u8> addr;
         s32 ret{};
-        Errno bsd_errno{};
+        Network::Errno bsd_errno{};
     };
 
     struct SendWork {
@@ -139,7 +146,7 @@ private:
         u32 flags;
         std::span<const u8> message;
         s32 ret{};
-        Errno bsd_errno{};
+        Network::Errno bsd_errno{};
     };
 
     struct SendToWork {
@@ -151,11 +158,12 @@ private:
         std::span<const u8> message;
         std::span<const u8> addr;
         s32 ret{};
-        Errno bsd_errno{};
+        Network::Errno bsd_errno{};
     };
 
     void RegisterClient(HLERequestContext& ctx);
     void StartMonitoring(HLERequestContext& ctx);
+    void Unknown36(HLERequestContext& ctx);
     void Socket(HLERequestContext& ctx);
     void SocketExempt(HLERequestContext& ctx);
     void Select(HLERequestContext& ctx);
@@ -185,34 +193,23 @@ private:
     template <typename Work>
     void ExecuteWork(HLERequestContext& ctx, Work work);
 
-    std::pair<s32, Errno> SocketImpl(Domain domain, Type type, Protocol protocol);
-    /// Examines the pollfds once without waiting. While none has an event and the deadline is
-    /// ahead, defers ctx, to be retried once one may have, and returns nullopt. On success,
-    /// write_buffer holds the pollfds to write back.
-    std::optional<std::pair<s32, Errno>> PollImpl(HLERequestContext& ctx,
-                                                  std::vector<u8>& write_buffer, s32 nfds,
-                                                  s32 timeout);
-    /// Examines the descriptors of a Select once without waiting. Returns nullopt while none is
-    /// ready and the deadline is ahead, having filled wait with what may change that; otherwise
-    /// ready_sets gets the sets to write back.
-    std::optional<std::pair<s32, Errno>> SelectImpl(const SelectRequest& request,
-                                                    std::array<std::vector<u8>, 3>& ready_sets,
-                                                    SelectWait& wait);
-    std::pair<s32, Errno> AcceptImpl(s32 fd, std::vector<u8>& write_buffer);
-    Errno BindImpl(s32 fd, std::span<const u8> addr);
-    Errno ConnectImpl(s32 fd, std::span<const u8> addr);
-    Errno GetPeerNameImpl(s32 fd, std::vector<u8>& write_buffer);
-    Errno GetSockNameImpl(s32 fd, std::vector<u8>& write_buffer);
-    Errno ListenImpl(s32 fd, s32 backlog);
-    std::pair<s32, Errno> FcntlImpl(s32 fd, FcntlCmd cmd, s32 arg);
-    Errno GetSockOptImpl(s32 fd, u32 level, OptName optname, std::vector<u8>& optval);
-    Errno SetSockOptImpl(s32 fd, u32 level, OptName optname, std::span<const u8> optval);
-    Errno ShutdownImpl(s32 fd, s32 how);
-    std::pair<s32, Errno> RecvImpl(s32 fd, u32 flags, std::vector<u8>& message);
-    std::pair<s32, Errno> RecvFromImpl(s32 fd, u32 flags, std::vector<u8>& message,
+    std::pair<s32, Network::Errno> SocketImpl(Network::Domain domain, Network::Type type, Network::Protocol protocol);
+    std::pair<s32, Network::Errno> PollImpl(std::vector<u8>& write_buffer, std::span<const u8> read_buffer, s32 nfds, s32 timeout);
+    std::pair<s32, Network::Errno> AcceptImpl(s32 fd, std::vector<u8>& write_buffer);
+    Network::Errno BindImpl(s32 fd, std::span<const u8> addr);
+    Network::Errno ConnectImpl(s32 fd, std::span<const u8> addr);
+    Network::Errno GetPeerNameImpl(s32 fd, std::vector<u8>& write_buffer);
+    Network::Errno GetSockNameImpl(s32 fd, std::vector<u8>& write_buffer);
+    Network::Errno ListenImpl(s32 fd, s32 backlog);
+    std::pair<s32, Network::Errno> FcntlImpl(s32 fd, Network::FcntlCmd cmd, s32 arg);
+    Network::Errno GetSockOptImpl(s32 fd, Network::SocketLevel level, Network::OptName optname, std::vector<u8>& optval);
+    Network::Errno SetSockOptImpl(s32 fd, Network::SocketLevel level, Network::OptName optname, std::span<const u8> optval);
+    Network::Errno ShutdownImpl(s32 fd, s32 how);
+    std::pair<s32, Network::Errno> RecvImpl(s32 fd, u32 flags, std::vector<u8>& message);
+    std::pair<s32, Network::Errno> RecvFromImpl(s32 fd, u32 flags, std::vector<u8>& message,
                                        std::vector<u8>& addr);
-    std::pair<s32, Errno> SendImpl(s32 fd, u32 flags, std::span<const u8> message);
-    std::pair<s32, Errno> SendToImpl(s32 fd, u32 flags, std::span<const u8> message,
+    std::pair<s32, Network::Errno> SendImpl(s32 fd, u32 flags, std::span<const u8> message);
+    std::pair<s32, Network::Errno> SendToImpl(s32 fd, u32 flags, std::span<const u8> message,
                                      std::span<const u8> addr);
     /// Receives the messages serialized in messages for ctx, which then holds the reply. Returns
     /// nullopt when a blocking receive has to wait, having deferred ctx instead.
@@ -265,7 +262,7 @@ private:
     bool DeferSocketWait(HLERequestContext& ctx, s32 fd, const FileDescriptor& descriptor,
                          u64 generation, bool send, SelectRequest& request);
 
-    void BuildErrnoResponse(HLERequestContext& ctx, Errno bsd_errno) const noexcept;
+    void BuildErrnoResponse(HLERequestContext& ctx, Network::Errno bsd_errno) const noexcept;
 
     static inline std::array<std::optional<FileDescriptor>, MAX_FD> file_descriptors{};
     /// Per slot of file_descriptors, bumped whenever its descriptor closes, so that a request
@@ -289,6 +286,58 @@ private:
 
 protected:
     std::unique_lock<std::mutex> LockService() noexcept override;
+
+    std::optional<FunctionInfoBase> FindRequest(u32 key) override {
+        return HandlerTableGenerateWithFind(key, functions);
+    }
+    static constexpr auto functions = CreateStaticMap(
+        FunctionInfo{0, &BSD_USA::RegisterClient, "RegisterClient"},
+        FunctionInfo{1, &BSD_USA::StartMonitoring, "StartMonitoring"},
+        FunctionInfo{2, &BSD_USA::Socket, "Socket"},
+        FunctionInfo{3, &BSD_USA::SocketExempt, "SocketExempt"},
+        FunctionInfo{4, nullptr, "Open"},
+        FunctionInfo{5, &BSD_USA::Select, "Select"},
+        FunctionInfo{6, &BSD_USA::Poll, "Poll"},
+        FunctionInfo{7, nullptr, "Sysctl"},
+        FunctionInfo{8, &BSD_USA::Recv, "Recv"},
+        FunctionInfo{9, &BSD_USA::RecvFrom, "RecvFrom"},
+        FunctionInfo{10, &BSD_USA::Send, "Send"},
+        FunctionInfo{11, &BSD_USA::SendTo, "SendTo"},
+        FunctionInfo{12, &BSD_USA::Accept, "Accept"},
+        FunctionInfo{13, &BSD_USA::Bind, "Bind"},
+        FunctionInfo{14, &BSD_USA::Connect, "Connect"},
+        FunctionInfo{15, &BSD_USA::GetPeerName, "GetPeerName"},
+        FunctionInfo{16, &BSD_USA::GetSockName, "GetSockName"},
+        FunctionInfo{17, &BSD_USA::GetSockOpt, "GetSockOpt"},
+        FunctionInfo{18, &BSD_USA::Listen, "Listen"},
+        FunctionInfo{19, nullptr, "Ioctl"},
+        FunctionInfo{20, &BSD_USA::Fcntl, "Fcntl"},
+        FunctionInfo{21, &BSD_USA::SetSockOpt, "SetSockOpt"},
+        FunctionInfo{22, &BSD_USA::Shutdown, "Shutdown"},
+        FunctionInfo{23, nullptr, "ShutdownAllSockets"},
+        FunctionInfo{24, &BSD_USA::Write, "Write"},
+        FunctionInfo{25, &BSD_USA::Read, "Read"},
+        FunctionInfo{26, &BSD_USA::Close, "Close"},
+        FunctionInfo{27, &BSD_USA::DuplicateSocket, "DuplicateSocket"},
+        FunctionInfo{28, nullptr, "GetResourceStatistics"},
+        FunctionInfo{29, nullptr, "RecvMMsg", MakeVersionGate({3,0,0})},
+        FunctionInfo{30, nullptr, "SendMMsg", MakeVersionGate({3,0,0})},
+        FunctionInfo{31, &BSD_USA::EventFd, "EventFd", MakeVersionGate({7,0,0})},
+        FunctionInfo{32, nullptr, "RegisterResourceStatisticsName", MakeVersionGate({7,0,0})},
+        FunctionInfo{33, nullptr, "RegisterClientShared", MakeVersionGate({10,0,0})},
+        FunctionInfo{34, nullptr, "GetSocketStatistics", MakeVersionGate({15,0,0})},
+        FunctionInfo{35, nullptr, "NifIoctl", MakeVersionGate({17,0,0})},
+        FunctionInfo{36, nullptr, "Unknown36", MakeVersionGate({18,0,0})},
+        FunctionInfo{37, nullptr, "Unknown37", MakeVersionGate({18,0,0})},
+        FunctionInfo{38, nullptr, "Unknown38", MakeVersionGate({18,0,0})},
+        FunctionInfo{39, nullptr, "Unknown39", MakeVersionGate({20,0,0})},
+        FunctionInfo{40, nullptr, "Unknown40", MakeVersionGate({20,0,0})},
+        FunctionInfo{41, nullptr, "Unknown41", MakeVersionGate({21,0,0})},
+        FunctionInfo{42, nullptr, "Unknown42", MakeVersionGate({21,0,0})},
+        FunctionInfo{43, nullptr, "Unknown43", MakeVersionGate({21,0,0})},
+        FunctionInfo{200, nullptr, "SetThreadCoreMask", MakeVersionGate({15,0,0})},
+        FunctionInfo{201, nullptr, "GetThreadCoreMask", MakeVersionGate({15,0,0})}
+    );
     bool is_user = false;
 };
 
@@ -296,12 +345,41 @@ class BSDCFG final : public ServiceFramework<BSDCFG> {
 public:
     explicit BSDCFG(Core::System& system_, const char *name);
     ~BSDCFG() override;
+
+    std::optional<FunctionInfoBase> FindRequest(u32 key) override {
+        return HandlerTableGenerateWithFind(key, functions);
+    }
+    static constexpr auto functions = CreateStaticMap(
+        FunctionInfo{0, nullptr, "SetIfUp"},
+        FunctionInfo{1, nullptr, "SetIfUpWithEvent"},
+        FunctionInfo{2, nullptr, "CancelIf"},
+        FunctionInfo{3, nullptr, "SetIfDown"},
+        FunctionInfo{4, nullptr, "GetIfState"},
+        FunctionInfo{5, nullptr, "DhcpRenew"},
+        FunctionInfo{6, nullptr, "AddStaticArpEntry"},
+        FunctionInfo{7, nullptr, "RemoveArpEntry"},
+        FunctionInfo{8, nullptr, "LookupArpEntry"},
+        FunctionInfo{9, nullptr, "LookupArpEntry2"},
+        FunctionInfo{10, nullptr, "ClearArpEntries"},
+        FunctionInfo{11, nullptr, "ClearArpEntries2"},
+        FunctionInfo{12, nullptr, "PrintArpEntries"},
+        FunctionInfo{13, nullptr, "Unknown13"},
+        FunctionInfo{14, nullptr, "Unknown14"},
+        FunctionInfo{15, nullptr, "Unknown15"}
+    );
 };
 
 class BSD_NU final : public ServiceFramework<BSD_NU> {
 public:
     explicit BSD_NU(Core::System& system_);
     ~BSD_NU() override;
+
+    std::optional<FunctionInfoBase> FindRequest(u32 key) override {
+        return HandlerTableGenerateWithFind(key, functions);
+    }
+    static constexpr auto functions = CreateStaticMap(
+        FunctionInfo{0, nullptr, "CreateUserService"}
+    );
 };
 
 } // namespace Service::Sockets

@@ -6,27 +6,28 @@
 
 #pragma once
 
-#include <functional>
+#include <deque>
 #include <optional>
 #include <span>
 #include <utility>
+#include <vector>
+
+#include <boost/container/small_vector.hpp>
 
 #include "common/common_types.h"
 #include "video_core/engines/maxwell_3d.h"
+#include "video_core/surface.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
 #include "video_core/texture_cache/types.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
-#include "video_core/texture_cache/accelerated_swizzle.h"
 
 namespace VideoCommon {
 struct SwizzleParameters;
 }
 
 namespace Vulkan {
-
-using VideoCommon::Accelerated::BlockLinearSwizzle3DParams;
 
 class Device;
 class StagingBufferPool;
@@ -60,10 +61,10 @@ class VertexRepackPass final : public ComputePass {
 public:
     VertexRepackPass(const Device& device, Scheduler& scheduler, DescriptorPool& descriptor_pool,
                      StagingBufferPool& staging_pool, ComputePassDescriptorQueue& descriptor_queue);
-    /// Returns nothing when the range exceeds the device limits or the source buffer; the binding
-    /// is then left as is.
-    std::optional<std::pair<VkBuffer, VkDeviceSize>> Assemble(VkBuffer source, u32 offset, u32 size,
-                                                              u64 buffer_size);
+    /// Splits a range over the device limits into several dispatches. Returns nothing only when
+    /// not even one vertex fits them; the caller then keeps the 69-byte layout.
+    std::optional<std::pair<VkBuffer, VkDeviceSize>> Assemble(VkBuffer source, u32 offset,
+                                                              u32 size);
 
 private:
     Scheduler& scheduler;
@@ -100,6 +101,25 @@ public:
     std::pair<VkBuffer, VkDeviceSize> Assemble(
         Tegra::Engines::Maxwell3D::Regs::IndexFormat index_format, u32 num_vertices,
         u32 base_vertex, VkBuffer src_buffer, u32 src_offset, bool is_strip);
+
+private:
+    Scheduler& scheduler;
+    StagingBufferPool& staging_buffer_pool;
+    ComputePassDescriptorQueue& compute_pass_descriptor_queue;
+};
+
+class IndirectQuadsPass final : public ComputePass {
+public:
+    explicit IndirectQuadsPass(const Device& device_, Scheduler& scheduler_,
+                               DescriptorPool& descriptor_pool_,
+                               StagingBufferPool& staging_buffer_pool_,
+                               ComputePassDescriptorQueue& compute_pass_descriptor_queue_);
+    ~IndirectQuadsPass();
+
+    static constexpr u32 COMMAND_WORDS = 5;
+
+    std::pair<VkBuffer, VkDeviceSize> Assemble(u32 num_draws, u32 stride, VkBuffer src_buffer,
+                                               u32 src_offset);
 
 private:
     Scheduler& scheduler;
@@ -144,12 +164,7 @@ public:
     ~ASTCDecoderPass();
 
     void Assemble(Image& image, const StagingBufferRef& map,
-                  std::span<const VideoCommon::SwizzleParameters> swizzles);
-
-    /// Decodes only `layers` of `image` (an initialized array); `map` holds them in order.
-    void AssembleLayers(Image& image, const StagingBufferRef& map,
-                        std::span<const VideoCommon::SwizzleParameters> swizzles,
-                        std::span<const u32> layers);
+                  std::span<const VideoCommon::SwizzleParameters> swizzles, bool reorder);
 
     /// Where a decode writes: an RGBA8 image with a storage view per (host) level.
     struct Target {
@@ -158,10 +173,6 @@ public:
         bool initialized;
         std::function<VkImageView(s32 host_level)> level_view;
         bool wait; ///< Wait for the GPU afterwards (the decoded image itself is sampled).
-        /// When set, the input holds only these layers (in order), each decoded into
-        /// layer_view(host level, layer).
-        std::span<const u32> layers{};
-        std::function<VkImageView(s32 host_level, u32 layer)> layer_view{};
     };
 
     /// Decodes `info`'s ASTC data in `map` into `target`. `skip` leading levels are absent on the
@@ -177,44 +188,72 @@ private:
     MemoryAllocator& memory_allocator;
 };
 
-/// Compresses an RGBA8 image level to BC1 or BC3 blocks in a buffer (bc_encoder.comp).
-class BcEncoderPass final : public ComputePass {
+class BlockLinearUnswizzle2DBufferPass final : public ComputePass {
 public:
-    explicit BcEncoderPass(const Device& device_, Scheduler& scheduler_,
-                           DescriptorPool& descriptor_pool_,
-                           ComputePassDescriptorQueue& compute_pass_descriptor_queue_);
-    ~BcEncoderPass();
+    explicit BlockLinearUnswizzle2DBufferPass(
+        const Device& device_, Scheduler& scheduler_, DescriptorPool& descriptor_pool_,
+        StagingBufferPool& staging_buffer_pool_,
+        ComputePassDescriptorQueue& compute_pass_descriptor_queue_);
+    ~BlockLinearUnswizzle2DBufferPass();
 
-    /// Encodes every layer of one level (`source` is its RGBA8 storage view) into `buffer`,
-    /// `out_offset` bytes past `buffer_offset`; blocks are row-major, layer after layer.
-    void Encode(VkImageView source, u32 width, u32 height, u32 layers, bool bc3, VkBuffer buffer,
-                VkDeviceSize buffer_offset, VkDeviceSize buffer_size, VkDeviceSize out_offset);
+    /// Returns true when the guest layout of the image can be unswizzled by this pass
+    [[nodiscard]] static bool IsSupported(const Image& image);
+
+    /// Unswizzles the block linear guest data of the image, read from a GPU buffer, into a linear
+    /// buffer. Returns the linear buffer and the copies that upload it into the image.
+    std::pair<VkBuffer, boost::container::small_vector<VkBufferImageCopy, 16>> Unswizzle(
+        Image& image, VkBuffer src_buffer, VkDeviceSize src_offset);
 
 private:
     Scheduler& scheduler;
+    StagingBufferPool& staging_buffer_pool;
     ComputePassDescriptorQueue& compute_pass_descriptor_queue;
 };
 
 class BlockLinearUnswizzle3DPass final : public ComputePass {
 public:
-    explicit BlockLinearUnswizzle3DPass(const Device& device_, Scheduler& scheduler_,
-                             DescriptorPool& descriptor_pool_,
-                             StagingBufferPool& staging_buffer_pool_,
-                             ComputePassDescriptorQueue& compute_pass_descriptor_queue_);
-    ~BlockLinearUnswizzle3DPass();
+    explicit PitchUnswizzlePass(const Device& device_, Scheduler& scheduler_,
+                                DescriptorPool& descriptor_pool_,
+                                StagingBufferPool& staging_buffer_pool_,
+                                ComputePassDescriptorQueue& compute_pass_descriptor_queue_);
+    ~PitchUnswizzlePass();
 
-    void Unswizzle(Image& image,
-                   const StagingBufferRef& swizzled,
-                   std::span<const VideoCommon::SwizzleParameters> swizzles,
-                   u32 z_start, u32 z_count);
+    void Unswizzle(Image& image, const StagingBufferRef& map,
+                   std::span<const VideoCommon::SwizzleParameters> swizzles, bool reorder);
 
-    void UnswizzleChunk(
-        Image& image,
-        const StagingBufferRef& swizzled,
-        const VideoCommon::SwizzleParameters& sw,
-        const BlockLinearSwizzle3DParams& params,
-        u32 blocks_x, u32 blocks_y,
-        u32 z_start, u32 z_count);
+private:
+    Scheduler& scheduler;
+    StagingBufferPool& staging_buffer_pool;
+    ComputePassDescriptorQueue& compute_pass_descriptor_queue;
+};
+
+class BlockLinearUnswizzleImage3DPass final : public ComputePass {
+public:
+    explicit BlockLinearUnswizzleImage3DPass(
+        const Device& device_, Scheduler& scheduler_, DescriptorPool& descriptor_pool_,
+        StagingBufferPool& staging_buffer_pool_,
+        ComputePassDescriptorQueue& compute_pass_descriptor_queue_);
+    ~BlockLinearUnswizzleImage3DPass();
+
+    void Unswizzle(Image& image, const StagingBufferRef& map,
+                   std::span<const VideoCommon::SwizzleParameters> swizzles, bool reorder);
+
+private:
+    Scheduler& scheduler;
+    StagingBufferPool& staging_buffer_pool;
+    ComputePassDescriptorQueue& compute_pass_descriptor_queue;
+};
+
+class BlockLinearUnswizzleImage2DPass final : public ComputePass {
+public:
+    explicit BlockLinearUnswizzleImage2DPass(
+        const Device& device_, Scheduler& scheduler_, DescriptorPool& descriptor_pool_,
+        StagingBufferPool& staging_buffer_pool_,
+        ComputePassDescriptorQueue& compute_pass_descriptor_queue_);
+    ~BlockLinearUnswizzleImage2DPass();
+
+    void Unswizzle(Image& image, const StagingBufferRef& map,
+                   std::span<const VideoCommon::SwizzleParameters> swizzles, bool reorder);
 
 private:
     Scheduler& scheduler;

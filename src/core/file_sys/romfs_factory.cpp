@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <memory>
+#include <mutex>
 #include "common/assert.h"
 #include "common/common_types.h"
 #include "common/logging.h"
@@ -19,6 +20,31 @@
 #include "core/loader/loader.h"
 
 namespace FileSys {
+
+namespace {
+std::mutex loose_aoc_mutex;
+std::map<u64, VirtualFile> loose_aoc;
+} // namespace
+
+void SetLooseAddOnContent(std::map<u64, VirtualFile> entries) {
+    std::scoped_lock lock{loose_aoc_mutex};
+    loose_aoc = std::move(entries);
+}
+
+VirtualFile GetLooseAddOnContent(u64 title_id) {
+    std::scoped_lock lock{loose_aoc_mutex};
+    const auto it = loose_aoc.find(title_id);
+    return it != loose_aoc.end() ? it->second : nullptr;
+}
+
+std::vector<u64> ListLooseAddOnContent() {
+    std::scoped_lock lock{loose_aoc_mutex};
+    std::vector<u64> ids;
+    for (const auto& [title_id, file] : loose_aoc) {
+        ids.push_back(title_id);
+    }
+    return ids;
+}
 
 RomFSFactory::RomFSFactory(Loader::AppLoader& app_loader, ContentProvider& provider,
                            Service::FileSystem::FileSystemController& controller)
@@ -39,7 +65,20 @@ void RomFSFactory::SetPackedUpdate(VirtualFile update_raw_file) {
 
 VirtualFile RomFSFactory::OpenCurrentProcess(u64 current_process_title_id) const {
     if (!updatable) {
-        return file;
+        // LOCAL TEST (Zelda): a RomFS with the update already merged (NUP containers) still takes
+        // LayeredFS mods (romfs folders of the title's mods); without, they were never applied.
+        // No update is looked up (no base NCA). Built once.
+        std::scoped_lock lock{layered_mutex};
+        if (!layered_file) {
+            const PatchManager patch_manager{current_process_title_id, filesystem_controller,
+                                             content_provider};
+            layered_file = patch_manager.PatchRomFS(nullptr, file, ContentRecordType::Program,
+                                                    nullptr);
+            if (!layered_file) {
+                layered_file = file;
+            }
+        }
+        return layered_file;
     }
 
     const auto type = ContentRecordType::Program;
@@ -69,6 +108,11 @@ VirtualFile RomFSFactory::OpenPatchedRomFSWithProgramIndex(u64 title_id, u8 prog
 }
 
 VirtualFile RomFSFactory::Open(u64 title_id, StorageId storage, ContentRecordType type) const {
+    if (type == ContentRecordType::Data) {
+        if (auto loose = GetLooseAddOnContent(title_id)) {
+            return loose;
+        }
+    }
     const std::shared_ptr<NCA> res = GetEntry(title_id, storage, type);
     if (res == nullptr) {
         return nullptr;

@@ -83,11 +83,8 @@ Kernel::KEvent* ServiceContext::CreateEvent(std::string&& name) {
 
     // Register the event.
     Kernel::KEvent::Register(kernel, event);
+    LOG_DEBUG(Service, "diag: created service event '{}' at {}", name, static_cast<const void*>(event));
 
-    {
-        std::scoped_lock lk{debug_names_mutex};
-        debug_names[&event->GetReadableEvent()] = name;
-    }
     {
         std::scoped_lock lk{event_names_mutex};
         event_names[event] = std::move(name);
@@ -100,10 +97,6 @@ void ServiceContext::CloseEvent(Kernel::KEvent* event) {
         {
             std::scoped_lock lk{event_names_mutex};
             event_names.erase(event);
-        }
-        {
-            std::scoped_lock lk{debug_names_mutex};
-            debug_names.erase(&event->GetReadableEvent());
         }
         event->GetReadableEvent().Close(kernel);
         event->Close(kernel);

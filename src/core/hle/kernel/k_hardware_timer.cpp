@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
@@ -13,11 +13,10 @@ namespace Kernel {
 
 void KHardwareTimer::Initialize() {
     // Create the timing callback to register with CoreTiming.
-    m_event_type = Core::Timing::CreateEvent("KHardwareTimer::Callback",
-                                             [this](s64, std::chrono::nanoseconds) {
-                                                 this->DoTask();
-                                                 return std::nullopt;
-                                             });
+    m_event_type = m_kernel.System().CreateTimingEvent("KHardwareTimer::Callback", [this](s64, std::chrono::nanoseconds) {
+        this->DoTask();
+        return std::nullopt;
+    });
 }
 
 void KHardwareTimer::Finalize() {

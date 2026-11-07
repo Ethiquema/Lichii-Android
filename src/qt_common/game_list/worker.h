@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
@@ -20,8 +20,9 @@
 
 #include "common/thread.h"
 #include "core/file_sys/registered_cache.h"
-#include "frontend_common/play_time_manager.h"
-#include "qt_common/config/uisettings.h"
+#include "qt_common/uisettings.h"
+#include "yuzu/compatibility_list.h"
+#include "yuzu/play_time_manager.h"
 
 namespace Core {
 class System;

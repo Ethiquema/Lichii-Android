@@ -44,7 +44,9 @@ class GameInfoFragment : Fragment() {
         reenterTransition = MaterialSharedAxis(MaterialSharedAxis.X, false)
 
         // Check for an up-to-date version string
-        args.game.version = GameMetadata.getVersion(args.game.path, true)
+        if (!args.game.isLooseExeFS) {
+            args.game.version = GameMetadata.getVersion(args.game.path, true)
+        }
     }
 
     override fun onCreateView(

@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <optional>
 
@@ -14,6 +15,7 @@
 #include "common/common_types.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/shader_info.h"
+#include "shader_recompiler/exception.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
 #include "video_core/surface.h"
@@ -136,6 +138,7 @@ inline void WriteDescriptorBuffer(const Device& device, const DescriptorBufferLa
 
 [[nodiscard]] inline u32 NumDescriptorEntries(const Shader::Info& info) {
     return Shader::NumDescriptors(info.constant_buffer_descriptors) +
+           static_cast<u32>(Shader::UsesStorageBufferMappings(info)) +
            Shader::NumDescriptors(info.storage_buffers_descriptors) +
            Shader::NumDescriptors(info.texture_buffer_descriptors) +
            Shader::NumDescriptors(info.image_buffer_descriptors) +
@@ -165,6 +168,12 @@ public:
         return !props.bufferlessPushDescriptors || !CanUsePushDescriptor();
     }
 
+    bool CanUseDescriptorBuffer() const noexcept {
+        return device->IsExtDescriptorBufferSupported() && !bindings.empty() &&
+               !CanUsePushDescriptor() &&
+               device->DescriptorBufferProperties().combinedImageSamplerDescriptorSingleArray;
+    }
+
     DescriptorBufferLayout MakeDescriptorBufferLayout(VkDescriptorSetLayout layout) const {
         DescriptorBufferLayout result;
         if (!layout) {
@@ -173,12 +182,12 @@ public:
         const vk::Device& dev = device->GetLogical();
         result.size = dev.GetDescriptorSetLayoutSizeEXT(layout);
         result.bindings.reserve(bindings.size());
-        for (const VkDescriptorSetLayoutBinding& entry : bindings) {
+        for (const VkDescriptorSetLayoutBinding& binding : bindings) {
             result.bindings.push_back(DescriptorBufferBinding{
-                .type = entry.descriptorType,
-                .count = entry.descriptorCount,
-                .offset = dev.GetDescriptorSetLayoutBindingOffsetEXT(layout, entry.binding),
-                .stride = DescriptorSizeForType(*device, entry.descriptorType),
+                .type = binding.descriptorType,
+                .count = binding.descriptorCount,
+                .offset = dev.GetDescriptorSetLayoutBindingOffsetEXT(layout, binding.binding),
+                .stride = DescriptorSizeForType(*device, binding.descriptorType),
             });
         }
         return result;
@@ -273,6 +282,12 @@ public:
         uses_mesh |= (stage & (VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT)) != 0;
 
         Add(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, stage, info.constant_buffer_descriptors);
+        // for extra implicit storage-buffer binding required by mapped-storage-buffer support
+        if (Shader::UsesStorageBufferMappings(info)) {
+            struct Descriptor { u32 count; };
+            const std::array descriptors{Descriptor{1}};
+            Add(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, stage, descriptors);
+        }
         Add(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, stage, info.storage_buffers_descriptors);
         Add(VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, stage, info.texture_buffer_descriptors);
         Add(VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, stage, info.image_buffer_descriptors);
@@ -372,13 +387,40 @@ inline void PushImageDescriptors(TextureCache& texture_cache,
             const VideoCommon::SamplerId sampler_id{*(samplers++)};
             ImageView& image_view{texture_cache.GetImageView(image_view_id)};
             VkImageView vk_image_view{image_view.Handle(desc.type)};
+            if (desc.buffer_source.enabled && image_view.image_id &&
+                (VideoCore::Surface::IsPixelFormatInteger(image_view.format) || vk_image_view == VK_NULL_HANDLE))
+                throw Shader::NotImplementedException("Buffer-backed texture array format or view type");
             if (vk_image_view == VK_NULL_HANDLE) {
                 const VkImageView null_image_view{texture_cache.GetImageView(VideoCommon::NULL_IMAGE_VIEW_ID).Handle(desc.type)};
                 if (null_image_view != VK_NULL_HANDLE) vk_image_view = null_image_view;
             }
             Sampler& sampler{texture_cache.GetSampler(sampler_id)};
-            guest_descriptor_queue.AddSampledImage(vk_image_view,
-                                                   sampler.HandleFor(image_view, desc.is_depth));
+            const bool use_fallback_sampler{sampler.HasAddedAnisotropy() &&
+                                            !image_view.SupportsAnisotropy()};
+            VkSampler vk_sampler{use_fallback_sampler ? sampler.HandleWithDefaultAnisotropy()
+                                                      : sampler.Handle()};
+            if (sampler.HasLinearFiltering() &&
+                VideoCore::Surface::IsPixelFormatInteger(image_view.format)) {
+                vk_sampler = sampler.HandleWithNearestFilter();
+            }
+            if (desc.is_depth && sampler.HasDepthComparison() &&
+                !image_view.SupportsDepthComparison()) {
+                vk_sampler = sampler.HandleWithoutDepthComparison();
+            }
+            const bool srgb_border{sampler.HasSrgbBorderColor() &&
+                                   VideoCore::Surface::IsPixelFormatSRGB(image_view.format)};
+            if (sampler.NeedsSwizzleMapping() && !image_view.HasIdentitySwizzle()) {
+                vk_sampler = sampler.HandleWithSwizzle(image_view.Swizzle(), srgb_border);
+            } else if (srgb_border) {
+                vk_sampler = sampler.HandleWithSrgbBorderColor();
+            }
+            if (sampler.HasMinmaxReduction() && !image_view.SupportsMinmaxFilter()) {
+                vk_sampler = sampler.HandleWithDefaultReduction();
+            }
+            if (sampler.HasCustomBorderColor() && image_view.RequiresBorderColorFormat()) {
+                vk_sampler = sampler.HandleWithDefaultBorderColor();
+            }
+            guest_descriptor_queue.AddSampledImage(vk_image_view, vk_sampler);
             const bool element_rescaled{texture_cache.IsRescaling(image_view)};
             is_rescaled |= element_rescaled;
         }
@@ -393,6 +435,7 @@ inline void PushImageDescriptors(TextureCache& texture_cache,
             if (desc.is_written) {
                 texture_cache.MarkModification(image_view.image_id);
             }
+            const VkImageView vk_image_view{image_view.StorageView(desc.type, desc.format)};
             guest_descriptor_queue.AddImage(vk_image_view);
             const bool element_rescaled{texture_cache.IsRescaling(image_view)};
             is_rescaled |= element_rescaled;

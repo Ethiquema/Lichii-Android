@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -24,8 +27,8 @@ struct BlockLinearSwizzle2DParams {
 };
 
 struct BlockLinearSwizzle3DParams {
-    std::array<u32, 3> origin;
-    std::array<s32, 3> destination;
+    alignas(16) std::array<u32, 3> origin;
+    alignas(16) std::array<s32, 3> destination;
     u32 bytes_per_block_log2;
     u32 slice_size;
     u32 block_size;

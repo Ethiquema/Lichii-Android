@@ -39,16 +39,8 @@ Block::iterator Block::PrependNewInst(iterator insertion_point, Opcode opcode, s
     // just pool it!!! - reason why there is an inline buffer is because many small blocks are created
     // with few instructions due to subpar optimisations on other passes... plus branch-heavy code will
     // hugely benefit from the coherency of faster allocations...
-    IR::Inst* inst;
-    if (inlined_inst.size() < inlined_inst.max_size()) {
-        inlined_inst.emplace_back(opcode);
-        inst = &inlined_inst[inlined_inst.size() - 1];
-    } else {
-        if (pooled_inst.empty() || pooled_inst.back().size() == pooled_inst.back().max_size())
-            pooled_inst.emplace_back();
-        pooled_inst.back().emplace_back(opcode);
-        inst = &pooled_inst.back()[pooled_inst.back().size() - 1];
-    }
+    inlined_inst.emplace_back(opcode);
+    auto* inst = &inlined_inst[inlined_inst.size() - 1];
     DEBUG_ASSERT(args.size() == inst->NumArgs());
     std::for_each(args.begin(), args.end(), [&inst, index = size_t(0)](const auto& arg) mutable {
         inst->SetArg(index, arg);
@@ -61,7 +53,6 @@ void Block::Reset(LocationDescriptor location_) noexcept {
     mcl::intrusive_list<IR::Inst> tmp = {};
     instructions.swap(tmp);
     inlined_inst.clear();
-    pooled_inst.clear();
     cond_failed.reset();
     location = location_;
     end_location = location_;
@@ -69,41 +60,7 @@ void Block::Reset(LocationDescriptor location_) noexcept {
     terminal = std::monostate{};
     cond_failed_cycle_count = 0;
     cycle_count = 0;
-    ASSERT(instructions.size() == 0);
-}
-
-static std::string TerminalToString(const Term::Terminal& terminal_variant) noexcept {
-    // struct : boost::static_visitor<std::string> {
-    //     std::string operator()(const std::monostate&) const {
-    //         return "<invalid>";
-    //     }
-    //     std::string operator()(const Term::ReturnToDispatch&) const {
-    //         return "ReturnToDispatch{}";
-    //     }
-    //     std::string operator()(const Term::LinkBlock& terminal) const {
-    //         return fmt::format("LinkBlock{{{}}}", terminal.next);
-    //     }
-    //     std::string operator()(const Term::LinkBlockFast& terminal) const {
-    //         return fmt::format("LinkBlockFast{{{}}}", terminal.next);
-    //     }
-    //     std::string operator()(const Term::PopRSBHint&) const {
-    //         return "PopRSBHint{}";
-    //     }
-    //     std::string operator()(const Term::FastDispatchHint&) const {
-    //         return "FastDispatchHint{}";
-    //     }
-    //     std::string operator()(const Term::If& terminal) const {
-    //         return fmt::format("If{{{}, {}, {}}}", A64::CondToString(terminal.if_), TerminalToString(terminal.then_), TerminalToString(terminal.else_));
-    //     }
-    //     std::string operator()(const Term::CheckBit& terminal) const {
-    //         return fmt::format("CheckBit{{{}, {}}}", TerminalToString(terminal.then_), TerminalToString(terminal.else_));
-    //     }
-    //     std::string operator()(const Term::CheckHalt& terminal) const {
-    //         return fmt::format("CheckHalt{{{}}}", TerminalToString(terminal.else_));
-    //     }
-    // } visitor;
-    // return boost::apply_visitor(visitor, terminal_variant);
-    return "";
+    DEBUG_ASSERT(instructions.size() == 0);
 }
 
 std::string DumpBlock(const IR::Block& block) noexcept {
@@ -174,8 +131,9 @@ std::string DumpBlock(const IR::Block& block) noexcept {
 
         ret += fmt::format(" (uses: {})", inst.UseCount()) + '\n';
     }
-    ret += "terminal = " + TerminalToString(block.GetTerminal()) + '\n';
-    return ret;
+    return ret + "terminal = " + [](const Term::Terminal&) -> std::string {
+        return "";
+    }(block.GetTerminal()) + '\n';
 }
 
 }  // namespace Dynarmic::IR

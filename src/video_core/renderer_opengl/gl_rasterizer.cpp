@@ -259,6 +259,7 @@ void RasterizerOpenGL::PrepareDraw(bool is_indexed, Func&& draw_func) {
 }
 
 void RasterizerOpenGL::Draw(bool is_indexed, u32 instance_count) {
+    buffer_cache.SetDrawInstanceCount(instance_count);
     PrepareDraw(is_indexed, [this, is_indexed, instance_count](GLenum primitive_mode) {
         const auto& draw_state = maxwell3d->draw_manager.draw_state;
         const GLuint base_instance = GLuint(draw_state.base_instance);
@@ -304,6 +305,7 @@ void RasterizerOpenGL::Draw(bool is_indexed, u32 instance_count) {
 void RasterizerOpenGL::DrawIndirect() {
     const auto& params = maxwell3d->draw_manager.indirect_state;
     buffer_cache.SetDrawIndirect(&params);
+    buffer_cache.SetDrawInstanceCount(0);
     PrepareDraw(params.is_indexed, [this, &params](GLenum primitive_mode) {
         if (params.is_byte_count) {
             const GPUVAddr tfb_object_base_addr = params.indirect_start_address - 4U;
@@ -485,7 +487,6 @@ void RasterizerOpenGL::FlushRegion(DAddr addr, u64 size, VideoCommon::CacheType 
         texture_cache.DownloadMemory(addr, size);
     }
     if ((True(which & VideoCommon::CacheType::BufferCache))) {
-        std::scoped_lock lock{buffer_cache.mutex};
         buffer_cache.DownloadMemory(addr, size);
     }
     if ((True(which & VideoCommon::CacheType::QueryCache))) {
@@ -603,7 +604,7 @@ void RasterizerOpenGL::UnmapMemory(DAddr addr, u64 size) {
     }
     {
         std::scoped_lock lock{buffer_cache.mutex};
-        buffer_cache.WriteMemory(addr, size, false);
+        buffer_cache.UnmapMemory(addr, size);
     }
     shader_cache.OnCacheInvalidation(addr, size);
 }
@@ -615,16 +616,16 @@ void RasterizerOpenGL::ModifyGPUMemory(size_t as_id, GPUVAddr addr, u64 size) {
     }
 }
 
-void RasterizerOpenGL::SignalFence(std::function<void()>&& func) {
-    fence_manager.SignalFence(std::move(func));
+void RasterizerOpenGL::SignalFence(std::function<void()>&& func, bool ordered) {
+    fence_manager.SignalFence(std::move(func), ordered);
 }
 
 void RasterizerOpenGL::SyncOperation(std::function<void()>&& func) {
     fence_manager.SyncOperation(std::move(func));
 }
 
-void RasterizerOpenGL::SignalSyncPoint(u32 value) {
-    fence_manager.SignalSyncPoint(value);
+void RasterizerOpenGL::SignalSyncPoint(u32 value, u32 count) {
+    fence_manager.SignalSyncPoint(value, count);
 }
 
 void RasterizerOpenGL::SignalReference() {
@@ -724,7 +725,7 @@ void RasterizerOpenGL::AccelerateInlineToMemory(GPUVAddr address, size_t copy_si
     }
     gpu_memory->WriteBlockUnsafe(address, memory.data(), copy_size);
     {
-        std::unique_lock lock{buffer_cache.mutex};
+        std::unique_lock<std::recursive_mutex> lock{buffer_cache.mutex};
         if (!buffer_cache.InlineMemory(*cpu_addr, copy_size, memory)) {
             buffer_cache.WriteMemory(*cpu_addr, copy_size);
         }

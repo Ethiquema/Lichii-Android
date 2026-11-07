@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "shader_recompiler/frontend/ampere/control_flow.h"
 #include "common/bit_field.h"
 #include "common/common_types.h"
 #include "shader_recompiler/frontend/maxwell/translate/impl/impl.h"
@@ -20,6 +21,10 @@ enum class LocalScope : u64 {
 } // Anonymous namespace
 
 void TranslatorVisitor::MEMBAR(u64 inst) {
+    if ((inst & ~Ampere::PredicateMask) == Ampere::WarpSync) {
+        ir.SubgroupBarrier();
+        return;
+    }
     union {
         u64 raw;
         BitField<8, 2, LocalScope> scope;
@@ -35,6 +40,12 @@ void TranslatorVisitor::MEMBAR(u64 inst) {
 void TranslatorVisitor::DEPBAR(u64) {
     // DEPBAR is a no-op
 }
+
+void TranslatorVisitor::CCTL(u64) {}
+
+void TranslatorVisitor::CCTLL(u64) {}
+
+void TranslatorVisitor::CCTLT(u64) {}
 
 void TranslatorVisitor::BAR(u64 insn) {
     enum class Mode {

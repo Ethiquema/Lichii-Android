@@ -91,6 +91,14 @@
     <addaction name="action_Configure"/>
     <addaction name="action_Configure_Current_Game"/>
    </widget>
+    <widget class="QMenu" name="menu_Cheats">
+     <property name="visible">
+      <bool>false</bool>
+     </property>
+     <property name="title">
+      <string>&amp;Cheats</string>
+     </property>
+    </widget>
    <widget class="QMenu" name="menu_View">
     <property name="title">
      <string>&amp;View</string>
@@ -220,6 +228,7 @@
     <addaction name="menuInstall_Firmware"/>
     <addaction name="action_Verify_installed_contents"/>
     <addaction name="action_Data_Manager"/>
+    <addaction name="action_Download_Override_Settings"/>
     <addaction name="separator"/>
     <addaction name="menu_cabinet_applet"/>
     <addaction name="menu_Applets"/>
@@ -232,7 +241,6 @@
     <property name="title">
      <string>&amp;Help</string>
     </property>
-    <addaction name="action_Report_Compatibility"/>
     <addaction name="action_Open_Mods_Page"/>
     <addaction name="action_Open_UserHandbook"/>
     <addaction name="separator"/>
@@ -241,6 +249,7 @@
    </widget>
    <addaction name="menu_File"/>
    <addaction name="menu_Emulation"/>
+   <addaction name="menu_Cheats"/>
    <addaction name="menu_View"/>
    <addaction name="menu_Tools"/>
    <addaction name="menu_Multiplayer"/>
@@ -561,6 +570,11 @@
   <action name="action_Data_Manager">
    <property name="text">
     <string>&amp;Data Manager</string>
+   </property>
+  </action>
+  <action name="action_Download_Override_Settings">
+   <property name="text">
+    <string>Download &amp;Override Settings</string>
    </property>
   </action>
   <action name="action_Tree_View">

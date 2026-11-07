@@ -31,11 +31,12 @@ static const std::map<Settings::AntiAliasing, QString> anti_aliasing_texts_map =
     {Settings::AntiAliasing::None, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "None"))},
     {Settings::AntiAliasing::Fxaa, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "FXAA"))},
     {Settings::AntiAliasing::Smaa, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "SMAA"))},
+    {Settings::AntiAliasing::Ssaa, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "SSAA"))},
 };
 
 static const std::map<Settings::FrameGenType, QString> frame_gen_type_texts_map = {
     {Settings::FrameGenType::Lsfg, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "LSFG"))},
-    {Settings::FrameGenType::Fsr3, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "Optical Flow"))},
+    {Settings::FrameGenType::Fsr3, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "FSR 3"))},
 };
 
 static const std::map<Settings::ScalingFilter, QString> scaling_filter_texts_map = {
@@ -55,12 +56,12 @@ static const std::map<Settings::ScalingFilter, QString> scaling_filter_texts_map
     {Settings::ScalingFilter::Lanczos, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "Lanczos"))},
     {Settings::ScalingFilter::ScaleForce,
      QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "ScaleForce"))},
-    {Settings::ScalingFilter::Fsr, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "FSR 1"))},
+    {Settings::ScalingFilter::Fsr, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "FSR"))},
     {Settings::ScalingFilter::Area, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "Area"))},
     {Settings::ScalingFilter::Mmpx, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "MMPX"))},
     {Settings::ScalingFilter::Sgsr, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "SGSR"))},
     {Settings::ScalingFilter::SgsrEdge, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "SGSR EdgeDir"))},
-    {Settings::ScalingFilter::Fsr3, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "FSR 1 Soft"))},
+    {Settings::ScalingFilter::Fsr3, QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "FSR 3"))},
 };
 
 static const std::map<Settings::ConsoleMode, QString> use_docked_mode_texts_map = {

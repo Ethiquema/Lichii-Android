@@ -26,6 +26,9 @@ class WindowSystem;
 enum class LaunchType {
     FrontendInitiated,
     ApplicationInitiated,
+    // Special masquerade for AMS + uLaunch CFW
+    FrontendUlaunchInitiated = 0x800,
+    FrontendUmenuInitiated,
 };
 
 struct FrontendAppletParameters {

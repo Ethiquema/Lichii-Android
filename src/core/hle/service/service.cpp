@@ -9,27 +9,24 @@
 #include <tuple>
 #include <mutex>
 #include <map>
-#include <memory>
-#include <set>
-#include <string>
-#include <string_view>
 #include <chrono>
-#include <algorithm>
 #include <cstdlib>
+#include <limits>
 #include <fmt/ranges.h>
 #include "common/assert.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/hle/ipc.h"
-#include "core/hle/kernel/k_event.h"
+#include "core/hle/kernel/k_process.h"
+#include "core/hle/kernel/k_thread.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/service/ipc_helpers.h"
-#include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/service.h"
 #include "core/hle/service/nx2_stub_interface.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/reporter.h"
+#include "frontend_common/firmware_manager.h"
 
 namespace Service {
 
@@ -55,75 +52,6 @@ ServiceFrameworkBase::ServiceFrameworkBase(Core::System& system_, const char* se
 ServiceFrameworkBase::~ServiceFrameworkBase() {
     // Wait for other threads to release access before destroying
     const auto guard = ServiceFrameworkBase::LockService();
-    if (stub_event) {
-        stub_context->CloseEvent(stub_event);
-    }
-}
-
-namespace {
-
-// Callers read the reply words they expect without checking how many were written, so an empty
-// reply hands them the request's leftover words as data (an HDR output format, a refresh rate, a
-// device id). Stub replies carry this many zeroed words.
-constexpr u32 StubZeroedWords = 32;
-
-void PushStubZeroes(IPC::ResponseBuilder& rb) {
-    for (u32 i = 0; i < StubZeroedWords; ++i) {
-        rb.Push<u32>(0);
-    }
-}
-
-} // namespace
-
-bool ServiceFrameworkBase::StubAllowed(HLERequestContext& ctx) {
-    static const bool env_auto_stub = std::getenv("EDEN_NX2_AUTO_STUB") != nullptr;
-    const auto* const caller = ctx.GetThread().GetOwnerProcess();
-    if (Settings::values.use_auto_stub || env_auto_stub ||
-        std::string_view{service_name}.starts_with(Nx2StubPrefix) ||
-        (caller != nullptr && caller->IsSwitch2())) {
-        // Logged once per command: these are still unimplemented.
-        static std::mutex mutex;
-        static std::set<std::pair<std::string_view, u32>> logged;
-        std::scoped_lock lk{mutex};
-        if (logged.emplace(service_name, ctx.GetCommand()).second) {
-            LOG_WARNING(Service, "(STUBBED) {}::{} (placeholder reply)", service_name, ctx.GetCommand());
-        }
-        return true;
-    }
-    const auto& table = ctx.IsTipc() ? handlers_tipc : handlers;
-    const auto it = table.find(ctx.GetCommand());
-    ReportUnimplementedFunction(ctx, it == table.end() ? nullptr : &it->second);
-    return false;
-}
-
-void ServiceFrameworkBase::StubReplyZeroed(HLERequestContext& ctx) {
-    if (!StubAllowed(ctx)) {
-        return;
-    }
-    IPC::ResponseBuilder rb{ctx, 2 + StubZeroedWords};
-    rb.Push(ResultSuccess);
-    PushStubZeroes(rb);
-}
-
-void ServiceFrameworkBase::StubReplyEvent(HLERequestContext& ctx) {
-    if (!StubAllowed(ctx)) {
-        return;
-    }
-    if (!stub_event) {
-        stub_context = std::make_unique<KernelHelpers::ServiceContext>(system, service_name);
-        stub_event = stub_context->CreateEvent(fmt::format("{}:StubEvent", service_name));
-    }
-    IPC::ResponseBuilder rb{ctx, 2 + StubZeroedWords, 1, 0};
-    rb.Push(ResultSuccess);
-    PushStubZeroes(rb);
-    rb.PushCopyObjects(ctx, stub_event->GetReadableEvent());
-}
-
-void ServiceFrameworkBase::StubReplyInterface(HLERequestContext& ctx) {
-    if (!StubAllowed(ctx)) {
-        return;
-    }
-    ReturnNx2StubInterface(system, ctx, service_name);
 }
 
 void ServiceFrameworkBase::RegisterHandlersBase(const FunctionInfoBase* functions, std::size_t n) {
@@ -156,15 +84,14 @@ void ServiceFrameworkBase::ReportUnimplementedFunction(HLERequestContext& ctx,
         static std::set<std::pair<std::string, u32>> reported;
         std::scoped_lock lk{reported_mutex};
         if (!reported.emplace(service_name, ctx.GetCommand()).second) {
-            IPC::ResponseBuilder rb{ctx, 2 + StubZeroedWords};
+            IPC::ResponseBuilder rb{ctx, 2};
             rb.Push(ResultSuccess);
-            PushStubZeroes(rb);
             return;
         }
     }
 
     auto cmd_buf = ctx.CommandBuffer();
-    std::string function_name = info == nullptr ? "<unknown>" : info->name;
+    std::string function_name = bool(info) ? info->name : "<unknown>";
 
     fmt::memory_buffer buf;
     fmt::format_to(std::back_inserter(buf), "function '{}({})': port='{}' cmd_buf={{[0]={:#x}", ctx.GetCommand(), function_name, service_name, cmd_buf[0]);
@@ -174,21 +101,66 @@ void ServiceFrameworkBase::ReportUnimplementedFunction(HLERequestContext& ctx,
         fmt::format_to(std::back_inserter(buf), ", [{}]={:#x}", i, cmd_buf[i]);
     buf.push_back('}');
 
+    if (ctx.GetThread().GetOwnerProcess()->UsesPAuthReturns()) {
+        const auto& context = ctx.GetThread().GetContext();
+        LOG_DEBUG(Service, "Unsupported IPC caller pc={:#x}, lr={:#x}, sp={:#x}, fp={:#x}",
+                  context.pc, context.lr, context.sp, context.fp);
+        u64 frame = context.fp;
+        for (u32 depth = 0; depth < 8 && frame != 0; ++depth) {
+            if (frame > (std::numeric_limits<u64>::max)() - 15 ||
+                !ctx.GetMemory().IsValidVirtualAddress(frame) ||
+                !ctx.GetMemory().IsValidVirtualAddress(frame + 15)) {
+                break;
+            }
+            const u64 next = ctx.GetMemory().Read64(frame);
+            LOG_DEBUG(Service, "Unsupported IPC frame {}: return={:#x}", depth,
+                      ctx.GetMemory().Read64(frame + 8));
+            if (next <= frame) {
+                break;
+            }
+            frame = next;
+        }
+    }
     system.GetReporter().SaveUnimplementedFunctionReport(ctx, ctx.GetCommand(), function_name, service_name);
     UNIMPLEMENTED_MSG("Unknown / unimplemented {}", fmt::to_string(buf));
-    if (auto_stub) {
-        LOG_WARNING(Service, "Using auto stub fallback (repeats of this command are not logged)");
-        IPC::ResponseBuilder rb{ctx, 2 + StubZeroedWords};
+    // EDEN_NX2_AUTO_STUB=1 auto-stubs every unknown command without touching the config. Switch 2
+    // programs are always auto-stubbed: they still call many commands nobody has implemented.
+    static const bool env_auto_stub = std::getenv("EDEN_NX2_AUTO_STUB") != nullptr;
+    const auto* const caller = ctx.GetThread().GetOwnerProcess();
+    if (Settings::values.use_auto_stub || env_auto_stub ||
+        std::string_view{service_name}.starts_with(Nx2StubPrefix) ||
+        (caller != nullptr && caller->IsSwitch2())) {
+        LOG_WARNING(Service, "Using auto stub fallback!");
+        IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
-        PushStubZeroes(rb);
     }
 }
 
+[[nodiscard]] static bool VersionGateCheck(Core::System& system, u32 vg) {
+    const auto fw = FirmwareManager::GetFirmwareVersion(system).first;
+    u32 const c_maj = fw.major;
+    u32 const c_min = fw.minor;
+    u32 const c_pat = fw.micro;
+    u32 const cg = (c_pat << 0) | (c_min << 4) | (c_maj << 8);
+    u32 const sg = (vg >> 16) & 0xffff;
+    u32 const ug = vg & 0xffff;
+    // feature available after current
+    if (sg && cg < sg)
+        return false;
+    // feature until xxx (0 = up to current)
+    return ug ? ug >= cg : true;
+}
+
 void ServiceFrameworkBase::InvokeRequest(HLERequestContext& ctx) {
-    auto it = handlers.find(ctx.GetCommand());
-    FunctionInfoBase const* info = it == handlers.end() ? nullptr : &it->second;
-    if (info == nullptr || info->handler_callback == nullptr)
-        return ReportUnimplementedFunction(ctx, info);
+    const bool is_cmd_read = ctx.GetCommand() == 0;
+    auto const info = FindRequest(ctx.GetCommand());
+    if (!info.has_value() || info->handler_callback == nullptr)
+        return ReportUnimplementedFunction(ctx, &*info, false);
+
+    if (!VersionGateCheck(system, info->version_gating))
+    {
+        return ReportUnimplementedFunction(ctx, &*info, true);
+    }
 
     LOG_TRACE(Service, "{}", MakeFunctionString(info->name, GetServiceName(), ctx.CommandBuffer()));
     // EDEN_NX2_IPC_TRACE=1 logs every dispatched command and the result word it returned.
@@ -197,26 +169,24 @@ void ServiceFrameworkBase::InvokeRequest(HLERequestContext& ctx) {
         LOG_INFO(Service, "ipc {}::{} ({})", service_name, ctx.GetCommand(), info->name);
     }
     handler_invoker(this, info->handler_callback, ctx);
-    if (ipc_trace) {
-        // Response layout: [0..1] header, then 'SFCO', version, result.
-        const auto* cmd_buf = ctx.CommandBuffer();
-        for (int i = 0; i < 12; ++i) {
-            if (cmd_buf[i] == 0x4F434653) {  // "SFCO"
-                if (cmd_buf[i + 2] != 0) {
-                    LOG_INFO(Service, "ipc {}::{} -> result {:#x}", service_name, ctx.GetCommand(),
-                             cmd_buf[i + 2]);
-                }
-                break;
-            }
+    if (is_i_storage && is_cmd_read) {
+        const auto* const process = ctx.GetThread().GetOwnerProcess();
+        if (process != nullptr && system.IsNVDECActiveForProcess(process->GetId())) {
+            std::this_thread::sleep_for(std::chrono::microseconds{600});
         }
     }
 }
 
 void ServiceFrameworkBase::InvokeRequestTipc(HLERequestContext& ctx) {
-    auto it = handlers_tipc.find(ctx.GetCommand());
-    FunctionInfoBase const* info = it == handlers_tipc.end() ? nullptr : &it->second;
-    if (info == nullptr || info->handler_callback == nullptr)
-        return ReportUnimplementedFunction(ctx, info);
+    auto const info = FindRequestTipc(ctx.GetCommand());
+    if (!info.has_value() || info->handler_callback == nullptr)
+        return ReportUnimplementedFunction(ctx, &*info, false);
+
+    LOG_ERROR(Service, "check for {} version_gating: {}", info->name, info->version_gating);
+    if (!VersionGateCheck(system, info->version_gating))
+    {
+        return ReportUnimplementedFunction(ctx, &*info, true);
+    }
 
     LOG_TRACE(Service, "{}", MakeFunctionString(info->name, GetServiceName(), ctx.CommandBuffer()));
     static const bool ipc_trace = std::getenv("EDEN_NX2_IPC_TRACE") != nullptr;
@@ -265,22 +235,9 @@ void CountRequest(const std::string& service, u32 command, u32 type, u32 result)
 Result ServiceFrameworkBase::HandleSyncRequest(Kernel::KServerSession& session,
                                                HLERequestContext& ctx) {
     const auto guard = LockService();
-    SCOPE_EXIT {
-        const auto* cmd_buf = ctx.CommandBuffer();
-        u32 result_word = 0;
-        const u32 type = static_cast<u32>(ctx.GetCommandType());
-        if (type >= 16) {
-            result_word = cmd_buf[2];
-        } else {
-            for (int i = 0; i < 12; ++i) {
-                if (cmd_buf[i] == 0x4F434653) { // "SFCO"
-                    result_word = cmd_buf[i + 2];
-                    break;
-                }
-            }
-        }
-        CountRequest(service_name, ctx.GetCommand(), type, result_word);
-    };
+    const bool diag_account_lock = std::getenv("EDEN_DIAG_THREAD_DUMP") != nullptr &&
+                                   std::string_view{service_name} == "acc:u0" &&
+                                   ctx.GetCommand() == 150;
 
     Result result = ResultSuccess;
 
@@ -299,7 +256,15 @@ Result ServiceFrameworkBase::HandleSyncRequest(Kernel::KServerSession& session,
     }
     case IPC::CommandType::RequestWithContext:
     case IPC::CommandType::Request: {
+        if (diag_account_lock) {
+            LOG_INFO(Service, "diag: acc:u0 cmd150 before handler");
+            system.DumpGuestThreads();
+        }
         InvokeRequest(ctx);
+        if (diag_account_lock) {
+            LOG_INFO(Service, "diag: acc:u0 cmd150 after handler");
+            system.DumpGuestThreads();
+        }
         break;
     }
     default:
@@ -315,7 +280,15 @@ Result ServiceFrameworkBase::HandleSyncRequest(Kernel::KServerSession& session,
     // If emulation was shutdown, we are closing service threads, do not write the response back to
     // memory that may be shutting down as well.
     if (system.IsPoweredOn()) {
-        ctx.WriteToOutgoingCommandBuffer();
+        if (diag_account_lock) {
+            LOG_INFO(Service, "diag: acc:u0 cmd150 before outgoing write");
+        }
+        const Result write_result = ctx.WriteToOutgoingCommandBuffer();
+        if (diag_account_lock) {
+            LOG_INFO(Service, "diag: acc:u0 cmd150 after outgoing write result={:#x}",
+                     write_result.raw);
+            system.DumpGuestThreads();
+        }
     }
 
     return result;

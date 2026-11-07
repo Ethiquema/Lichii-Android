@@ -23,25 +23,6 @@ namespace Core::Timing {
 
 constexpr s64 MAX_SLICE_LENGTH = 10000;
 
-constexpr u32 CPU_CLOCK_BASE_MHZ = 1020;
-constexpr u32 CPU_CLOCK_BOOST_MHZ = 1734;
-constexpr u32 CPU_CLOCK_OVERCLOCK_MHZ = 2040;
-
-constexpr u32 CpuClockTargetMhz(Settings::CpuClock clock) {
-    switch (clock) {
-    case Settings::CpuClock::Boost:
-        return CPU_CLOCK_BOOST_MHZ;
-    case Settings::CpuClock::Overclock:
-        return CPU_CLOCK_OVERCLOCK_MHZ;
-    default:
-        return CPU_CLOCK_BASE_MHZ;
-    }
-}
-
-std::shared_ptr<EventType> CreateEvent(std::string name, TimedCallback&& callback) {
-    return std::make_shared<EventType>(std::move(callback), std::move(name));
-}
-
 struct CoreTiming::Event {
     s64 time;
     u64 fifo_order;
@@ -51,11 +32,10 @@ struct CoreTiming::Event {
 
     // Sort by time, unless the times are the same, in which case sort by
     // the order added to the queue
-    friend bool operator>(const Event& left, const Event& right) {
+    friend bool operator>(const Event& left, const Event& right) noexcept {
         return std::tie(left.time, left.fifo_order) > std::tie(right.time, right.fifo_order);
     }
-
-    friend bool operator<(const Event& left, const Event& right) {
+    friend bool operator<(const Event& left, const Event& right) noexcept {
         return std::tie(left.time, left.fifo_order) < std::tie(right.time, right.fifo_order);
     }
 };
@@ -76,8 +56,6 @@ void CoreTiming::Initialize(std::function<void()>&& on_thread_init_) {
             Common::SetCurrentThreadPriority(Common::ThreadPriority::VeryHigh);
             Common::SetCurrentThreadToPerformanceCores();
             on_thread_init();
-            has_started = true;
-
             // base frequency in MHz: 1ns (10^-9) = 1GHz (10^9)
             while (!stop_token.stop_requested()) {
                 while (!paused && !stop_token.stop_requested()) {
@@ -93,8 +71,8 @@ void CoreTiming::Initialize(std::function<void()>&& on_thread_init_) {
                         // continue.
                         wait_set = true;
                         event.Wait();
+                        wait_set = false;
                     }
-                    wait_set = false;
                 }
                 paused_set = true;
                 pause_event.Wait();
@@ -160,39 +138,28 @@ void CoreTiming::ScheduleEvent(std::chrono::nanoseconds ns_into_future,
     event.Set();
 }
 
-void CoreTiming::ScheduleLoopingEvent(std::chrono::nanoseconds start_time,
-                                      std::chrono::nanoseconds resched_time,
-                                      const std::shared_ptr<EventType>& event_type,
-                                      bool absolute_time) {
+void CoreTiming::ScheduleLoopingEvent(std::chrono::nanoseconds start_time, std::chrono::nanoseconds resched_time, const std::shared_ptr<EventType>& event_type, bool absolute_time) {
     {
         std::scoped_lock scope{basic_lock};
         const auto next_time{absolute_time ? start_time : GetGlobalTimeNs() + start_time};
-
-        auto h{event_queue.emplace(
-            Event{next_time.count(), event_fifo_id++, event_type, resched_time.count()})};
+        auto h = event_queue.emplace(Event{next_time.count(), event_fifo_id++, event_type, resched_time.count()});
         (*h).handle = h;
     }
-
     event.Set();
 }
 
-void CoreTiming::UnscheduleEvent(const std::shared_ptr<EventType>& event_type,
-                                 UnscheduleEventType type) {
+void CoreTiming::UnscheduleEvent(const std::shared_ptr<EventType>& event_type, UnscheduleEventType type) {
     {
         std::scoped_lock lk{basic_lock};
-
         std::vector<heap_t::handle_type> to_remove;
-        for (auto itr = event_queue.begin(); itr != event_queue.end(); itr++) {
-            const Event& e = *itr;
+        for (auto it = event_queue.begin(); it != event_queue.end(); it++) {
+            auto const& e = *it;
             if (e.type.lock().get() == event_type.get()) {
-                to_remove.push_back(itr->handle);
+                to_remove.push_back(it->handle);
             }
         }
-
-        for (auto& h : to_remove) {
+        for (auto& h : to_remove)
             event_queue.erase(h);
-        }
-
         event_type->sequence_number++;
     }
 
@@ -203,16 +170,15 @@ void CoreTiming::UnscheduleEvent(const std::shared_ptr<EventType>& event_type,
 }
 
 static u64 GetNextTickCount(u64 next_ticks) {
-    if (Settings::values.use_custom_cpu_ticks.GetValue()) {
+    if (Settings::values.use_custom_cpu_ticks.GetValue())
         return Settings::values.cpu_ticks.GetValue();
-    }
     return next_ticks;
 }
 
 void CoreTiming::AddTicks(u64 ticks_to_add) {
     const u64 ticks = GetNextTickCount(ticks_to_add);
     cpu_ticks += ticks;
-    downcount -= static_cast<s64>(ticks);
+    downcount -= s64(ticks);
 }
 
 void CoreTiming::Idle() {
@@ -287,35 +253,24 @@ std::optional<s64> CoreTiming::Advance() {
                     next_time = pause_end_time + next_schedule_time;
                 }
 
-                event_queue.update(evt.handle, Event{next_time, event_fifo_id++, evt.type,
-                                                     next_schedule_time, evt.handle});
+                event_queue.update(evt.handle, Event{next_time, event_fifo_id++, evt.type, next_schedule_time, evt.handle});
             }
         }
 
         global_timer = GetGlobalTimeNs().count();
     }
 
-    if (!event_queue.empty()) {
-        return event_queue.top().time;
-    } else {
-        return std::nullopt;
-    }
+    return event_queue.empty() ? std::optional<s64>{} : event_queue.top().time;
 }
 
 void CoreTiming::Reset() {
     paused = true;
-    // Request the stop before waking the thread: woken first, it could take the wake-up, see no
-    // stop request yet, and go back to waiting on pause_event for good (the join below then hung
-    // the frontend at boot).
     if (timer_thread.joinable()) {
         timer_thread.request_stop();
-    }
-    pause_event.Set();
-    event.Set();
-    if (timer_thread.joinable()) {
+        pause_event.Set();
+        event.Set();
         timer_thread.join();
     }
-    has_started = false;
 }
 
 /// @brief Returns current time in nanoseconds.
@@ -331,11 +286,5 @@ std::chrono::microseconds CoreTiming::GetGlobalTimeUs() const noexcept {
         ? Common::g_wall_clock.GetTimeUS()
         : std::chrono::microseconds{Common::WallClock::CPUTickToUS(cpu_ticks)};
 }
-
-#ifdef _WIN32
-void CoreTiming::SetTimerResolutionNs(std::chrono::nanoseconds ns) {
-    timer_resolution_ns = ns.count();
-}
-#endif
 
 } // namespace Core::Timing

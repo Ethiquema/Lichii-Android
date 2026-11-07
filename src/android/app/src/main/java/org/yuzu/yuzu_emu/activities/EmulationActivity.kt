@@ -115,10 +115,6 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         mainHandler.postDelayed(romSwapStopTimeoutRunnable, ROM_SWAP_STOP_TIMEOUT_MS)
     }
 
-    override fun attachBaseContext(base: Context) {
-        super.attachBaseContext(YuzuApplication.applyLanguage(base))
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         Log.gameLaunched = true
         ThemeHelper.setTheme(this)
@@ -849,7 +845,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
 
         fun launch(activity: AppCompatActivity, game: Game) {
             val launcher = Intent(activity, EmulationActivity::class.java)
-            launcher.putExtra(EXTRA_SELECTED_GAME, game)
+            launcher.putExtra("game", game) // Use "game" to match navigation argus
             activity.startActivity(launcher)
         }
 

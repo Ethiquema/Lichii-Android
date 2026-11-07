@@ -37,6 +37,11 @@ std::array<float, 4> TSCEntry::SrgbBorderColor() const noexcept {
             SrgbToLinear(srgb_border_color_b), border_color[3]};
 }
 
+std::array<float, 4> TSCEntry::SrgbBorderColor() const noexcept {
+    return {SrgbToLinear(srgb_border_color_r), SrgbToLinear(srgb_border_color_g),
+            SrgbToLinear(srgb_border_color_b), border_color[3]};
+}
+
 float TSCEntry::MaxAnisotropy() const noexcept {
     const bool is_suitable_mipmap_filter = mipmap_filter != TextureMipmapFilter::None;
     const bool has_regular_lods = min_lod_clamp == 0 && max_lod_clamp >= 256;

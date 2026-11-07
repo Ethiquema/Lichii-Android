@@ -7,12 +7,7 @@
 #pragma once
 
 #include <memory>
-#include "video_core/macro_memo.h"
 #include "video_core/macro_turing.h"
-
-namespace Tegra {
-class TuringMacroJit;
-}
 #include <span>
 #include <variant>
 #include <vector>
@@ -230,8 +225,12 @@ struct MacroEngine {
     // Store the uploaded macro code to compile them when they're called.
     inline void AddCode(u32 method, u32 data) noexcept {
         if (native_turing) {
-            if (native_write_offset < native_code.size()) native_code[native_write_offset++] = data;
-            ++native_code_generation;
+            if (native_write_offset < native_code.size()) {
+                const auto instruction = native_write_offset / 3;
+                native_code[native_write_offset++] = data;
+                native_decoded_code[instruction] = TuringMacroInterpreter::Decode(
+                    std::span<const u32, 3>{native_code.data() + instruction * 3, 3});
+            }
             return;
         }
         uploaded_macro_code[method].push_back(data);

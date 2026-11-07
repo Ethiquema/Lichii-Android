@@ -17,6 +17,7 @@
 #include "core/file_sys/nca_metadata.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/registered_cache.h"
+#include "core/file_sys/romfs_factory.h"
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/service/aoc/addon_content_manager.h"
 #include "core/hle/service/aoc/purchase_event_manager.h"
@@ -27,6 +28,34 @@
 #include "core/loader/loader.h"
 
 namespace Service::AOC {
+
+std::optional<ServiceFrameworkBase::FunctionInfoBase> IAddOnContentManager::FindRequest(u32 key) {
+    static constexpr auto functions = CreateStaticMap(
+        FunctionInfo{0, nullptr, "CountAddOnContentByApplicationId"},
+        FunctionInfo{1, nullptr, "ListAddOnContentByApplicationId"},
+        FunctionInfo{2, D<&IAddOnContentManager::CountAddOnContent>, "CountAddOnContent"},
+        FunctionInfo{3, D<&IAddOnContentManager::ListAddOnContent>, "ListAddOnContent"},
+        FunctionInfo{4, nullptr, "GetAddOnContentBaseIdByApplicationId"},
+        FunctionInfo{5, D<&IAddOnContentManager::GetAddOnContentBaseId>, "GetAddOnContentBaseId"},
+        FunctionInfo{6, nullptr, "PrepareAddOnContentByApplicationId"},
+        FunctionInfo{7, D<&IAddOnContentManager::PrepareAddOnContent>, "PrepareAddOnContent"},
+        FunctionInfo{8, D<&IAddOnContentManager::GetAddOnContentListChangedEvent>, "GetAddOnContentListChangedEvent"},
+        FunctionInfo{9, nullptr, "GetAddOnContentLostErrorCode"},
+        FunctionInfo{10, D<&IAddOnContentManager::GetAddOnContentListChangedEventWithProcessId>, "GetAddOnContentListChangedEventWithProcessId"},
+        FunctionInfo{11, D<&IAddOnContentManager::NotifyMountAddOnContent>, "NotifyMountAddOnContent"},
+        FunctionInfo{12, D<&IAddOnContentManager::NotifyUnmountAddOnContent>, "NotifyUnmountAddOnContent"},
+        FunctionInfo{13, nullptr, "IsAddOnContentMountedForDebug"},
+        FunctionInfo{50, D<&IAddOnContentManager::CheckAddOnContentMountStatus>, "CheckAddOnContentMountStatus"},
+        FunctionInfo{100, D<&IAddOnContentManager::CreateEcPurchasedEventManager>, "CreateEcPurchasedEventManager"},
+        FunctionInfo{101, D<&IAddOnContentManager::CreatePermanentEcPurchasedEventManager>, "CreatePermanentEcPurchasedEventManager"},
+        FunctionInfo{110, nullptr, "CreateContentsServiceManager"},
+        FunctionInfo{200, nullptr, "SetRequiredAddOnContentsOnContentsAvailabilityTransition"},
+        FunctionInfo{300, nullptr, "SetupHostAddOnContent"},
+        FunctionInfo{301, nullptr, "GetRegisteredAddOnContentPath"},
+        FunctionInfo{302, nullptr, "UpdateCachedList"}
+    );
+    return HandlerTableGenerateWithFind(key, functions);
+}
 
 static bool CheckAOCTitleIDMatchesBase(u64 title_id, u64 base) {
     return FileSys::GetBaseTitleID(title_id) == base;
@@ -51,41 +80,33 @@ static std::vector<u64> AccumulateAOCTitleIDs(Core::System& system) {
                        Loader::ResultStatus::Success;
             }),
         add_on_content.end());
+    for (const u64 tid : FileSys::ListLooseAddOnContent()) {
+        if (std::find(add_on_content.begin(), add_on_content.end(), tid) == add_on_content.end()) {
+            add_on_content.push_back(tid);
+        }
+    }
+    return add_on_content;
+}
+
+// The installed add-on content and the add-on content the application's own file carries (a NUP
+// container's add-on packages), which the loader knows only once the application is loaded.
+static std::vector<u64> AllAOCTitleIDs(Core::System& system, const std::vector<u64>& installed) {
+    std::vector<u64> add_on_content = installed;
+    std::vector<u64> carried;
+    if (system.GetAppLoader().ReadAddOnTitleIds(carried) == Loader::ResultStatus::Success) {
+        for (const u64 title_id : carried) {
+            if (std::find(add_on_content.begin(), add_on_content.end(), title_id) ==
+                add_on_content.end()) {
+                add_on_content.push_back(title_id);
+            }
+        }
+    }
     return add_on_content;
 }
 
 IAddOnContentManager::IAddOnContentManager(Core::System& system_)
     : ServiceFramework{system_, "aoc:u"}, add_on_content{AccumulateAOCTitleIDs(system)},
       service_context{system_, "aoc:u"} {
-    // clang-format off
-    static const FunctionInfo functions[] = {
-        {0, nullptr, "CountAddOnContentByApplicationId"},
-        {1, nullptr, "ListAddOnContentByApplicationId"},
-        {2, D<&IAddOnContentManager::CountAddOnContent>, "CountAddOnContent"},
-        {3, D<&IAddOnContentManager::ListAddOnContent>, "ListAddOnContent"},
-        {4, nullptr, "GetAddOnContentBaseIdByApplicationId"},
-        {5, D<&IAddOnContentManager::GetAddOnContentBaseId>, "GetAddOnContentBaseId"},
-        {6, nullptr, "PrepareAddOnContentByApplicationId"},
-        {7, D<&IAddOnContentManager::PrepareAddOnContent>, "PrepareAddOnContent"},
-        {8, D<&IAddOnContentManager::GetAddOnContentListChangedEvent>, "GetAddOnContentListChangedEvent"},
-        {9, &IAddOnContentManager::StubReplyZeroed, "GetAddOnContentLostErrorCode"},
-        {10, D<&IAddOnContentManager::GetAddOnContentListChangedEventWithProcessId>, "GetAddOnContentListChangedEventWithProcessId"},
-        {11, D<&IAddOnContentManager::NotifyMountAddOnContent>, "NotifyMountAddOnContent"},
-        {12, D<&IAddOnContentManager::NotifyUnmountAddOnContent>, "NotifyUnmountAddOnContent"},
-        {13, &IAddOnContentManager::StubReplyZeroed, "IsAddOnContentMountedForDebug"},
-        {50, D<&IAddOnContentManager::CheckAddOnContentMountStatus>, "CheckAddOnContentMountStatus"},
-        {100, D<&IAddOnContentManager::CreateEcPurchasedEventManager>, "CreateEcPurchasedEventManager"},
-        {101, D<&IAddOnContentManager::CreatePermanentEcPurchasedEventManager>, "CreatePermanentEcPurchasedEventManager"},
-        {110, &IAddOnContentManager::StubReplyInterface, "CreateContentsServiceManager"},
-        {200, &IAddOnContentManager::StubReplyZeroed, "SetRequiredAddOnContentsOnContentsAvailabilityTransition"},
-        {300, &IAddOnContentManager::StubReplyZeroed, "SetupHostAddOnContent"},
-        {301, &IAddOnContentManager::StubReplyZeroed, "GetRegisteredAddOnContentPath"},
-        {302, &IAddOnContentManager::StubReplyZeroed, "UpdateCachedList"},
-    };
-    // clang-format on
-
-    RegisterHandlers(functions);
-
     aoc_change_event = service_context.CreateEvent("GetAddOnContentListChanged:Event");
 }
 
@@ -104,9 +125,11 @@ Result IAddOnContentManager::CountAddOnContent(Out<u32> out_count, ClientProcess
         R_SUCCEED();
     }
 
+    const auto all = AllAOCTitleIDs(system, add_on_content);
     *out_count = static_cast<u32>(
-        std::count_if(add_on_content.begin(), add_on_content.end(),
+        std::count_if(all.begin(), all.end(),
                       [current](u64 tid) { return CheckAOCTitleIDMatchesBase(tid, current); }));
+    LOG_INFO(Service_AOC, "{} add-on content for {:016X}", *out_count, current);
 
     R_SUCCEED();
 }
@@ -122,7 +145,7 @@ Result IAddOnContentManager::ListAddOnContent(Out<u32> out_count,
     std::vector<u32> out;
     const auto& disabled = Settings::values.disabled_addons[current];
     if (std::find(disabled.begin(), disabled.end(), "DLC") == disabled.end()) {
-        for (u64 content_id : add_on_content) {
+        for (u64 content_id : AllAOCTitleIDs(system, add_on_content)) {
             if (FileSys::GetBaseTitleID(content_id) != current) {
                 continue;
             }

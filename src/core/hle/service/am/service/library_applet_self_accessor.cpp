@@ -8,18 +8,23 @@
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/registered_cache.h"
+#include "core/hle/result.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/am/applet_data_broker.h"
 #include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/am/frontend/applets.h"
+#include "core/hle/service/am/process_creation.h"
 #include "core/hle/service/am/service/library_applet_self_accessor.h"
 #include "core/hle/service/am/service/storage.h"
+#include "core/hle/service/am/window_system.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/glue/glue_manager.h"
 #include "core/hle/service/ns/application_manager_interface.h"
 #include "core/hle/service/ns/service_getter_interface.h"
+#include "core/hle/service/server_manager.h"
 #include "core/hle/service/sm/sm.h"
+#include "core/loader/loader.h"
 
 namespace Service::AM {
 
@@ -44,8 +49,9 @@ AppletIdentityInfo GetCallerIdentity(Applet& applet) {
 
 ILibraryAppletSelfAccessor::ILibraryAppletSelfAccessor(Core::System& system_,
                                                        std::shared_ptr<Applet> applet)
-    : ServiceFramework{system_, "ILibraryAppletSelfAccessor"}, m_applet{std::move(applet)},
-      m_broker{m_applet->caller_applet_broker} {
+    : ServiceFramework{system_, "ILibraryAppletSelfAccessor"}, m_applet{std::move(applet)}
+    , m_broker{m_applet->caller_applet_broker}
+{
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, D<&ILibraryAppletSelfAccessor::PopInData>, "PopInData"},
@@ -96,9 +102,128 @@ Result ILibraryAppletSelfAccessor::PopInData(Out<SharedPointer<IStorage>> out_st
     R_RETURN(m_broker->GetInData().Pop(system.Kernel(), out_storage));
 }
 
+// uLauncher emulation
+static Result UloaderCreateApplication(Core::System& system, u64 program_id, std::shared_ptr<Applet> caller_applet) {
+    // Get the program NCA from storage.
+    auto& storage = system.GetContentProviderUnion();
+    FileSys::VirtualFile nca_raw = storage.GetEntryRaw(program_id, FileSys::ContentRecordType::Program);
+    // Ensure we retrieved a program NCA.
+    R_UNLESS(nca_raw != nullptr, ResultUnknown);
+    std::vector<u8> control;
+    std::unique_ptr<Loader::AppLoader> loader;
+    Loader::ResultStatus result;
+    auto process = CreateApplicationProcess(control, loader, result, system, nca_raw, program_id, 0);
+    R_UNLESS(process != nullptr, ResultUnknown);
+    const auto applet = std::make_shared<Applet>(system, std::move(process), true);
+    applet->program_id = program_id;
+    applet->applet_id = AppletId::Application;
+    applet->type = AppletType::Application;
+    applet->library_applet_mode = LibraryAppletMode::AllForeground;
+
+    applet->caller_applet = caller_applet;
+    applet->caller_applet_broker = std::make_shared<AppletDataBroker>(system);
+    applet->frontend = caller_applet->frontend;
+    caller_applet->child_applets.push_back(applet);
+
+    system.GetAppletManager().GetWindowSystem()->TrackApplet(applet, true);
+    R_SUCCEED();
+}
+
 Result ILibraryAppletSelfAccessor::PushOutData(SharedPointer<IStorage> storage) {
     LOG_INFO(Service_AM, "called");
     m_broker->GetOutData().Push(system.Kernel(), storage);
+    if (m_applet->applet_id == AppletId::UlauncherUmenu) {
+        enum class SystemMessage : u32 {
+            Invalid,
+            SetSelectedUser,
+            LaunchApplication,
+            ResumeApplication,
+            TerminateApplication,
+            LaunchHomebrewLibraryApplet,
+            LaunchHomebrewApplication,
+            ChooseHomebrew,
+            OpenWebPage,
+            OpenAlbum,
+            RestartMenu,
+            ReloadConfig,
+            UpdateMenuPaths,
+            UpdateMenuIndex,
+            OpenUserPage,
+            OpenMiiEdit,
+            OpenAddUser,
+            OpenNetConnect,
+            ListAddedApplications,
+            ListDeletedApplications,
+            OpenCabinet,
+            StartVerifyApplication,
+            ListInVerifyApplications,
+            NotifyWarnedAboutOutdatedTheme,
+            TerminateMenu,
+            OpenControllerKeyRemapping
+        };
+        struct CommandCommonHeader {
+            u32 magic;
+            u32 val;
+        };
+        std::shared_ptr<IStorage> req_storage;
+        m_broker->GetOutData().Pop(&req_storage);
+        auto req_data = req_storage->GetData();
+        CommandCommonHeader req_cmd{};
+        std::memcpy(&req_cmd, req_data.data(), sizeof(req_cmd));
+
+        LOG_WARNING(Service_AM, "uLauncher:IPC {}, {}", req_cmd.magic, req_cmd.val);
+        switch (SystemMessage(req_cmd.val)) {
+        case SystemMessage::SetSelectedUser:
+            break;
+        case SystemMessage::LaunchApplication: {
+            // all applet proxies OpenSystemAppletProxy
+            // applet proxy GetApplicationCreator
+            // application creator CreateApplication
+            u64 args_value{};
+            std::memcpy(std::addressof(args_value), req_data.data() + sizeof(req_cmd), sizeof(args_value));
+            LOG_WARNING(Service_AM, "program_id={:016x}", args_value);
+            UloaderCreateApplication(system, args_value, m_applet);
+            break;
+        }
+        case SystemMessage::ResumeApplication:
+        case SystemMessage::TerminateApplication:
+        case SystemMessage::LaunchHomebrewLibraryApplet:
+        case SystemMessage::LaunchHomebrewApplication:
+        case SystemMessage::ChooseHomebrew:
+        case SystemMessage::OpenWebPage:
+        case SystemMessage::OpenAlbum:
+        case SystemMessage::RestartMenu:
+        case SystemMessage::ReloadConfig:
+        case SystemMessage::UpdateMenuPaths:
+        case SystemMessage::UpdateMenuIndex:
+        case SystemMessage::OpenUserPage:
+        case SystemMessage::OpenMiiEdit:
+        case SystemMessage::OpenAddUser:
+        case SystemMessage::OpenNetConnect:
+        case SystemMessage::ListAddedApplications:
+        case SystemMessage::ListDeletedApplications:
+        case SystemMessage::OpenCabinet:
+        case SystemMessage::StartVerifyApplication:
+        case SystemMessage::ListInVerifyApplications:
+        case SystemMessage::NotifyWarnedAboutOutdatedTheme:
+            break;
+        case SystemMessage::TerminateMenu:
+            system.GetUserChannel() = m_applet->user_channel_launch_parameter;
+            system.ExecuteProgram(0);
+            break;
+        case SystemMessage::OpenControllerKeyRemapping:
+            break;
+        case SystemMessage::Invalid:
+            break;
+        }
+
+        CommandCommonHeader res_cmd{};
+        std::vector<u8> res_data(0x8000);
+        res_cmd.magic = 0x21494D53;
+        res_cmd.val = u32(ResultSuccess.raw);
+        std::memcpy(res_data.data(), &res_cmd, sizeof(res_cmd));
+        m_broker->GetInData().Push(std::make_shared<IStorage>(system, std::move(res_data)));
+    }
     R_SUCCEED();
 }
 

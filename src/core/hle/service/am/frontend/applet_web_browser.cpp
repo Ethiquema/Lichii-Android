@@ -318,12 +318,14 @@ void WebBrowser::Execute() {
         return;
     }
 
+#ifndef ANDROID
     if (Settings::values.disable_web_applet) {
         LOG_WARNING(Service_AM, "(STUBBED) called, Web Browser Applet is disabled. shim_kind={}",
                     web_arg_header.shim_kind);
         WebBrowserExit(WebExitReason::EndButtonPressed);
         return;
     }
+#endif
 
     switch (web_arg_header.shim_kind) {
     case ShimKind::Shop:

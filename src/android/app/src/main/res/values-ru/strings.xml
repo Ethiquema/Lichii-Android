@@ -291,25 +291,6 @@
     <string name="gpu_driver_fetcher">Получение драйверов ГПУ</string>
     <string name="gpu_driver_manager">Менеджер драйверов ГПУ</string>
     <string name="install_gpu_driver_description">Установите альтернативные драйверы для потенциально лучшей производительности и/или точности</string>
-    <string name="post_processing">Эффекты постобработки</string>
-    <string name="post_processing_description">Эффекты ReShade FX, применяемые после рендеринга</string>
-    <string name="post_processing_per_game_description">Настроить цепочку эффектов для этой игры</string>
-    <string name="post_processing_add">Добавить эффект</string>
-    <string name="post_processing_remove">Удалить</string>
-    <string name="post_processing_open_list">Открыть список</string>
-    <string name="post_processing_close_list">Закрыть список</string>
-    <string name="post_processing_remove_all">Удалить эффекты</string>
-    <string name="post_processing_preset_locked">Пресет активен. Отредактируйте его в разделе \"Эффекты постобработки\" перед запуском игры.</string>
-    <string name="post_processing_preset_modified">Значения изменены относительно исходного пресета.</string>
-    <string name="post_processing_presets">Пресеты</string>
-    <string name="post_processing_preset_new">Новый пресет</string>
-    <string name="post_processing_preset_new_description">Сохраняет загруженные вами эффекты вместе с их текущими значениями в виде пресета, который можно будет выбрать позже.</string>
-    <string name="post_processing_preset_name_invalid">Дайте пресету имя без знака равенства.</string>
-    <string name="post_processing_preset_none">Нет пресета</string>
-    <string name="post_processing_preset_delete">Удалить пресет</string>
-    <string name="post_processing_preset_reset">Сбросить значения пресета</string>
-    <string name="post_processing_reset">Сбросить до значений по умолчанию</string>
-    <string name="post_processing_empty">Эффекты не найдены. Поместите файлы .fx в эту папку:</string>
     <string name="frame_gen">Генерация кадров</string>
     <string name="frame_gen_per_game_description">Настройка генерации кадров для данной игры</string>
     <string name="frame_gen_description">Вставляет промежуточные кадры между отрендеренными с помощью Lossless Scaling. При включении принудительно устанавливает режим вывода FIFO.</string>
@@ -318,13 +299,6 @@
     <string name="frame_gen_target_rate">Целевая частота кадров</string>
     <string name="frame_gen_target_rate_description">Выберите значение под ваш дисплей. Множитель подстроится сам, чтобы его держать, и откатит изменения, если игра начнёт тормозить.</string>
     <string name="frame_gen_target_rate_off">Использовать фиксированный множитель</string>
-    <string name="frame_gen_on">Вкл.</string>
-    <string name="frame_gen_off">Выкл.</string>
-    <string name="frame_gen_fixed">Фикс.</string>
-    <string name="frame_gen_flow_auto">Авто</string>
-    <string name="frame_gen_quick_description">Включите или выключите генерацию кадров и выберите множитель кадров.</string>
-    <string name="frame_gen_target_rate_quick_description">Генерация кадров с заданной частотой кадров. Множитель регулируется автоматически.</string>
-    <string name="frame_gen_flow_scale_quick_description">Разрешение, используемое для оценки движения между кадрами. Меньшие значения экономят время ГПУ.</string>
     <string name="frame_gen_queue_target">Целевой размер очереди кадров</string>
     <string name="frame_gen_queue_target_description">Сколько готовых кадров может ожидать перед выводом на экран. Более длинные очереди сглаживают скачки ГПУ ценой задержки ввода.</string>
     <string name="frame_gen_queue_target_0">Минимальная задержка (Без буферизации)</string>
@@ -334,15 +308,19 @@
     <string name="frame_gen_flow_scale_auto_description">Оценивать движение в разрешении, которое игра действительно рендерит, вместо масштабированного вывода. Ничего не стоит в точности, так как масштабирование не добавляет деталей движения.</string>
     <string name="frame_gen_flow_scale">Разрешение оценки движения</string>
     <string name="frame_gen_flow_scale_description">Разрешение прохода оптического потока в долях от выходного разрешения. Его понижение — самый дешёвый способ вернуть производительность.</string>
+    <string name="frame_gen_fp16">Шейдеры половинной точности</string>
+    <string name="frame_gen_fp16_description">Использовать 16-битную версию шейдеров. Автоматически переключается на обычную, если драйвер или файл не поддерживают её.</string>
+    <string name="frame_gen_dump_flow">Сохранить сгенерированный кадр</string>
+    <string name="frame_gen_dump_flow_description">Однократно записать уровни мип-карт оптического потока и интерполированный кадр в папку lossless/debug для диагностики.</string>
     <string name="frame_gen_unsupported">Генерация кадров недоступна</string>
-    <string name="frame_gen_unsupported_description">В этом ГПУ драйвере отсутствует поддержка модели памяти Vulkan или половинной точности (float16), которая требуется шейдерам Lossless Scaling.</string>
+    <string name="frame_gen_unsupported_description">Драйвер ГПУ не поддерживает модель памяти Vulkan, требуемую шейдерами Lossless Scaling.</string>
     <string name="lossless_scaling_setup_description">Опционально. Укажите свой Lossless.dll для включения генерации кадров позже.</string>
     <string name="lossless_scaling_install">Установить Lossless.dll</string>
     <string name="lossless_scaling_install_description">Для генерации кадров требуется ваша собственная легальная копия Lossless.dll из Lossless Scaling</string>
     <string name="lossless_scaling_replace_description">Выбрать другой файл Lossless.dll</string>
     <string name="frame_generation_support">Генерация кадров</string>
     <string name="frame_generation_supported">Поддерживается</string>
-    <string name="frame_generation_unsupported">Не поддерживается (нет модели памяти Vulkan или float16)</string>
+    <string name="frame_generation_unsupported">Не поддерживается (нет модели памяти Vulkan)</string>
     <string name="lossless_scaling_description">Предоставьте свою копию Lossless.dll для включения генерации кадров</string>
     <string name="lossless_scaling_installed">Установлена</string>
     <string name="lossless_scaling_not_installed">Не установлена</string>
@@ -580,21 +558,8 @@
     <string name="fix_bloom_effects_description">Частично убирает размытие в LA/EOW (Adreno A6XX - A7XX/ Turnip), полностью отключает его в Burnout. Внимание: может вызывать графические артефакты в других играх.</string>
     <string name="emulate_bgr565">Эмулировать BGR565</string>
     <string name="emulate_bgr565_description">Исправляет проблемы с инвертированными цветами в играх, а также со странными артефактами или некорректными тенями.</string>
-    <string name="rescale_hack">Включить старый метод изменения разрешения</string>
-    <string name="rescale_hack_description">Включает старый метод обработки этапа перенастройки масштабирования для игр за счёт использования быстрого алгоритма перемасштабирования.</string>
     <string name="renderer_asynchronous_shaders">Использовать асинхронные шейдеры</string>
     <string name="renderer_asynchronous_shaders_description">Компилирует шейдеры асинхронно. Это может уменьшить подтормаживания, но также может вызвать графические артефакты.</string>
-    <string name="gpu_unswizzle_settings">Настройки распаковки текстур (Unswizzle)</string>
-    <string name="gpu_unswizzle_settings_description">Настройте параметры распаковки текстур на стороне ГПУ либо полностью отключите эту функцию. Изменение этих параметров позволяет найти баланс между производительностью и качеством загрузки текстур.</string>
-    <string name="gpu_unswizzle_enable">Включить распаковку текстур (Unswizzle)</string>
-    <string name="gpu_unswizzle_disabled">Отключено</string>
-    <string name="gpu_unswizzle_texture_size">Макс. размер текстуры Unswizzle</string>
-    <string name="gpu_unswizzle_texture_size_description">Задает максимальный размер (в МБ) текстур для преобразования формата (unswizzle) на ГПУ. Хотя ГПУ быстрее работает со средними и большими текстурами, ЦП может быть эффективнее для очень маленьких. Настройте это значение, чтобы найти баланс между ускорением на ГПУ и нагрузкой на ЦП.</string>
-    <string name="gpu_unswizzle_stream_size">Размер потока Unswizzle</string>
-    <string name="gpu_unswizzle_stream_size_description">Задает лимит данных на кадр для преобразования крупных текстур (unswizzle). Высокие значения ускоряют загрузку текстур ценой увеличения задержки кадра; низкие значения снижают нагрузку на ГПУ, но могут вызывать заметную постепенную подгрузку текстур.</string>
-    <string name="gpu_unswizzle_chunk_size">Размер блока Unswizzle</string>
-    <string name="gpu_unswizzle_chunk_size_description">Задает количество слоёв глубины, обрабатываемых за одну пачку для 3D-текстур. Увеличение этого значения улучшает пропускную способность на мощных ГПУ, но может вызывать подтормаживания или таймауты драйвера на слабом железе.</string>
-    <string name="gpu_unswizzle_default_button">По умолчанию</string>
 
 
     <string name="extensions">Расширения</string>
@@ -635,11 +600,6 @@
     <string name="log">Логирование</string>
     <string name="flush_by_line">Сбрасывать логи отладки построчно</string>
     <string name="flush_by_line_description">Сбрасывает логи отладки после каждой написанной строки, упрощая отладку в случае сбоев или зависаний.</string>
-    <string name="extended_logging">Включить расширенное логирование</string>
-    <string name="extended_logging_description">Увеличивает максимальный размер файла журнала со 100 МБ до 1 ГБ.</string>
-    <string name="log_filter">Фильтр журнала</string>
-    <string name="log_filter_description">Управляет категориями журнала Eden. Пример: :Info Service.LM:Debug</string>
-
     <!-- GPU Logging strings -->
     <string name="gpu_logging_header">Ведение журнала ГПУ</string>
     <string name="gpu_log_level">Уровень журналирования</string>
@@ -1035,25 +995,10 @@
     <string name="fast_gpu_high">Разгон</string>
 
     <!-- GPU swizzle texture size -->
-    <string name="gpu_texturesizeswizzle_verysmall">Очень малый (16 МБ)</string>
-    <string name="gpu_texturesizeswizzle_small">Малый (32 МБ)</string>
-    <string name="gpu_texturesizeswizzle_normal">Обычный (128 МБ)</string>
-    <string name="gpu_texturesizeswizzle_large">Большой (256 МБ)</string>
-    <string name="gpu_texturesizeswizzle_verylarge">Очень большой (512 МБ)</string>
 
     <!-- GPU swizzle streams -->
-    <string name="gpu_swizzle_verylow">Очень низкий (4 МБ)</string>
-    <string name="gpu_swizzle_low">Низкий (8 МБ)</string>
-    <string name="gpu_swizzle_normal">Обычный (16 МБ)</string>
-    <string name="gpu_swizzle_medium">Средний (32 МБ)</string>
-    <string name="gpu_swizzle_high">Высокий (64 МБ)</string>
 
     <!-- GPU swizzle chunks -->
-    <string name="gpu_swizzlechunk_verylow">Очень малый (32)</string>
-    <string name="gpu_swizzlechunk_low">Малый (64)</string>
-    <string name="gpu_swizzlechunk_normal">Обычный (128)</string>
-    <string name="gpu_swizzlechunk_medium">Средний (256)</string>
-    <string name="gpu_swizzlechunk_high">Большой (512)</string>
 
     <!-- Temperature Units -->
     <string name="temperature_celsius">Цельсий</string>

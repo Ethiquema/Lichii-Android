@@ -16,6 +16,10 @@
 
 #include "audio_core/audio_event.h"
 
+namespace Core {
+class System;
+}
+
 union Result;
 
 namespace AudioCore {
@@ -34,31 +38,22 @@ namespace AudioCore {
  * This is only used by audio in and audio out.
  */
 class AudioManager {
-    using BufferEventFunc = std::function<void()>;
-
+    using BufferEventFunc = void (*)(void *data, Core::System& system) noexcept;
 public:
-    explicit AudioManager();
+    explicit AudioManager(Core::System& system);
 
-    /**
-     * Shutdown the audio manager.
-     */
+    /// @brief Shutdown the audio manager.
     void Shutdown();
 
-    /**
-     * Register the out manager, keeping a function to be called when the out event is signalled.
-     *
-     * @param buffer_func - Function to be called on signal.
-     * @return Result code.
-     */
-    Result SetOutManager(BufferEventFunc buffer_func);
+    /// Register the out manager, keeping a function to be called when the out event is signalled.
+    /// @param buffer_func - Function to be called on signal.
+    /// @return Result code.
+    Result SetOutManager(void *data, BufferEventFunc buffer_func);
 
-    /**
-     * Register the in manager, keeping a function to be called when the in event is signalled.
-     *
-     * @param buffer_func - Function to be called on signal.
-     * @return Result code.
-     */
-    Result SetInManager(BufferEventFunc buffer_func);
+    /// Register the in manager, keeping a function to be called when the in event is signalled.
+    /// @param buffer_func - Function to be called on signal.
+    /// @return Result code.
+    Result SetInManager(void *data, BufferEventFunc buffer_func);
 
     /**
      * Unregister a manager before it is destroyed. Waits for any callback to it in progress, so the
@@ -79,8 +74,9 @@ private:
     bool needs_update{};
     /// Events to be set and signalled
     Event events{};
-    /// Callbacks for each manager
+    /// Callbacks (and user data) for each manager
     std::array<BufferEventFunc, 3> buffer_events{};
+    std::array<void*, 3> buffer_data{};
     /// General lock
     std::mutex lock{};
     /// Main thread for waiting and callbacks

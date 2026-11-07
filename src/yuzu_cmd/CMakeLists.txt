@@ -42,6 +42,9 @@ target_link_libraries(yuzu-cmd PRIVATE common core input_common frontend_common 
 if (ENABLE_OPENGL)
     target_link_libraries(yuzu-cmd PRIVATE glad)
 endif()
+if (MSVC)
+    target_link_libraries(yuzu-cmd PRIVATE getopt)
+endif()
 target_link_libraries(yuzu-cmd PRIVATE ${PLATFORM_LIBRARIES} Threads::Threads)
 
 create_resource("../../dist/eden.bmp" "yuzu_cmd/yuzu_icon.h" "yuzu_icon")
@@ -56,20 +59,17 @@ endif()
 if(WIN32)
     # compile as a win32 gui application instead of a console application
     if(MSVC)
-        # SDL's main implementation provides wmain when UNICODE is defined, which src/CMakeLists.txt
-        # does for cl.exe but not for clang-cl; forcing mainCRTStartup failed to link with cl.exe.
-        if(CXX_CLANG)
-            set(YUZU_CMD_ENTRY mainCRTStartup)
-        else()
-            set(YUZU_CMD_ENTRY wmainCRTStartup)
-        endif()
-        set_target_properties(yuzu-cmd PROPERTIES LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS /ENTRY:${YUZU_CMD_ENTRY}")
+        set_target_properties(yuzu-cmd PROPERTIES LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS /ENTRY:wmainCRTStartup")
     elseif(MINGW)
         set_target_properties(yuzu-cmd PROPERTIES LINK_FLAGS_RELEASE "-Wl,--subsystem,windows")
     endif()
 endif()
 
 create_target_directory_groups(yuzu-cmd)
+
+if (LINKER STREQUAL "lld")
+    target_link_options(yuzu-cmd PRIVATE "LINKER:--icf=all")
+endif()
 
 # needed for vma
 if (NOT MSVC)
@@ -78,4 +78,16 @@ if (NOT MSVC)
         $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-unused-variable>
         $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-unused-parameter>
         $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-missing-field-initializers>)
+endif()
+
+if (EMSCRIPTEN)
+    # 10GB is required at max... yikes!
+    target_link_options(yuzu-cmd PRIVATE
+        -sALLOW_MEMORY_GROWTH=1
+        -sINITIAL_MEMORY=33554432
+        -sMAXIMUM_MEMORY=10737418240
+        -sGLOBAL_BASE=16777216
+        -sEXPORTED_RUNTIME_METHODS=['FS']
+        -sPTHREAD_POOL_SIZE_STRICT=0
+        -sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency)
 endif()

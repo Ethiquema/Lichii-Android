@@ -21,6 +21,7 @@ OPCODE(EmitVertex,                                          Void,           U32,
 OPCODE(EndPrimitive,                                        Void,           U32,                                                                            )
 
 // Barriers
+OPCODE(SubgroupBarrier,                                     Void,                                                                                           )
 OPCODE(Barrier,                                             Void,                                                                                           )
 OPCODE(WorkgroupMemoryBarrier,                              Void,                                                                                           )
 OPCODE(DeviceMemoryBarrier,                                 Void,                                                                                           )
@@ -574,8 +575,8 @@ OPCODE(ImageAtomicOr32,                                     U32,            Opaq
 OPCODE(ImageAtomicXor32,                                    U32,            Opaque,            Opaque,            U32,                                      )
 OPCODE(ImageAtomicExchange32,                               U32,            Opaque,            Opaque,            U32,                                      )
 
-// Software matrix collective.
-OPCODE(TensorMulAdd, U32x2, U32x4, U32x2, U32x2, )
+// Software matrix collective (HMMA lowered for SPIR-V; flags = K depth).
+OPCODE(TensorMulAdd,                                        U32x2,          U32x4,          U32x2,          U32x2,                                          )
 
 // Warp operations
 OPCODE(LaneId,                                              U32,                                                                                            )

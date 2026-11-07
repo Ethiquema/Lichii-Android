@@ -22,9 +22,11 @@ using namespace std::literals;
 constexpr auto INCREMENT_TIME{5ms};
 
 DeviceSession::DeviceSession(Core::System& system_)
-    : system{system_}, thread_event{Core::Timing::CreateEvent(
-                           "AudioOutSampleTick",
-                           [this](s64 time, std::chrono::nanoseconds) { return ThreadFunc(); })} {}
+    : system{system_}
+    , thread_event{system_.CreateTimingEvent("AudioOutSampleTick", [this](s64 time, std::chrono::nanoseconds) {
+        return ThreadFunc();
+    })}
+{}
 
 DeviceSession::~DeviceSession() {
     Finalize();

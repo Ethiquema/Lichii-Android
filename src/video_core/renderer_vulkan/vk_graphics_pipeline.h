@@ -9,10 +9,10 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <chrono>
+#include <condition_variable>
 #include <functional>
-#include <optional>
-#include <span>
+#include <mutex>
+#include <shared_mutex>
 #include <type_traits>
 #include <vector>
 
@@ -20,7 +20,6 @@
 #include "shader_recompiler/shader_info.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/renderer_vulkan/fixed_pipeline_state.h"
-#include "video_core/renderer_vulkan/pipeline_build.h"
 #include "video_core/renderer_vulkan/pipeline_helper.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_descriptor_buffer.h"
@@ -38,6 +37,10 @@ namespace Vulkan {
 struct GraphicsPipelineCacheKey {
     std::array<u64, 6> unique_hashes;
     FixedPipelineState state;
+    // Per-pipeline float control choices (selected at pipeline key time).
+    // 0 = disabled, 1 = enabled
+    uint8_t use_ftz_f32{};
+    uint8_t use_ftz_f16{};
 
     size_t Hash() const noexcept;
 
@@ -48,12 +51,12 @@ struct GraphicsPipelineCacheKey {
     }
 
     size_t Size() const noexcept {
-        return sizeof(unique_hashes) + state.Size();
+        return sizeof(unique_hashes) + state.Size() + sizeof(use_ftz_f32) + sizeof(use_ftz_f16);
     }
 };
-static_assert(std::has_unique_object_representations_v<GraphicsPipelineCacheKey>);
+// The key is compared/hashed using a custom Size() and memcmp over the
+// meaningful bytes. Ensure it's trivially copyable so memcmp/hash are safe.
 static_assert(std::is_trivially_copyable_v<GraphicsPipelineCacheKey>);
-static_assert(std::is_trivially_constructible_v<GraphicsPipelineCacheKey>);
 
 } // namespace Vulkan
 
@@ -68,9 +71,13 @@ struct hash<Vulkan::GraphicsPipelineCacheKey> {
 
 namespace Vulkan {
 
+/// SPIR-V modules of the graphics stages, null for unused stages. Shared by the pipelines whose
+/// keys differ only in state the shaders do not see (ShaderReuseCache).
+using GraphicsShaderModules =
+    std::array<vk::ShaderModule, Tegra::Engines::Maxwell3D::Regs::MaxShaderStage>;
+
 class Device;
 class PipelineStatistics;
-class RenderPassCache;
 class RescalingPushConstant;
 class RenderAreaPushConstant;
 class Scheduler;
@@ -81,34 +88,19 @@ class GraphicsPipeline {
 public:
     explicit GraphicsPipeline(
         Scheduler& scheduler, BufferCache& buffer_cache, TextureCache& texture_cache,
-        vk::PipelineCache& pipeline_cache, VideoCore::ShaderNotify* shader_notify,
+        vk::PipelineCache& pipeline_cache, std::shared_mutex& pipeline_cache_mutex,
+        VideoCore::ShaderNotify* shader_notify,
         const Device& device, DescriptorPool& descriptor_pool,
         GuestDescriptorQueue& guest_descriptor_queue,
         DescriptorBufferRing& descriptor_buffer_ring, Common::ThreadWorker* worker_thread,
-        PipelineStatistics* pipeline_statistics, RenderPassCache& render_pass_cache,
-        const GraphicsPipelineCacheKey& key, std::array<vk::ShaderModule, NUM_STAGES> stages,
-        const std::array<const Shader::Info*, NUM_STAGES>& infos,
-        std::function<std::array<vk::ShaderModule, NUM_STAGES>()> emit_stages = {});
-
-    static std::chrono::nanoseconds TakeHoldTime() noexcept;
+        PipelineStatistics* pipeline_statistics, const GraphicsPipelineCacheKey& key,
+        std::array<vk::ShaderModule, NUM_STAGES> stages,
+        const std::array<const Shader::Info*, NUM_STAGES>& infos);
 
     bool HasDynamicVertexInput() const noexcept { return key.state.dynamic_vertex_input; }
-    const std::array<u64, 6>& ShaderHashes() const noexcept {
-        return key.unique_hashes;
+    u32 VertexAttributeMask() const noexcept {
+        return vertex_attribute_mask;
     }
-
-    struct SampledImage {
-        u32 stage;
-        u32 tic;
-        VideoCommon::ImageViewId id;
-        VideoCommon::SamplerId sampler;
-    };
-
-    /// The sampled textures of the last configured draw, kept while a sampled frame dump runs.
-    std::span<const SampledImage> SampledImages() const noexcept {
-        return sampled_images;
-    }
-
     bool SupportsAlphaToCoverage() const noexcept {
         return fragment_has_color0_output;
     }
@@ -135,6 +127,16 @@ public:
 
     bool Configure(bool is_indexed) {
         return configure_func(this, is_indexed);
+    }
+
+    /// True when a shader samples a texture whose handle arrives as a vertex attribute.
+    [[nodiscard]] bool UsesAttributeHandle() const noexcept {
+        return uses_attribute_handle;
+    }
+
+    /// Handle bound to those textures by the next Configure.
+    void SetAttributeHandle(u32 handle) noexcept {
+        attribute_handle = handle;
     }
 
     [[nodiscard]] GraphicsPipeline* Next(const GraphicsPipelineCacheKey& current_key) noexcept {
@@ -178,15 +180,18 @@ public:
         maxwell3d = maxwell3d_;
         gpu_memory = gpu_memory_;
     }
-
+    void SetFrameNumber(u64 frame) { current_frame_number = frame; }
 private:
+    /// Builds the pipeline once, on whichever thread gets here first.
+    void RunBuild();
+
     template <typename Spec>
     bool ConfigureImpl(bool is_indexed);
 
     bool ConfigureDraw(const RescalingPushConstant& rescaling,
                        const RenderAreaPushConstant& render_are);
 
-    void MakePipeline(VkRenderPass render_pass);
+    void MakePipeline(const RenderingFormats& formats);
 
     void Validate();
 
@@ -197,6 +202,7 @@ private:
     TextureCache& texture_cache;
     BufferCache& buffer_cache;
     vk::PipelineCache& pipeline_cache;
+    std::shared_mutex& pipeline_cache_mutex;
     Scheduler& scheduler;
     GuestDescriptorQueue& guest_descriptor_queue;
     DescriptorBufferRing& descriptor_buffer_ring;
@@ -207,7 +213,7 @@ private:
     std::vector<GraphicsPipeline*> transitions;
     u64 last_use_frame{};
 
-    std::array<vk::ShaderModule, NUM_STAGES> spv_modules;
+    std::shared_ptr<const GraphicsShaderModules> spv_modules;
 
     std::array<Shader::Info, NUM_STAGES> stage_infos;
     std::array<u32, 5> enabled_uniform_buffer_masks{};
@@ -216,8 +222,10 @@ private:
     size_t num_image_elements{};
     std::vector<SampledImage> sampled_images;
     u32 num_textures{};
+    u32 attribute_handle{};
+    bool uses_attribute_handle{};
     bool fragment_has_color0_output{};
-    bool writes_storage{};
+    u32 vertex_attribute_mask{};
 
     vk::DescriptorSetLayout descriptor_set_layout;
     DescriptorAllocator descriptor_allocator;
@@ -227,14 +235,12 @@ private:
 
     DescriptorBufferLayout descriptor_buffer_layout;
     std::vector<DescriptorUpdateEntry> last_descriptor_payload;
-    VkDeviceSize last_descriptor_buffer_offset{};
-    u32 last_descriptor_buffer_chunk{};
-    u64 last_descriptor_buffer_generation{};
 
-    const bool worker_only_build;
+    std::condition_variable build_condvar;
+    std::mutex build_mutex;
+    std::atomic_bool is_built{false};
     bool uses_push_descriptor{false};
     bool uses_descriptor_buffer{false};
-    std::optional<PipelineBuild> build;
 };
 
 } // namespace Vulkan

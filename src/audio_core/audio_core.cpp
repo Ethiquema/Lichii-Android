@@ -12,7 +12,7 @@
 namespace AudioCore {
 
 AudioCore::AudioCore(Core::System& system) {
-    audio_manager.emplace();
+    audio_manager.emplace(system);
     CreateSinks();
     // Must be created after the sinks
     adsp.emplace(system, *output_sink);
@@ -33,6 +33,7 @@ void AudioCore::CreateSinks() {
 
 void AudioCore::Shutdown() {
     audio_manager->Shutdown();
+    adsp->Shutdown();
 }
 
 AudioManager& AudioCore::GetAudioManager() {

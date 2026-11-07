@@ -13,34 +13,37 @@
 #include "dynarmic/backend/x64/abi.h"
 #include "dynarmic/backend/x64/hostloc.h"
 #include "dynarmic/common/spin_lock.h"
-
-#ifdef DYNARMIC_ENABLE_NO_EXECUTE_SUPPORT
-static const auto default_cg_mode = Xbyak::DontSetProtectRWE;
-#else
-static const auto default_cg_mode = nullptr; //Allow RWE
-#endif
+#include "xbyak/xbyak.h"
 
 namespace Dynarmic {
 
-void EmitSpinLockLock(Xbyak::CodeGenerator& code, Xbyak::Reg64 ptr, Xbyak::Reg32 tmp, bool waitpkg) {
-    Xbyak::Label start, loop;
-    code.jmp(start, code.T_NEAR);
-    code.L(loop);
-
+/// @brief Emits a lock path for a given spinlock
+/// @arg ptr Operand must be a dword[ptr]
+/// @arg waitpkg Whetever or not the "UMWAIT" instruction can be used
+void EmitSpinLockLock(Xbyak::CodeGenerator& code, Xbyak::Address ptr, Xbyak::Reg32 tmp, bool waitpkg) {
+    // TODO: this is because we lack regalloc - so better to be safe :(
+    // TODO: really involve regalloc when we require a 64 bit disp temporal... aside from the one we got handed of course
     if (waitpkg) {
-        // TODO: this is because we lack regalloc - so better to be safe :(
-        code.push(Xbyak::util::rax);
-        code.push(Xbyak::util::rbx);
-        code.push(Xbyak::util::rdx);
+        Xbyak::Label start, loop;
+        code.jmp(start, code.T_NEAR);
+        code.L(loop);
+        code.push(Xbyak::util::eax);
+        code.push(Xbyak::util::ebx);
+        code.push(Xbyak::util::edx);
         // TODO: This clobbers EAX and EDX did we tell the regalloc?
         // ARM ptr for address-monitoring
 
         // XBYAK BUG: code.umonitor(ptr); see issue #255
         // replace once xbyak has been fixed
-        code.db(0xF3);
-        if (ptr.getIdx() >= 8) code.db(0x41);
-        code.db(0x0F); code.db(0xAE);
-        code.db(uint8_t((3 << 6) | ((6 & 7) << 3) | (ptr.getIdx() & 7)));
+        if (ptr.isREG()) {
+            code.db(0xF3);
+            if (ptr.getIdx() >= 8) code.db(0x41);
+            code.db(0x0F); code.db(0xAE);
+            code.db(uint8_t((3 << 6) | ((6 & 7) << 3) | (ptr.getIdx() & 7)));
+        } else {
+            code.mov(Xbyak::util::rax, ptr);
+            code.umonitor(Xbyak::util::rax);
+        }
 
         // tmp.bit[0] = 0: C0.1 | Slow Wakup | Better Savings
         // tmp.bit[0] = 1: C0.2 | Fast Wakup | Lesser Savings
@@ -55,22 +58,64 @@ void EmitSpinLockLock(Xbyak::CodeGenerator& code, Xbyak::Reg64 ptr, Xbyak::Reg32
         code.umwait(Xbyak::util::ebx);
         // CF == 1 if we hit the OS-timeout in IA32_UMWAIT_CONTROL without a write
         // CF == 0 if we exited the wait for any other reason
-        code.pop(Xbyak::util::rdx);
-        code.pop(Xbyak::util::rbx);
-        code.pop(Xbyak::util::rax);
+        code.pop(Xbyak::util::edx);
+        code.pop(Xbyak::util::ebx);
+        code.pop(Xbyak::util::eax);
+        code.L(start);
+        code.mov(tmp, 1);
+        if (ptr.is64bitDisp()) {
+            // if tmp is on eax, use ebx, otherwise use eax!
+            auto const other_tmp = tmp.cvt32() == Xbyak::util::eax
+                ? Xbyak::util::rbx
+                : Xbyak::util::rax;
+            code.push(other_tmp);
+            code.mov(other_tmp, ptr.getDisp());
+            /*code.lock();*/ code.xchg(code.dword[other_tmp], tmp);
+            code.pop(other_tmp);
+        } else {
+            /*code.lock();*/ code.xchg(ptr, tmp);
+        }
+        code.test(tmp, tmp);
+        code.jnz(loop, code.T_NEAR);
     } else {
+        Xbyak::Label start, loop;
+        code.jmp(start, code.T_NEAR);
+        code.L(loop);
         code.pause();
+        code.L(start);
+        code.mov(tmp, 1);
+        if (ptr.is64bitDisp()) {
+            // if tmp is on eax, use ebx, otherwise use eax!
+            auto const other_tmp = tmp.cvt32() == Xbyak::util::eax
+                ? Xbyak::util::rbx
+                : Xbyak::util::rax;
+            code.push(other_tmp);
+            code.mov(other_tmp, ptr.getDisp());
+            /*code.lock();*/ code.xchg(code.dword[other_tmp], tmp);
+            code.pop(other_tmp);
+        } else {
+            /*code.lock();*/ code.xchg(ptr, tmp);
+        }
+        code.test(tmp, tmp);
+        code.jnz(loop, code.T_NEAR);
     }
-    code.L(start);
-    code.mov(tmp, 1);
-    /*code.lock();*/ code.xchg(code.dword[ptr], tmp);
-    code.test(tmp, tmp);
-    code.jnz(loop, code.T_NEAR);
 }
 
-void EmitSpinLockUnlock(Xbyak::CodeGenerator& code, Xbyak::Reg64 ptr, Xbyak::Reg32 tmp) {
+// ptr operand must be a dword[ptr]
+void EmitSpinLockUnlock(Xbyak::CodeGenerator& code, Xbyak::Address ptr, Xbyak::Reg32 tmp) {
     code.xor_(tmp, tmp);
-    code.xchg(code.dword[ptr], tmp);
+    if (ptr.is64bitDisp()) {
+        // if tmp is on eax, use ebx, otherwise use eax!
+        auto const other_tmp = tmp.cvt32() == Xbyak::util::eax
+            ? Xbyak::util::rbx
+            : Xbyak::util::rax;
+        code.push(other_tmp);
+        code.mov(other_tmp, ptr.getDisp());
+        /*code.lock();*/ code.xchg(code.dword[other_tmp], tmp);
+        code.pop(other_tmp);
+    } else {
+        /*code.lock();*/ code.xchg(ptr, tmp);
+    }
     code.mfence();
 }
 
@@ -78,7 +123,13 @@ namespace {
 struct SpinLockImpl {
     void Initialize() noexcept;
     static void GlobalInitialize() noexcept;
-    Xbyak::CodeGenerator code = Xbyak::CodeGenerator(4096, default_cg_mode);
+    Xbyak::CodeGenerator code = Xbyak::CodeGenerator(4096
+#ifdef DYNARMIC_ENABLE_NO_EXECUTE_SUPPORT
+        , Xbyak::DontSetProtectRWE
+#else
+        , nullptr //Allow RWE
+#endif
+    );
     void (*lock)(volatile int*) = nullptr;
     void (*unlock)(volatile int*) = nullptr;
 };
@@ -95,11 +146,12 @@ void SpinLockImpl::Initialize() noexcept {
     Xbyak::Reg64 const ABI_PARAM1 = Backend::X64::HostLocToReg64(Backend::X64::ABI_PARAM1);
     code.align();
     lock = code.getCurr<void (*)(volatile int*)>();
-    EmitSpinLockLock(code, ABI_PARAM1, code.eax, false);
+    EmitSpinLockLock(code, code.dword[ABI_PARAM1], code.eax, false);
     code.ret();
+
     code.align();
     unlock = code.getCurr<void (*)(volatile int*)>();
-    EmitSpinLockUnlock(code, ABI_PARAM1, code.eax);
+    EmitSpinLockUnlock(code, code.dword[ABI_PARAM1], code.eax);
     code.ret();
     code.setProtectMode(Xbyak::CodeArray::ProtectMode::PROTECT_RE);
 }

@@ -154,45 +154,31 @@ void TranslateF2I(TranslatorVisitor& v, u64 insn, const IR::F16F32F64& src_a) {
     }()};
     const bool is_signed{f2i.is_signed != 0};
     const auto [max_bound, min_bound] = ClampBounds(f2i.dest_format, is_signed);
-    const bool unsigned_f32_i64{f2i.dest_format == DestFormat::I64 &&
-                                f2i.src_format == SrcFormat::F32 && !is_signed};
+    const bool unsigned_f32_i64 = f2i.dest_format == DestFormat::I64 &&
+                                  f2i.src_format == SrcFormat::F32 && !is_signed;
 
     IR::F16F32F64 intermediate;
     switch (f2i.src_format) {
     case SrcFormat::F16: {
         const IR::F16 max_val{v.ir.FPConvert(16, v.ir.Imm32(static_cast<f32>(max_bound)))};
         const IR::F16 min_val{v.ir.FPConvert(16, v.ir.Imm32(static_cast<f32>(min_bound)))};
-        IR::F16 safe_value{rounded_value};
-        if (f2i.dest_format == DestFormat::I8) {
-            const IR::F32 widened{v.ir.FPConvert(32, safe_value)};
-            const IR::F32 selected{v.ir.Select(v.ir.FPIsNan(op_a),
-                                              v.ir.Imm32(static_cast<f32>(min_bound)), widened)};
-            safe_value = v.ir.FPConvert(16, selected);
-        }
-        intermediate = v.ir.FPClamp(safe_value, min_val, max_val);
+        intermediate = v.ir.FPClamp(rounded_value, min_val, max_val);
         break;
     }
     case SrcFormat::F32: {
-        const IR::F32 max_val{
-            v.ir.Imm32(unsigned_f32_i64 ? 0x1.fffffep63f : static_cast<f32>(max_bound))};
+        // The u64 maximum rounds to 2^64 in f32; keep the conversion in range.
+        const IR::F32 max_val{v.ir.Imm32(unsigned_f32_i64 ? 0x1.fffffep63f : static_cast<f32>(max_bound))};
         const IR::F32 min_val{v.ir.Imm32(static_cast<f32>(min_bound))};
         IR::F32 safe_value{rounded_value};
-        if (unsigned_f32_i64 || f2i.dest_format == DestFormat::I8) {
-            safe_value = IR::F32{v.ir.Select(v.ir.FPIsNan(op_a), min_val, safe_value)};
-        }
+        if (unsigned_f32_i64)
+            safe_value = IR::F32{v.ir.Select(v.ir.FPIsNan(op_a), v.ir.Imm32(0.0f), safe_value)};
         intermediate = v.ir.FPClamp(safe_value, min_val, max_val);
         break;
     }
     case SrcFormat::F64: {
-        if (f2i.dest_format == DestFormat::I8) {
-            const IR::F32 max_val{v.ir.Imm32(static_cast<f32>(max_bound))};
-            const IR::F32 min_val{v.ir.Imm32(static_cast<f32>(min_bound))};
-            const IR::F32 narrowed{v.ir.FPConvert(32, rounded_value)};
-            const IR::F32 safe_value{v.ir.Select(v.ir.FPIsNan(op_a), min_val, narrowed)};
-            intermediate = v.ir.FPClamp(safe_value, min_val, max_val);
-        } else {
-            intermediate = v.ir.FPClamp(rounded_value, v.ir.Imm64(min_bound), v.ir.Imm64(max_bound));
-        }
+        const IR::F64 max_val{v.ir.Imm64(max_bound)};
+        const IR::F64 min_val{v.ir.Imm64(min_bound)};
+        intermediate = v.ir.FPClamp(rounded_value, min_val, max_val);
         break;
     }
     default:

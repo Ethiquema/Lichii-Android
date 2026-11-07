@@ -6,8 +6,10 @@
 
 #include <mutex>
 #include <utility>
-#include <type_traits>
 
+#if defined(__EMSCRIPTEN__) || defined(__wasi__)
+// TODO: gdb stub compat with emscripten?
+#else
 #include <boost/asio.hpp>
 #include <boost/version.hpp>
 #if BOOST_VERSION > 108400 && (!defined(_WINDOWS) && !defined(__ANDROID__)) || defined(YUZU_BOOST_v1)
@@ -18,18 +20,40 @@
 #else
 #include <boost/process/async_pipe.hpp>
 #endif
+#endif
 
 #include "common/logging.h"
 #include "common/polyfill_thread.h"
 #include "common/thread.h"
 #include "core/core.h"
 #include "core/debugger/debugger.h"
+#if defined(__EMSCRIPTEN__) || defined(__wasi__)
+// TODO: gdbstub with emscripten?
+#else
 #include "core/debugger/debugger_interface.h"
 #include "core/debugger/gdbstub.h"
+#endif
 #include "core/hle/kernel/global_scheduler_context.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_scheduler.h"
 
+#if defined(__EMSCRIPTEN__) || defined(__wasi__)
+namespace Core {
+// Dummy
+class DebuggerImpl {
+    char pad;
+};
+Debugger::Debugger(Core::System& system, u16 port) {}
+Debugger::~Debugger() = default;
+bool Debugger::NotifyThreadStopped(Kernel::KThread* thread) {
+    return false;
+}
+bool Debugger::NotifyThreadWatchpoint(Kernel::KThread* thread, const Kernel::DebugWatchpoint& watch) {
+    return false;
+}
+void Debugger::NotifyShutdown() {}
+} // namespace Core
+#else
 template <typename Readable, typename Buffer, typename Callback>
 static void AsyncReceiveInto(Readable& r, Buffer& buffer, Callback&& c) {
     static_assert(std::is_trivial_v<Buffer>);
@@ -400,3 +424,4 @@ void Debugger::NotifyShutdown() {
 }
 
 } // namespace Core
+#endif

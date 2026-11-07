@@ -10,7 +10,6 @@
 #include "common/common_types.h"
 #include "common/logging.h"
 #include "common/math_util.h"
-#include "common/settings.h"
 #include "video_core/surface.h"
 
 namespace VideoCore::Surface {
@@ -370,10 +369,6 @@ bool IsPixelFormatETC2(PixelFormat format) {
     case PixelFormat::ETC2_RGB_SRGB:
     case PixelFormat::ETC2_RGBA_SRGB:
     case PixelFormat::ETC2_RGB_PTA_SRGB:
-    case PixelFormat::EAC_R11_UNORM:
-    case PixelFormat::EAC_R11_SNORM:
-    case PixelFormat::EAC_R11G11_UNORM:
-    case PixelFormat::EAC_R11G11_SNORM:
         return true;
     default:
         return false;
@@ -495,14 +490,7 @@ u64 TranscodedAstcSize(u64 base_size, PixelFormat format) {
                                 static_cast<u64>(DefaultBlockHeight(format)) * RGBA8_PIXEL_SIZE;
     const u64 uncompressed_size = (base_size * base_block_size) / BytesPerBlock(format);
 
-    switch (Settings::GetAstcRecompression()) {
-    case Settings::AstcRecompression::Bc1:
-        return uncompressed_size / 8;
-    case Settings::AstcRecompression::Bc3:
-        return uncompressed_size / 4;
-    default:
-        return uncompressed_size;
-    }
+    return uncompressed_size;
 }
 
 } // namespace VideoCore::Surface

@@ -127,11 +127,45 @@ void ExecuteUnswizzlePlan(Tegra::MemoryManager& gpu_memory, const UnswizzlePlan&
                                                                std::span<const LevelRect> rects,
                                                                std::span<u8> output);
 
+/// Unswizzles only the blocks of a 2D block-linear image that overlap `dirty_ranges` (sorted,
+/// non-overlapping [begin, end) byte offsets from the image start) into `output`. Returns no copies
+/// when the image layout is not one this handles; the caller then uploads the whole image.
+[[nodiscard]] boost::container::small_vector<BufferImageCopy, 16> UnswizzleImageRows(
+    Tegra::MemoryManager& gpu_memory, GPUVAddr gpu_addr, const ImageInfo& info,
+    std::span<const std::pair<u64, u64>> dirty_ranges, std::vector<u8>& output);
+
+/// For a single-layer 2D block-linear image of 1x1-texel blocks: the host sparse blocks
+/// (tile_width x tile_height texels) that the guest byte ranges (offset, size) touch, merged into
+/// runs along x. Levels from tail_level on (the host's mip tail) come whole.
+[[nodiscard]] std::vector<LevelRect> SparseTileRects(const ImageInfo& info,
+                                                     std::span<const std::pair<u64, u64>> ranges,
+                                                     u32 tile_width, u32 tile_height,
+                                                     s32 tail_level);
+
+/// Bytes UnswizzleImageRects writes for `rects`.
+[[nodiscard]] size_t UnswizzledRectsBytes(const ImageInfo& info, std::span<const LevelRect> rects);
+
+/// Unswizzles `rects` (from SparseTileRects: on GOB columns) of a single-layer 2D block-linear
+/// image into output, reading only the guest blocks under them.
+[[nodiscard]] std::vector<BufferImageCopy> UnswizzleImageRects(Tegra::MemoryManager& gpu_memory,
+                                                               GPUVAddr gpu_addr,
+                                                               const ImageInfo& info,
+                                                               std::span<const LevelRect> rects,
+                                                               std::span<u8> output);
+
+/// Rewrites `copies` (from UnswizzleImage) to the layout ConvertImage produces, without converting.
+void ConvertedLayout(const ImageInfo& info, std::span<BufferImageCopy> copies);
+
 /// Rewrites `copies` (from UnswizzleImage) to the layout ConvertImage produces, without converting.
 void ConvertedLayout(const ImageInfo& info, std::span<BufferImageCopy> copies);
 
 void ConvertImage(std::span<const u8> input, const ImageInfo& info, std::span<u8> output,
                   std::span<BufferImageCopy> copies);
+
+[[nodiscard]] bool CanConvertFromGuest(const ImageInfo& info);
+
+[[nodiscard]] boost::container::small_vector<BufferImageCopy, 16> ConvertImageFromGuest(
+    std::span<const u8> input, const ImageInfo& info, std::span<u8> output);
 
 [[nodiscard]] boost::container::small_vector<BufferImageCopy, 16> FullDownloadCopies(
     const ImageInfo& info);
@@ -164,6 +198,9 @@ void SwizzleImage(Tegra::MemoryManager& gpu_memory, GPUVAddr gpu_addr, const Ima
                                                           bool native_bgr);
 
 [[nodiscard]] bool IsLayerStrideCompatible(const ImageInfo& lhs, const ImageInfo& rhs);
+
+[[nodiscard]] bool IsStaleReallocation(const ImageInfo& new_info, const ImageBase& overlap,
+                                       GPUVAddr gpu_addr) noexcept;
 
 [[nodiscard]] std::optional<SubresourceBase> FindSubresource(const ImageInfo& candidate,
                                                              const ImageBase& image,

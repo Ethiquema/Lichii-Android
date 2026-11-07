@@ -38,8 +38,7 @@ class GenericEnvironment;
 struct ShaderInfo {
     u64 unique_hash{};
     size_t size_bytes{};
-    /// Lowered code of a native program, reused when its pipelines are built.
-    std::shared_ptr<const LoweredNativeCode> lowered_native;
+    u32 color_outputs{};
 };
 
 class ShaderCache : public VideoCommon::ChannelSetupCaches<VideoCommon::ChannelInfo> {
@@ -77,10 +76,17 @@ public:
     /// @brief Flushes delayed removal operations
     void SyncGuestHost();
 
-    /// Drops the native programs the debug server rejects so their next draw or dispatch lowers
-    /// them again (and fails); after an un-reject, forgets every rejection so they are retried.
-    /// Runs on the thread that owns the cache, between frames.
+    /// Drops the cached native programs the debug server rejects (docs/nx2/debug-mcp.md); after
+    /// an un-reject also every remembered rejection. Rasterizer thread, between frames.
     void RefreshDebugRejections(bool unrejected);
+
+    /// Native program keys of the graphics stages bound by the last RefreshStages (0 where a
+    /// stage is off or not a native program), for the frame dump.
+    [[nodiscard]] std::array<u64, NUM_PROGRAMS> GraphicsNativeKeys(
+        const std::array<u64, NUM_PROGRAMS>& unique_hashes) const;
+
+    /// Native program key of the bound compute program, 0 when unknown, for the frame dump.
+    [[nodiscard]] u64 ComputeNativeKey();
 
 protected:
     struct GraphicsEnvironments {
@@ -92,7 +98,8 @@ protected:
         }
     };
 
-    explicit ShaderCache(Tegra::MaxwellDeviceMemoryManager& device_memory);
+    explicit ShaderCache(Tegra::MaxwellDeviceMemoryManager& device_memory,
+                         bool native_tensor_full_by_default_ = false);
 
     /// @brief Update the hashes and information of shader stages
     /// @param unique_hashes Shader hashes to store into when a stage is enabled
@@ -109,6 +116,10 @@ protected:
 
     std::array<const ShaderInfo*, NUM_PROGRAMS> shader_infos{};
     bool last_shaders_valid = false;
+    u32 fragment_color_outputs{};
+
+    Tegra::MaxwellDeviceMemoryManager& device_memory;
+    bool native_tensor_full_by_default = false;
 
 private:
     friend struct ShaderCacheTestAccess;
@@ -162,8 +173,6 @@ private:
     bool IsRejected(VAddr addr);
     /// Remembers the exception being handled as this address's rejection.
     void RememberRejection(VAddr addr);
-    /// Hash of the state task and mesh programs are translated with.
-    u64 MeshStateHash() const;
 
     Tegra::MaxwellDeviceMemoryManager& device_memory;
 

@@ -19,6 +19,8 @@
 #include "common/logging.h"
 #include "common/nx2_sampler.h"
 #include "common/scm_rev.h"
+#include "common/fs/fs_util.h"
+#include "common/log_ring.h"
 #include "common/settings.h"
 #include "common/stb.h"
 #include "core/core.h"
@@ -41,19 +43,29 @@ using namespace std::chrono_literals;
 constexpr size_t RING_LINES = 20000;
 /// Bytes one read_memory or read_gpu_memory call returns at most.
 constexpr u64 MAX_READ = 64 * 1024;
+/// Bytes one write_memory call writes at most.
+constexpr size_t MAX_WRITE = 4096;
 /// Presented frames one input or input_sequence call holds at most (10 minutes at 60 fps).
 constexpr u64 MAX_INPUT_FRAMES = 36000;
 constexpr size_t MAX_INPUT_STEPS = 1000;
 
 constexpr std::array<std::pair<std::string_view, HID::NpadButton>, 16> INPUT_BUTTONS{{
-    {"A", HID::NpadButton::A},         {"B", HID::NpadButton::B},
-    {"X", HID::NpadButton::X},         {"Y", HID::NpadButton::Y},
-    {"L", HID::NpadButton::L},         {"R", HID::NpadButton::R},
-    {"ZL", HID::NpadButton::ZL},       {"ZR", HID::NpadButton::ZR},
-    {"Plus", HID::NpadButton::Plus},   {"Minus", HID::NpadButton::Minus},
-    {"Up", HID::NpadButton::Up},       {"Down", HID::NpadButton::Down},
-    {"Left", HID::NpadButton::Left},   {"Right", HID::NpadButton::Right},
-    {"StickL", HID::NpadButton::StickL}, {"StickR", HID::NpadButton::StickR},
+    {"A", HID::NpadButton::A},
+    {"B", HID::NpadButton::B},
+    {"X", HID::NpadButton::X},
+    {"Y", HID::NpadButton::Y},
+    {"L", HID::NpadButton::L},
+    {"R", HID::NpadButton::R},
+    {"ZL", HID::NpadButton::ZL},
+    {"ZR", HID::NpadButton::ZR},
+    {"Plus", HID::NpadButton::Plus},
+    {"Minus", HID::NpadButton::Minus},
+    {"Up", HID::NpadButton::Up},
+    {"Down", HID::NpadButton::Down},
+    {"Left", HID::NpadButton::Left},
+    {"Right", HID::NpadButton::Right},
+    {"StickL", HID::NpadButton::StickL},
+    {"StickR", HID::NpadButton::StickR},
 }};
 
 struct ToolState {
@@ -72,6 +84,11 @@ struct ToolState {
                     std::chrono::system_clock::now().time_since_epoch())
                     .count()};
     std::string log_filter{Settings::values.log_filter.GetValue()};
+    /// EDEN_NX2_DEBUG_WRITE=1 at launch: write_memory may change guest memory.
+    bool write_enabled{[] {
+        const char* const value = std::getenv("EDEN_NX2_DEBUG_WRITE");
+        return value != nullptr && std::string_view{value} == "1";
+    }()};
     u64 captures{};
     u64 screenshots{};
     u64 samples{};
@@ -103,6 +120,11 @@ std::string HexAddress(u64 value) {
     return fmt::format("{:#x}", value);
 }
 
+/// A path as UTF-8 with forward slashes, for results and logs.
+std::string PathText(const std::filesystem::path& path) {
+    return Common::FS::ToUTF8String(path.generic_u8string());
+}
+
 /// An address as a JSON number or a hex string (0x optional).
 u64 AddressParam(const json& params, const char* name) {
     const json& value = params.at(name);
@@ -110,7 +132,8 @@ u64 AddressParam(const json& params, const char* name) {
         return value.get<u64>();
     }
     if (!value.is_string()) {
-        throw std::runtime_error{fmt::format("{} must be a hex string or a non-negative number", name)};
+        throw std::runtime_error{
+            fmt::format("{} must be a hex string or a non-negative number", name)};
     }
     const std::string text = value.get<std::string>();
     const std::string_view view{text};
@@ -120,7 +143,8 @@ u64 AddressParam(const json& params, const char* name) {
     const auto [end, error] =
         std::from_chars(digits.data(), digits.data() + digits.size(), address, 16);
     if (digits.empty() || error != std::errc{} || end != digits.data() + digits.size()) {
-        throw std::runtime_error{fmt::format("bad {} \"{}\": want hex, e.g. 0x8012345000", name, text)};
+        throw std::runtime_error{
+            fmt::format("bad {} \"{}\": want hex, e.g. 0x8012345000", name, text)};
     }
     return address;
 }
@@ -177,7 +201,8 @@ void AppendPng(void* context, void* data, int size) {
 }
 
 json Status(ToolState& state, const json& params) {
-    const auto window = std::chrono::milliseconds{Param<int>(params, "fps_window_ms", 500, 0, 5000)};
+    const auto window =
+        std::chrono::milliseconds{Param<int>(params, "fps_window_ms", 500, 0, 5000)};
     const u64 before = g_nx2_present_count.load(std::memory_order_relaxed);
     const auto begin = std::chrono::steady_clock::now();
     while (std::chrono::steady_clock::now() - begin < window &&
@@ -198,11 +223,12 @@ json Status(ToolState& state, const json& params) {
         {"paused", state.system.IsPaused()},
         {"presents", after},
         {"fps", seconds > 0.0 ? static_cast<double>(after - before) / seconds : 0.0},
-        {"uptime_s", std::chrono::duration<double>(std::chrono::steady_clock::now() - state.start)
-                         .count()},
-        {"dump_dir", state.dump_directory.generic_string()},
+        {"uptime_s",
+         std::chrono::duration<double>(std::chrono::steady_clock::now() - state.start).count()},
+        {"dump_dir", PathText(state.dump_directory)},
         {"log_filter", state.log_filter},
         {"rejected", HexList(VideoCore::Nx2Debug::RejectedHashes())},
+        {"write_memory", state.write_enabled},
     };
 }
 
@@ -226,7 +252,8 @@ json Screenshot(ToolState& state, const json& params) {
     const bool invert_y = future.get();
     std::vector<u8> rgb(size_t{layout.width} * layout.height * 3);
     for (u32 y = 0; y < layout.height; ++y) {
-        const u8* source = pixels->data() + size_t{invert_y ? layout.height - 1 - y : y} * layout.width * 4;
+        const u8* source =
+            pixels->data() + size_t{invert_y ? layout.height - 1 - y : y} * layout.width * 4;
         u8* target = rgb.data() + size_t{y} * layout.width * 3;
         for (u32 x = 0; x < layout.width; ++x, source += 4, target += 3) {
             target[0] = source[2];
@@ -243,14 +270,15 @@ json Screenshot(ToolState& state, const json& params) {
     json result = {{"width", layout.width}, {"height", layout.height}};
     if (params.value("save", false)) {
         std::filesystem::create_directories(state.dump_directory);
-        const auto path =
-            state.dump_directory / fmt::format("screenshot-{}-{:04}.png", state.session, ++state.screenshots);
+        const auto path = state.dump_directory / fmt::format("screenshot-{}-{:04}.png",
+                                                             state.session, ++state.screenshots);
         std::ofstream file{path, std::ios::binary};
-        file.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+        file.write(reinterpret_cast<const char*>(png.data()),
+                   static_cast<std::streamsize>(png.size()));
         if (!file) {
-            throw std::runtime_error{fmt::format("cannot write {}", path.generic_string())};
+            throw std::runtime_error{fmt::format("cannot write {}", PathText(path))};
         }
-        result["path"] = path.generic_string();
+        result["path"] = PathText(path);
     }
     if (params.value("inline", true)) {
         result["png_base64"] = Base64(png);
@@ -303,7 +331,8 @@ json CaptureFrame(ToolState& state, const json& params) {
         throw std::runtime_error{"frame capture needs the Vulkan renderer"};
     }
     const u64 id = ++state.captures;
-    const auto directory = state.dump_directory / fmt::format("capture-{}-{:03}", state.session, id);
+    const auto directory =
+        state.dump_directory / fmt::format("capture-{}-{:03}", state.session, id);
     std::filesystem::create_directories(directory);
     const bool sampled = params.value("sampled", false);
     const bool buffers = params.value("buffers", false);
@@ -316,7 +345,7 @@ json CaptureFrame(ToolState& state, const json& params) {
         throw std::runtime_error{fmt::format(
             "the capture did not finish within {} s (paused or loading?); if it started, its "
             "files are still being written to {}",
-            timeout, directory.generic_string())};
+            timeout, PathText(directory))};
     }
     if (!finished->error.empty()) {
         throw std::runtime_error{finished->error};
@@ -346,7 +375,7 @@ json CaptureFrame(ToolState& state, const json& params) {
         }
     }
     return {
-        {"directory", directory.generic_string()},
+        {"directory", PathText(directory)},
         {"sampled", sampled},
         {"buffers", buffers},
         {"frame", std::move(frame)},
@@ -355,7 +384,7 @@ json CaptureFrame(ToolState& state, const json& params) {
         {"entries_total", total},
         {"entries", std::move(entries)},
         {"index_command",
-         fmt::format("python3 -I tools/nx2/frame_dump_index.py \"{}\"", directory.generic_string())},
+         fmt::format("python3 -I tools/nx2/frame_dump_index.py \"{}\"", PathText(directory))},
     };
 }
 
@@ -370,9 +399,10 @@ json RejectShaders(ToolState&, const json& params) {
     const bool reject = params.value("reject", true);
     const u64 generation = VideoCore::Nx2Debug::SetRejected(hashes, reject);
     const int timeout = Param<int>(params, "timeout_s", 5, 0, 60);
-    const bool applied = hashes.empty() ||
-                         VideoCore::Nx2Debug::WaitRejectApplied(generation, std::chrono::seconds{timeout});
-    json result = {{"rejected", HexList(VideoCore::Nx2Debug::RejectedHashes())}, {"applied", applied}};
+    const bool applied = hashes.empty() || VideoCore::Nx2Debug::WaitRejectApplied(
+                                               generation, std::chrono::seconds{timeout});
+    json result = {{"rejected", HexList(VideoCore::Nx2Debug::RejectedHashes())},
+                   {"applied", applied}};
     if (!applied) {
         result["note"] = "no frame was presented yet; the change applies at the next frame end";
     }
@@ -385,9 +415,9 @@ json SampleThreads(ToolState& state, const json& params) {
     std::filesystem::create_directories(state.dump_directory);
     const auto path =
         state.dump_directory / fmt::format("samples-{}-{:03}.txt", state.session, ++state.samples);
-    std::string report = Nx2Sampler::Sample(threads.c_str(), seconds, path.string());
+    std::string report = Nx2Sampler::Sample(threads.c_str(), seconds, PathText(path));
     report.resize((std::min)(report.size(), Param<size_t>(params, "max_chars", 60000, 0, 4000000)));
-    return {{"file", path.generic_string()}, {"report", std::move(report)}};
+    return {{"file", PathText(path)}, {"report", std::move(report)}};
 }
 
 json ReadMemory(ToolState& state, const json& params) {
@@ -397,11 +427,47 @@ json ReadMemory(ToolState& state, const json& params) {
     static_cast<void>(FormatMemory(std::span<const u8>{}, as));
     std::vector<u8> bytes(size);
     if (const auto unmapped = ReadGuestMemory(Application(state).GetMemory(), address, bytes)) {
-        throw std::runtime_error{fmt::format(
-            "guest address {:#x} is not mapped (reading {} bytes at {:#x})", *unmapped, size, address)};
+        throw std::runtime_error{
+            fmt::format("guest address {:#x} is not mapped (reading {} bytes at {:#x})", *unmapped,
+                        size, address)};
     }
     json result = {{"address", HexAddress(address)}, {"size", size}};
     result.update(FormatMemory(bytes, as));
+    return result;
+}
+
+/// For experiments only: off unless the emulator was started with EDEN_NX2_DEBUG_WRITE=1.
+json WriteMemory(ToolState& state, const json& params) {
+    if (!state.write_enabled) {
+        throw std::runtime_error{"write_memory is off: start the emulator with "
+                                 "EDEN_NX2_DEBUG_WRITE=1 to allow it"};
+    }
+    const u64 address = AddressParam(params, "address");
+    std::vector<u8> bytes;
+    if (params.contains("f32")) {
+        for (const json& value : params.at("f32")) {
+            const u32 bits = std::bit_cast<u32>(value.get<float>());
+            for (int i = 0; i < 4; ++i) {
+                bytes.push_back(static_cast<u8>(bits >> (i * 8)));
+            }
+        }
+    } else {
+        bytes = ParseHexBytes(params.at("hex").get<std::string>());
+    }
+    if (bytes.empty() || bytes.size() > MAX_WRITE) {
+        throw std::runtime_error{fmt::format("write 1 to {} bytes", MAX_WRITE)};
+    }
+    if (address + bytes.size() < address) {
+        throw std::runtime_error{"address + size wraps around"};
+    }
+    std::vector<u8> before(bytes.size());
+    if (const auto unmapped = ReadGuestMemory(Application(state).GetMemory(), address, before)) {
+        throw std::runtime_error{fmt::format("guest address {:#x} is not mapped", *unmapped)};
+    }
+    Application(state).GetMemory().WriteBlock(address, bytes.data(), bytes.size());
+    LOG_INFO(Debug, "Debug server wrote {} bytes at {:#x}", bytes.size(), address);
+    json result = {{"address", HexAddress(address)}, {"size", bytes.size()}};
+    result["before"] = FormatMemory(before, "hex").at("hex");
     return result;
 }
 
@@ -423,8 +489,9 @@ json SearchMemory(ToolState& state, const json& params) {
     } else {
         throw std::runtime_error{fmt::format("regions \"{}\": want heap or all", regions)};
     }
-    const u64 start = params.contains("start") ? (std::max)(region_start, AddressParam(params, "start"))
-                                               : region_start;
+    const u64 start = params.contains("start")
+                          ? (std::max)(region_start, AddressParam(params, "start"))
+                          : region_start;
     const u64 end = params.contains("end")
                         ? (std::min)(region_start + region_size, AddressParam(params, "end"))
                         : region_start + region_size;
@@ -444,9 +511,9 @@ json SearchMemory(ToolState& state, const json& params) {
         {"start", HexAddress(start)},
         {"end", HexAddress((std::max)(start, end))},
         {"scanned_bytes", search.scanned},
-        {"elapsed_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
-                                                                 begin)
-                           .count()},
+        {"elapsed_ms",
+         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin)
+             .count()},
     };
     if (!search.complete) {
         result["next"] = HexAddress(search.next);
@@ -568,9 +635,11 @@ json InputSequence(ToolState& state, const json& params, const ClientGone& clien
 
 Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
     const auto handler = [&state](json (*tool)(ToolState&, const json&)) -> Handler {
-        return [state, tool](const json& params, const ClientGone&) { return tool(*state, params); };
+        return
+            [state, tool](const json& params, const ClientGone&) { return tool(*state, params); };
     };
-    const auto waiting = [&state](json (*tool)(ToolState&, const json&, const ClientGone&)) -> Handler {
+    const auto waiting =
+        [&state](json (*tool)(ToolState&, const json&, const ClientGone&)) -> Handler {
         return [state, tool](const json& params, const ClientGone& client_gone) {
             return tool(*state, params, client_gone);
         };
@@ -585,6 +654,7 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"sample", handler(SampleThreads)},
         {"read_memory", handler(ReadMemory)},
         {"search_memory", handler(SearchMemory)},
+        {"write_memory", handler(WriteMemory)},
         {"read_gpu_memory", handler(ReadGpuMemory)},
         {"input", waiting(Input)},
         {"input_sequence", waiting(InputSequence)},
@@ -680,9 +750,9 @@ json FormatMemory(std::span<const u8> bytes, std::string_view as) {
 std::optional<u64> ReadGuestMemory(Memory::Memory& memory, u64 address, std::span<u8> out) {
     for (size_t offset = 0; offset < out.size();) {
         const u64 current = address + offset;
-        const size_t length = (std::min)(static_cast<size_t>(Memory::YUZU_PAGESIZE -
-                                                             (current & Memory::YUZU_PAGEMASK)),
-                                         out.size() - offset);
+        const size_t length = (std::min)(
+            static_cast<size_t>(Memory::YUZU_PAGESIZE - (current & Memory::YUZU_PAGEMASK)),
+            out.size() - offset);
         const u8* const source = GuestByte(memory, current);
         if (source == nullptr) {
             return current;
@@ -734,9 +804,8 @@ GuestSearch SearchGuestMemory(Memory::Memory& memory, std::span<const u8> patter
                 return search;
             }
         }
-        window.erase(window.begin(),
-                     window.end() - static_cast<std::ptrdiff_t>(
-                                        (std::min)(pattern.size() - 1, window.size())));
+        window.erase(window.begin(), window.end() - static_cast<std::ptrdiff_t>((std::min)(
+                                                        pattern.size() - 1, window.size())));
         address = page_end;
     }
     return search;
@@ -783,7 +852,8 @@ InputStep ParseInputStep(const json& step) {
                 std::abs(value[index].get<double>()) > 1.0) {
                 throw std::runtime_error{fmt::format("{} must be [x, y] with both in -1..1", key)};
             }
-            return static_cast<s32>(std::lround(value[index].get<double>() * HID::HID_JOYSTICK_MAX));
+            return static_cast<s32>(
+                std::lround(value[index].get<double>() * HID::HID_JOYSTICK_MAX));
         };
         return HID::AnalogStickState{.x = axis(0), .y = axis(1)};
     };
@@ -807,7 +877,7 @@ std::optional<HID::InjectedInput> InputAt(std::span<const InputStep> steps, u64 
 }
 
 Service::Service(System& system, std::string title, u64 program_id, const Endpoint& endpoint,
-                 std::string dump_directory)
+                 std::filesystem::path dump_directory)
     : state{std::make_shared<ToolState>(system, std::move(title), program_id,
                                         std::move(dump_directory))} {
     VideoCore::Nx2Debug::BeginSession();
@@ -818,14 +888,16 @@ Service::Service(System& system, std::string title, u64 program_id, const Endpoi
         VideoCore::Nx2Debug::EndSession();
         throw;
     }
-    LOG_INFO(Debug, "Debug server listening on {}:{}, dump dir {}", endpoint.host, server->Port(),
-             state->dump_directory.generic_string());
+    LOG_INFO(Debug, "Debug server listening on {}:{}, dump dir {}{}", endpoint.host, server->Port(),
+             PathText(state->dump_directory),
+             state->write_enabled ? ", write_memory on (EDEN_NX2_DEBUG_WRITE)" : "");
 }
 
 Service::~Service() {
     state->stopping.store(true, std::memory_order_relaxed);
     VideoCore::Nx2Debug::EndSession();
     server.reset();
+    Common::Log::SetRingCapacity(0);
 }
 
 std::unique_ptr<Service> MaybeStartService(System& system, std::string title, u64 program_id) {
@@ -840,9 +912,10 @@ std::unique_ptr<Service> MaybeStartService(System& system, std::string title, u6
         return nullptr;
     }
     const char* const directory = std::getenv("EDEN_NX2_DEBUG_DIR");
-    std::string dump_directory = directory != nullptr && *directory != '\0'
-        ? std::string{directory}
-        : (Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir) / "debug-server").generic_string();
+    std::filesystem::path dump_directory =
+        directory != nullptr && *directory != '\0'
+            ? std::filesystem::path{directory}
+            : Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir) / "debug-server";
     try {
         return std::make_unique<Service>(system, std::move(title), program_id, *endpoint,
                                          std::move(dump_directory));

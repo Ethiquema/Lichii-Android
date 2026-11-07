@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -55,12 +58,6 @@ union Encoding {
     BitField<53, 4, u64> encoding;
 };
 
-void CheckAlignment(IR::Reg reg, size_t alignment) {
-    if (!IR::IsAligned(reg, alignment)) {
-        throw NotImplementedException("Unaligned source register {}", reg);
-    }
-}
-
 IR::Value MakeOffset(TranslatorVisitor& v, IR::Reg reg) {
     const IR::U32 value{v.X(reg)};
     return v.ir.CompositeConstruct(v.ir.BitFieldExtract(value, v.ir.Imm32(0), v.ir.Imm32(4), true),
@@ -92,38 +89,31 @@ IR::Value Sample(TranslatorVisitor& v, u64 insn) {
         coords = v.ir.CompositeConstruct(v.X(reg_a), v.X(reg_b));
         break;
     case 4:
-        CheckAlignment(reg_a, 2);
         texture_type = Shader::TextureType::Color2D;
         coords = v.ir.CompositeConstruct(v.X(reg_a), v.X(reg_a + 1));
         offsets = MakeOffset(v, reg_b);
         break;
     case 5:
-        CheckAlignment(reg_a, 2);
         texture_type = Shader::TextureType::Color2D;
         coords = v.ir.CompositeConstruct(v.X(reg_a), v.X(reg_a + 1));
         lod = v.X(reg_b);
         break;
     case 6:
-        CheckAlignment(reg_a, 2);
         texture_type = Shader::TextureType::Color2D;
         coords = v.ir.CompositeConstruct(v.X(reg_a), v.X(reg_a + 1));
         multisample = v.X(reg_b);
         break;
     case 7:
-        CheckAlignment(reg_a, 2);
         texture_type = Shader::TextureType::Color3D;
         coords = v.ir.CompositeConstruct(v.X(reg_a), v.X(reg_a + 1), v.X(reg_b));
         break;
     case 8: {
-        CheckAlignment(reg_b, 2);
         const IR::U32 array{v.ir.BitFieldExtract(v.X(reg_a), v.ir.Imm32(0), v.ir.Imm32(16))};
         texture_type = Shader::TextureType::ColorArray2D;
         coords = v.ir.CompositeConstruct(v.X(reg_b), v.X(reg_b + 1), array);
         break;
     }
     case 12:
-        CheckAlignment(reg_a, 2);
-        CheckAlignment(reg_b, 2);
         texture_type = Shader::TextureType::Color2D;
         coords = v.ir.CompositeConstruct(v.X(reg_a), v.X(reg_a + 1));
         lod = v.X(reg_b);
@@ -142,16 +132,14 @@ IR::Value Sample(TranslatorVisitor& v, u64 insn) {
 
 unsigned Swizzle(u64 insn) {
     const Encoding tlds{insn};
-    const size_t encoding{tlds.swizzle};
+    u8 const encoding = u8(tlds.swizzle);
     if (tlds.dest_reg_b == IR::Reg::RZ) {
-        if (encoding >= RG_LUT.size()) {
+        if (encoding >= RG_LUT.size())
             throw NotImplementedException("Illegal RG encoding {}", encoding);
-        }
         return RG_LUT[encoding];
     } else {
-        if (encoding >= RGBA_LUT.size()) {
+        if (encoding >= RGBA_LUT.size())
             throw NotImplementedException("Illegal RGBA encoding {}", encoding);
-        }
         return RGBA_LUT[encoding];
     }
 }
@@ -166,12 +154,10 @@ IR::Reg RegStoreComponent32(u64 insn, unsigned index) {
     case 0:
         return tlds.dest_reg_a;
     case 1:
-        CheckAlignment(tlds.dest_reg_a, 2);
         return tlds.dest_reg_a + 1;
     case 2:
         return tlds.dest_reg_b;
     case 3:
-        CheckAlignment(tlds.dest_reg_b, 2);
         return tlds.dest_reg_b + 1;
     }
     throw LogicError("Invalid store index {}", index);

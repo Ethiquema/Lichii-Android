@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "core/game_settings.h"
+#include "core/game_overrides.h"
 
 #include <algorithm>
 #include <cctype>
@@ -60,14 +61,25 @@ static GPUVendor GetGPU(const std::string& gpu_vendor_string) {
         }
     }
 
-    // legacy (shouldn't be needed anymore, but just in case)
     std::string gpu = gpu_vendor_string;
     std::transform(gpu.begin(), gpu.end(), gpu.begin(), [](unsigned char c){ return (char)std::tolower(c); });
     if (gpu.find("geforce") != std::string::npos) {
         return GPUVendor::Nvidia;
     }
-    if (gpu.find("radeon") != std::string::npos || gpu.find("ati") != std::string::npos) {
+    if (gpu.find("amd") != std::string::npos || gpu.find("radeon") != std::string::npos || gpu.find("ati") != std::string::npos) {
         return GPUVendor::AMD;
+    }
+    if (gpu.find("intel") != std::string::npos) {
+        return GPUVendor::Intel;
+    }
+    if (gpu.find("apple") != std::string::npos) {
+        return GPUVendor::Apple;
+    }
+    if (gpu.find("qualcomm") != std::string::npos || gpu.find("adreno") != std::string::npos) {
+        return GPUVendor::Qualcomm;
+    }
+    if (gpu.find("mali") != std::string::npos) {
+        return GPUVendor::ARM;
     }
 
     return GPUVendor::Unknown;
@@ -119,22 +131,16 @@ EnvironmentInfo DetectEnvironment(const VideoCore::RendererBase& renderer) {
     return env;
 }
 
-void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& renderer) {
-    const auto env = DetectEnvironment(renderer);
-
-    switch (static_cast<TitleID>(program_id)) {
-        case TitleID::NinjaGaidenRagebound:
-            Settings::values.use_squashed_iterated_blend = true;
-            break;
-        default:
-            break;
+void LoadEarlyOverrides(std::uint64_t program_id, const std::string& gpu_vendor, bool enabled) {
+    if (enabled && GameOverrides::OverridesFileExists()) {
+        GameOverrides::ApplyEarlyOverrides(program_id, gpu_vendor);
     }
+}
 
-    LOG_INFO(Core, "Applied game settings for title ID {:016X} on OS {}, GPU vendor {} ({})",
-             program_id,
-             static_cast<int>(env.os),
-             static_cast<int>(env.vendor),
-             env.vendor_string);
+void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& renderer, bool enabled) {
+    if (enabled && GameOverrides::OverridesFileExists()) {
+        GameOverrides::ApplyLateOverrides(program_id, renderer);
+    }
 }
 
 } // namespace Core::GameSettings

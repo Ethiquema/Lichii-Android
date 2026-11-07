@@ -48,9 +48,9 @@ if (NOT TARGET stb::headers)
     add_library(stb::headers ALIAS stb)
 endif()
 
-AddJsonPackage(NAME zbic DOWNLOAD_ONLY)
-set(ZBIC_INCLUDE_DIR
-    "${zbic_SOURCE_DIR}/src"
+AddJsonPackage(NAME atmosphere_zstd_bic DOWNLOAD_ONLY)
+set(ATMOSPHERE_ZSTD_BIC_INCLUDE_DIR
+    "${atmosphere_zstd_bic_SOURCE_DIR}/libraries/libstratosphere/source/util"
     PARENT_SCOPE)
 
 # ItaniumDemangle (Windows only)
@@ -94,6 +94,10 @@ AddDependentPackages(vulkan-headers vulkan-utility-libraries)
 # frozen
 AddJsonPackage(frozen)
 
+# DXVK's DXBC compiler, used to translate the frame generation shaders
+# out of a user-supplied Lossless.dll into SPIR-V
+AddJsonPackage(dxbc)
+
 # DiscordRPC
 if (USE_DISCORD_PRESENCE)
     if (ARCHITECTURE_arm64)
@@ -110,36 +114,6 @@ endif()
 
 # SimpleIni
 AddJsonPackage(simpleini)
-
-# Most linux distros don't package cubeb, so enable regardless of cpm settings
-if(ENABLE_CUBEB)
-    AddJsonPackage(cubeb)
-
-    if (cubeb_ADDED)
-        if (NOT MSVC)
-            if (TARGET speex)
-                target_compile_options(speex PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-sign-compare>)
-            endif()
-            set_target_properties(cubeb PROPERTIES COMPILE_OPTIONS "")
-            target_compile_options(cubeb INTERFACE
-                $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-implicit-const-int-float-conversion>
-                $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-shadow>
-                $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-missing-declarations>
-                $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-return-type>
-                $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-uninitialized>
-            )
-        else()
-            target_compile_options(cubeb PRIVATE
-                /wd4456
-                /wd4458
-            )
-        endif()
-    endif()
-
-    if (NOT TARGET cubeb::cubeb)
-        add_library(cubeb::cubeb ALIAS cubeb)
-    endif()
-endif()
 
 if (NOT YUZU_USE_BUNDLED_SDL3)
     if (NOT WIN32)
@@ -249,6 +223,14 @@ if (YUZU_TESTS OR DYNARMIC_TESTS)
     AddJsonPackage(catch2)
 endif()
 
+# ScarletNX
+if (ENABLE_SCARLETNX)
+    AddJsonPackage(scarletnx)
+    if (TARGET scarletnx-recompiler)
+        set_target_properties(scarletnx-recompiler PROPERTIES SYSTEM ON)
+    endif()
+endif()
+
 # getopt
 if (MSVC)
     add_subdirectory(getopt)
@@ -277,6 +259,12 @@ if (VulkanMemoryAllocator_ADDED)
     endif()
 endif()
 
+# httplib
+if (IOS)
+    set(HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF)
+endif()
+AddJsonPackage(httplib)
+
 # cpp-jwt
 if (ENABLE_WEB_SERVICE OR ENABLE_UPDATE_CHECKER)
     AddJsonPackage(cpp-jwt)
@@ -298,11 +286,21 @@ endif()
 # TZDB (Time Zone Database)
 add_subdirectory(nx_tzdb)
 
+# PowerPC emitter
+if (ARCHITECTURE_powerpc64)
+    add_subdirectory(powah)
+endif()
+
 add_library(tz tz/tz/tz.cpp)
 target_include_directories(tz PUBLIC ./tz)
 
 add_library(bc_decoder bc_decoder/bc_decoder.cpp)
 target_include_directories(bc_decoder PUBLIC ./bc_decoder)
+
+if (OPENORBIS)
+    add_library(ps4sup ps4sup/emutls.c ps4sup/stub.cpp)
+    target_include_directories(ps4sup PUBLIC ./ps4sup)
+endif()
 
 if (NOT TARGET RenderDoc::API)
     add_library(renderdoc INTERFACE)

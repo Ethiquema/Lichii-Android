@@ -89,7 +89,7 @@ protected:
     Result DryRead(size_t* out, s64 offset, size_t size, const ReadOption& option,
                    OpenMode open_mode) {
         // Check that we can read
-        R_UNLESS(static_cast<u32>(open_mode & OpenMode::Read) != 0, ResultReadNotPermitted);
+        R_UNLESS(static_cast<u32>(open_mode & OpenMode::Read) != 0, ResultReadUnpermitted);
 
         // Get the file size, and validate our offset
         s64 file_size = 0;
@@ -102,14 +102,14 @@ protected:
 
     Result DrySetSize(s64 size, OpenMode open_mode) {
         // Check that we can write
-        R_UNLESS(static_cast<u32>(open_mode & OpenMode::Write) != 0, ResultWriteNotPermitted);
+        R_UNLESS(static_cast<u32>(open_mode & OpenMode::Write) != 0, ResultWriteUnpermitted);
         R_SUCCEED();
     }
 
     Result DryWrite(bool* out_append, s64 offset, size_t size, const WriteOption& option,
                     OpenMode open_mode) {
         // Check that we can write
-        R_UNLESS(static_cast<u32>(open_mode & OpenMode::Write) != 0, ResultWriteNotPermitted);
+        R_UNLESS(static_cast<u32>(open_mode & OpenMode::Write) != 0, ResultWriteUnpermitted);
 
         // Get the file size
         s64 file_size = 0;

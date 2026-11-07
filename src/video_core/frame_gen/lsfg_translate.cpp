@@ -6,22 +6,36 @@
 #include <map>
 #include <tuple>
 
+#include <dxbc_modinfo.h>
+#include <dxbc_module.h>
+#include <dxbc_reader.h>
+#include <thirdparty/spirv.hpp>
+
 #include "video_core/frame_gen/lsfg_translate.h"
 
 namespace VideoCore::FrameGen {
 
 namespace {
 
-constexpr u32 SPIRV_MAGIC = 0x07230203;
-constexpr u32 SPIRV_WORD_COUNT_SHIFT = 16;
-constexpr u32 SPIRV_OPCODE_MASK = 0xffff;
-constexpr u32 SPIRV_OP_FUNCTION = 54;
-constexpr u32 SPIRV_OP_DECORATE = 71;
-constexpr u32 SPIRV_DECORATION_BINDING = 33;
-constexpr u32 SPIRV_DECORATION_DESCRIPTOR_SET = 34;
-
 constexpr u32 DECORATION_LITERAL_WORD = 3;
 constexpr size_t SPIRV_HEADER_WORDS = 5;
+
+void RenumberBindings(dxvk::SpirvCodeBuffer& code) {
+    std::vector<u32> literal_offsets;
+    for (const auto instruction : code) {
+        if (instruction.opCode() == spv::OpFunction) {
+            break;
+        }
+        if (instruction.opCode() == spv::OpDecorate &&
+            instruction.arg(2) == spv::DecorationBinding) {
+            literal_offsets.push_back(instruction.offset() + DECORATION_LITERAL_WORD);
+        }
+    }
+
+    for (size_t i = 0; i < literal_offsets.size(); ++i) {
+        code.data()[literal_offsets[i]] = static_cast<u32>(i);
+    }
+}
 
 void RenumberBindingsInOrder(std::vector<u32>& words) {
     struct Slot {
@@ -35,18 +49,18 @@ void RenumberBindingsInOrder(std::vector<u32>& words) {
 
     size_t offset = SPIRV_HEADER_WORDS;
     while (offset + 1 <= words.size()) {
-        const u32 length = words[offset] >> SPIRV_WORD_COUNT_SHIFT;
-        const u32 opcode = words[offset] & SPIRV_OPCODE_MASK;
+        const u32 length = words[offset] >> spv::WordCountShift;
+        const u32 opcode = words[offset] & spv::OpCodeMask;
         if (length == 0 || offset + length > words.size()) {
             return;
         }
-        if (opcode == SPIRV_OP_FUNCTION) {
+        if (opcode == spv::OpFunction) {
             break;
         }
-        if (opcode == SPIRV_OP_DECORATE && length >= 4) {
-            if (words[offset + 2] == SPIRV_DECORATION_DESCRIPTOR_SET) {
+        if (opcode == spv::OpDecorate && length >= 4) {
+            if (words[offset + 2] == spv::DecorationDescriptorSet) {
                 sets[words[offset + 1]] = words[offset + 3];
-            } else if (words[offset + 2] == SPIRV_DECORATION_BINDING) {
+            } else if (words[offset + 2] == spv::DecorationBinding) {
                 slots.push_back(Slot{0, words[offset + 3], offset + DECORATION_LITERAL_WORD});
             }
         }
@@ -75,7 +89,7 @@ bool IsSpirvModule(std::span<const u8> blob) {
     }
     u32 magic{};
     std::memcpy(&magic, blob.data(), sizeof(magic));
-    return magic == SPIRV_MAGIC;
+    return magic == spv::MagicNumber;
 }
 
 std::vector<u32> AdoptSpirvModule(std::span<const u8> blob) {
@@ -88,6 +102,28 @@ std::vector<u32> AdoptSpirvModule(std::span<const u8> blob) {
 
     RenumberBindingsInOrder(words);
     return words;
+}
+
+std::vector<u32> TranslateComputeShader(std::span<const u8> dxbc) {
+    if (dxbc.empty()) {
+        return {};
+    }
+
+    try {
+        dxvk::DxbcReader reader{reinterpret_cast<const char*>(dxbc.data()), dxbc.size()};
+        dxvk::DxbcModule module{reader};
+
+        const dxvk::DxbcModuleInfo module_info{};
+        dxvk::SpirvCodeBuffer code = module.compile(module_info, "CS");
+        if (code.dwords() == 0) {
+            return {};
+        }
+
+        RenumberBindings(code);
+        return std::vector<u32>{code.data(), code.data() + code.dwords()};
+    } catch (...) {
+        return {};
+    }
 }
 
 } // namespace VideoCore::FrameGen

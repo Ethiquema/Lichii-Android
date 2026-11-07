@@ -1,7 +1,5 @@
 # SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 # SPDX-License-Identifier: GPL-3.0-or-later
-include(TargetArchitectureSpecificSources)
-
 add_executable(dynarmic_tests
     fp/FPToFixed.cpp
     fp/FPValue.cpp
@@ -17,6 +15,8 @@ add_executable(dynarmic_tests
     decoder_tests.cpp
     # A64
     A64/a64.cpp
+    A64/pauth_returns.cpp
+    A64/lse.cpp
     A64/fibonacci.cpp
     A64/fp_min_max.cpp
     A64/misaligned_page_table.cpp
@@ -44,13 +44,13 @@ if (DYNARMIC_TESTS_USE_UNICORN)
     )
 endif()
 
-if ("riscv" IN_LIST ARCHITECTURE)
+if (ARCHITECTURE_riscv64)
     target_link_libraries(dynarmic_tests PRIVATE biscuit::biscuit)
 endif()
 
-if ("x86_64" IN_LIST ARCHITECTURE)
+if (ARCHITECTURE_x86_64)
     target_link_libraries(dynarmic_tests PRIVATE xbyak::xbyak)
-    target_architecture_specific_sources(dynarmic_tests "x86_64"
+    target_sources(dynarmic_tests PRIVATE
         x64_cpu_info.cpp
         native/preserve_xmm.cpp
     )
@@ -134,3 +134,8 @@ target_compile_options(dynarmic_tests PRIVATE ${DYNARMIC_CXX_FLAGS})
 target_compile_definitions(dynarmic_tests PRIVATE FMT_USE_USER_DEFINED_LITERALS=1)
 
 add_test(NAME dynarmic_tests COMMAND dynarmic_tests --durations yes)
+
+if (OPENORBIS)
+    target_link_libraries(dynarmic_tests PRIVATE SceVideoOut SceAudioOut ScePad SceSystemService ps4sup)
+    create_ps4_eboot(dynarmic_tests dynarmic_tests IV0000-BREW00090_00-DYNARMICTS000000)
+endif()

@@ -24,22 +24,6 @@
 
 namespace Common {
 
-/// Make a string lowercase
-std::string ToLower(const std::string_view sv) {
-    std::string str{sv};
-    std::transform(str.begin(), str.end(), str.begin(),
-                   [](auto const c) { return char(std::tolower(c)); });
-    return str;
-}
-
-/// Make a string uppercase
-std::string ToUpper(const std::string_view sv) {
-    std::string str{sv};
-    std::transform(str.begin(), str.end(), str.begin(),
-                   [](auto const c) { return char(std::toupper(c)); });
-    return str;
-}
-
 bool SplitPath(const std::string& full_path, std::string* _pPath, std::string* _pFilename,
                std::string* _pExtension) {
     if (full_path.empty())
@@ -80,55 +64,122 @@ bool SplitPath(const std::string& full_path, std::string* _pPath, std::string* _
     return true;
 }
 
-void SplitString(const std::string& str, const char delim, std::vector<std::string>& output) {
-    std::istringstream iss(str);
-    output.resize(1);
-
-    while (std::getline(iss, *output.rbegin(), delim)) {
-        output.emplace_back();
+std::string UTF16ToUTF8(std::u16string_view input) {
+    std::string result;
+    result.reserve(input.size() * 4);
+    for (size_t i = 0; i < input.size(); ++i) {
+        uint32_t code = input[i];
+        // Handle surrogate pairs
+        if (code >= 0xD800 && code <= 0xDBFF) {
+            if (i + 1 < input.size()) {
+                uint32_t low = input[i + 1];
+                if (low >= 0xDC00 && low <= 0xDFFF) {
+                    code = ((code - 0xD800) << 10) + (low - 0xDC00) + 0x10000;
+                    ++i;
+                }
+            }
+        }
+        if (code <= 0x7F) {
+            result.push_back(char(code));
+        } else if (code <= 0x7FF) {
+            result.push_back(char(0xC0 | (code >> 6)));
+            result.push_back(char(0x80 | (code & 0x3F)));
+        } else if (code <= 0xFFFF) {
+            result.push_back(char(0xE0 | (code >> 12)));
+            result.push_back(char(0x80 | ((code >> 6) & 0x3F)));
+            result.push_back(char(0x80 | (code & 0x3F)));
+        } else {
+            result.push_back(char(0xF0 | (code >> 18)));
+            result.push_back(char(0x80 | ((code >> 12) & 0x3F)));
+            result.push_back(char(0x80 | ((code >> 6) & 0x3F)));
+            result.push_back(char(0x80 | (code & 0x3F)));
+        }
     }
-
-    output.pop_back();
-}
-
-std::string TabsToSpaces(int tab_size, std::string in) {
-    std::size_t i = 0;
-
-    while ((i = in.find('\t')) != std::string::npos) {
-        in.replace(i, 1, tab_size, ' ');
-    }
-
-    return in;
-}
-
-std::string ReplaceAll(std::string result, const std::string& src, const std::string& dest) {
-    std::size_t pos = 0;
-
-    if (src == dest)
-        return result;
-
-    while ((pos = result.find(src, pos)) != std::string::npos) {
-        result.replace(pos, src.size(), dest);
-        pos += dest.length();
-    }
-
     return result;
 }
 
-std::string UTF16ToUTF8(std::u16string_view input) {
-    std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> convert;
-    return convert.to_bytes(input.data(), input.data() + input.size());
-}
-
 std::u16string UTF8ToUTF16(std::string_view input) {
-    std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> convert;
-    return convert.from_bytes(input.data(), input.data() + input.size());
+    std::u16string result;
+    result.reserve(input.size() * 2);
+    for (size_t i = 0; i < input.size(); ) {
+        uint32_t code = 0;
+        unsigned char c = input[i];
+        size_t len = 0;
+        if ((c & 0x80) == 0) {
+            code = c;
+            len = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            code = c & 0x1F;
+            len = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            code = c & 0x0F;
+            len = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            code = c & 0x07;
+            len = 4;
+        } else {
+            ++i;
+            continue;
+        }
+        if (i + len - 1 >= input.size())
+            break;
+        for (size_t j = 1; j <= len - 1; ++j) {
+            if ((input[i + j] & 0xC0) != 0x80) {
+                code = 0xFFFD;
+                break;
+            }
+            code = (code << 6) | (input[i + j] & 0x3F);
+        }
+        if (code <= 0xFFFF) {
+            result.push_back(char16_t(code));
+        } else {
+            code -= 0x10000;
+            result.push_back(char16_t(0xD800 + (code >> 10)));
+            result.push_back(char16_t(0xDC00 + (code & 0x3FF)));
+        }
+        i += len;
+    }
+    return result;
 }
 
 std::u32string UTF8ToUTF32(std::string_view input) {
-    std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> convert;
-    return convert.from_bytes(input.data(), input.data() + input.size());
+    std::u32string result;
+    result.reserve(input.size());
+    for (size_t i = 0; i < input.size(); ) {
+        uint32_t code = 0;
+        unsigned char c = input[i];
+        size_t len = 0;
+        if ((c & 0x80) == 0) {
+            code = c;
+            len = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            code = c & 0x1F;
+            len = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            code = c & 0x0F;
+            len = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            code = c & 0x07;
+            len = 4;
+        } else {
+            ++i;
+            continue;
+        }
+        if (i + len - 1 >= input.size())
+            break;
+        for (size_t j = 1; j <= len - 1; ++j) {
+            if ((input[i + j] & 0xC0) != 0x80) {
+                code = 0xFFFD;
+                break;
+            }
+            code = (code << 6) | (input[i + j] & 0x3F);
+        }
+        result.push_back(code);
+        i += len;
+    }
+    return result;
 }
+
 
 #ifdef _WIN32
 static std::wstring CPToUTF16(u32 code_page, std::string_view input) {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
@@ -1217,7 +1217,7 @@ public:
                 replaced_src = static_cast<char*>(Allocate(replaced_src_len));
             }
 
-            Strlcpy<char>(replaced_src, src, replaced_src_len);
+            strlcpy(replaced_src, src, replaced_src_len);
 
             Replace(replaced_src, replaced_src_len, AlternateDirectorySeparator,
                     DirectorySeparator);

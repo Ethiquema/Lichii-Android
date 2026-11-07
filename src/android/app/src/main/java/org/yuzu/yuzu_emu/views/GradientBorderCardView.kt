@@ -68,7 +68,7 @@ class GradientBorderCardView @JvmOverloads constructor(
             borderPaint.shader = null
             val typedValue = android.util.TypedValue()
             context.theme.resolveAttribute(
-                com.google.android.material.R.attr.colorPrimary,
+                androidx.appcompat.R.attr.colorPrimary,
                 typedValue,
                 true
             )

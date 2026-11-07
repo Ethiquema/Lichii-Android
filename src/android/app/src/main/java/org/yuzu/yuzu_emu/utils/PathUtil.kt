@@ -19,6 +19,24 @@ object PathUtil {
             return null
         }
 
+        // Handle raw:/ paths (direct file paths from Downloads shortcut)
+        if (docId.startsWith("raw:")) {
+            return docId.substringAfter("raw:")
+        }
+
+        // Handle msf: MediaStore paths (some devices use this for Downloads)
+        if (docId.startsWith("msf:")) {
+            // Try to extract path from msf ID
+            val parts = docId.split(":")
+            if (parts.size >= 2) {
+                // msf IDs often encode the actual path - try common patterns
+                val potentialPath = parts.drop(1).joinToString(":")
+                if (potentialPath.startsWith("/")) {
+                    return potentialPath
+                }
+            }
+        }
+
         if (docId.startsWith("primary:")) {
             val relativePath = docId.substringAfter(":")
             val primaryStoragePath = android.os.Environment.getExternalStorageDirectory().absolutePath

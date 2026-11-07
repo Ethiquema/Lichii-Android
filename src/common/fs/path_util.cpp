@@ -90,9 +90,8 @@ public:
     }
 
     void CreateEdenPaths() {
-        std::for_each(eden_paths.begin(), eden_paths.end(), [](auto &path) {
-            void(FS::CreateDirs(path.second));
-        });
+        std::for_each(eden_paths.begin(), eden_paths.end(),
+                      [](auto& path) { void(FS::CreateDirs(path.second)); });
     }
 
     void SetEdenPathImpl(EdenPath eden_path, const fs::path& new_path) {
@@ -119,16 +118,24 @@ public:
         }
         eden_path_cache = eden_path / CACHE_DIR;
         eden_path_config = eden_path / CONFIG_DIR;
-#define LEGACY_PATH(titleName, upperName) GenerateLegacyPath(EmuPath::titleName##Dir, GetAppDataRoamingDirectory() / upperName##_DIR); \
-        GenerateLegacyPath(EmuPath::titleName##ConfigDir, GetAppDataRoamingDirectory() / upperName##_DIR / CONFIG_DIR); \
-        GenerateLegacyPath(EmuPath::titleName##CacheDir, GetAppDataRoamingDirectory() / upperName##_DIR / CACHE_DIR);
+#define LEGACY_PATH(titleName, upperName)                                                          \
+    GenerateLegacyPath(EmuPath::titleName##Dir, GetAppDataRoamingDirectory() / upperName##_DIR);   \
+    GenerateLegacyPath(EmuPath::titleName##ConfigDir,                                              \
+                       GetAppDataRoamingDirectory() / upperName##_DIR / CONFIG_DIR);               \
+    GenerateLegacyPath(EmuPath::titleName##CacheDir,                                               \
+                       GetAppDataRoamingDirectory() / upperName##_DIR / CACHE_DIR);
         LEGACY_PATH(Citron, CITRON)
         LEGACY_PATH(Sudachi, SUDACHI)
         LEGACY_PATH(Yuzu, YUZU)
         LEGACY_PATH(Suyu, SUYU)
+        LEGACY_PATH(LegacyEden, EDEN_LEGACY)
 #undef LEGACY_PATH
 #elif __ANDROID__
         ASSERT(!eden_path.empty());
+        eden_path_cache = eden_path / CACHE_DIR;
+        eden_path_config = eden_path / CONFIG_DIR;
+#elif defined(__OPENORBIS__)
+        eden_path = "/data/eden";
         eden_path_cache = eden_path / CACHE_DIR;
         eden_path_config = eden_path / CONFIG_DIR;
 #else
@@ -137,17 +144,27 @@ public:
             eden_path = GetDataDirectory("XDG_DATA_HOME") / EDEN_DIR;
             eden_path_cache = GetDataDirectory("XDG_CACHE_HOME") / EDEN_DIR;
             eden_path_config = GetDataDirectory("XDG_CONFIG_HOME") / EDEN_DIR;
+#if defined(__EMSCRIPTEN__) || defined(__wasi__) || defined(__managarm__)
+            // folders MAY not exist in this distrobution/OS
+            CreateParentDir(GetDataDirectory("XDG_CONFIG_HOME"));
+            CreateParentDir(GetDataDirectory("XDG_CACHE_HOME"));
+#endif
         } else {
             eden_path_cache = eden_path / CACHE_DIR;
             eden_path_config = eden_path / CONFIG_DIR;
         }
-#define LEGACY_PATH(titleName, upperName) GenerateLegacyPath(EmuPath::titleName##Dir, GetDataDirectory("XDG_DATA_HOME") / upperName##_DIR); \
-        GenerateLegacyPath(EmuPath::titleName##ConfigDir, GetDataDirectory("XDG_CONFIG_HOME") / upperName##_DIR); \
-        GenerateLegacyPath(EmuPath::titleName##CacheDir, GetDataDirectory("XDG_CACHE_HOME") / upperName##_DIR);
+#define LEGACY_PATH(titleName, upperName)                                                          \
+    GenerateLegacyPath(EmuPath::titleName##Dir,                                                    \
+                       GetDataDirectory("XDG_DATA_HOME") / upperName##_DIR);                       \
+    GenerateLegacyPath(EmuPath::titleName##ConfigDir,                                              \
+                       GetDataDirectory("XDG_CONFIG_HOME") / upperName##_DIR);                     \
+    GenerateLegacyPath(EmuPath::titleName##CacheDir,                                               \
+                       GetDataDirectory("XDG_CACHE_HOME") / upperName##_DIR);
         LEGACY_PATH(Citron, CITRON)
         LEGACY_PATH(Sudachi, SUDACHI)
         LEGACY_PATH(Yuzu, YUZU)
         LEGACY_PATH(Suyu, SUYU)
+        LEGACY_PATH(LegacyEden, EDEN_LEGACY)
 #undef LEGACY_PATH
 #endif
         // data
@@ -176,12 +193,11 @@ public:
         GenerateEdenPath(EdenPath::ShaderDir, eden_path_cache / SHADER_DIR);
 #ifdef _WIN32
         GenerateLegacyPath(EmuPath::RyujinxDir, GetAppDataRoamingDirectory() / RYUJINX_DIR);
-#else
+#elif !defined(__OPENORBIS__)
         // In Ryujinx's infinite wisdom, it places EVERYTHING in the config directory on UNIX
-        // This is incredibly stupid and violates a million XDG standards, but whatever
+        // This is not great and violates a million XDG standards, but whatever
         GenerateLegacyPath(EmuPath::RyujinxDir, GetDataDirectory("XDG_CONFIG_HOME") / RYUJINX_DIR);
 #endif
-
     }
 
 private:
@@ -306,7 +322,8 @@ void SetEdenPath(EdenPath eden_path, const fs::path& new_path) {
     if (FS::IsDir(new_path)) {
         instance.SetEdenPathImpl(eden_path, new_path);
     } else {
-        LOG_ERROR(Common_Filesystem, "Filesystem object at new_path={} is not a directory", PathToUTF8String(new_path));
+        LOG_ERROR(Common_Filesystem, "Filesystem object at new_path={} is not a directory",
+                  PathToUTF8String(new_path));
     }
 }
 
@@ -343,36 +360,33 @@ fs::path GetAppDataRoamingDirectory() {
     return fs_appdata_roaming_path;
 }
 
+#elif defined(__OPENORBIS__)
+
+// Not required/defined
+
 #else
 
 fs::path GetHomeDirectory() {
     const char* home_env_var = getenv("HOME");
-
     if (home_env_var) {
         return fs::path{home_env_var};
     }
-
     LOG_INFO(Common_Filesystem,
-             "$HOME is not defined in the environment variables, "
-             "attempting to query passwd to get the home path of the current user");
-
+        "$HOME is not defined in the environment variables, "
+        "attempting to query passwd to get the home path of the current user");
     const auto* pw = getpwuid(getuid());
-
     if (!pw) {
         LOG_ERROR(Common_Filesystem, "Failed to get the home path of the current user");
         return {};
     }
-
     return fs::path{pw->pw_dir};
 }
 
 fs::path GetDataDirectory(const std::string& env_name) {
     const char* data_env_var = getenv(env_name.c_str());
-
     if (data_env_var) {
         return fs::path{data_env_var};
     }
-
     if (env_name == "XDG_DATA_HOME") {
         return GetHomeDirectory() / ".local/share";
     } else if (env_name == "XDG_CACHE_HOME") {
@@ -380,7 +394,6 @@ fs::path GetDataDirectory(const std::string& env_name) {
     } else if (env_name == "XDG_CONFIG_HOME") {
         return GetHomeDirectory() / ".config";
     }
-
     return {};
 }
 

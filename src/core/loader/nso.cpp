@@ -5,9 +5,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
 #include <cstring>
 #include <span>
+#include <string_view>
 #include <vector>
 
 #include "common/common_funcs.h"
@@ -18,13 +20,18 @@
 #include "common/zbic_compression.h"
 #include "common/settings.h"
 #include "common/swap.h"
+#include "core/arm/symbols.h"
 #include "core/core.h"
 #include "core/arm/dynarmic/window_trace.h"
 #include "core/file_sys/patch_manager.h"
+#include "core/file_sys/romfs_factory.h"
+#include "core/file_sys/vfs/vfs_types.h"
 #include "core/hle/kernel/code_set.h"
 #include "core/hle/kernel/k_page_table.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_thread.h"
+#include "core/hle/service/filesystem/filesystem.h"
+#include "core/loader/loader.h"
 #include "core/loader/nso.h"
 #include "core/memory.h"
 
@@ -34,19 +41,101 @@
 
 namespace Loader {
 namespace {
+
+// A Switch 1 program that imports nn::pl::IsRunningOnOunce checks whether it runs on a Switch 2:
+// a Switch 2 Edition, which uses its Switch 2 Edition content there. The SDK's function is a stub
+// that returns false (mov w0, wzr; ret) and the console answers true; do the same, and give the
+// program the Switch 2 settings (unless they use another graphics API than the window was made
+// for).
+void AnswerIsRunningOnOunce(std::span<u8> image, const std::string& name) {
+    constexpr std::string_view Symbol = "_ZN2nn2pl16IsRunningOnOunceEv";
+    const auto symbols = Core::Symbols::GetSymbols(image);
+    const auto it = symbols.find(Symbol);
+    if (it == symbols.end()) {
+        return;
+    }
+    const VAddr address = it->second.first;
+    if (address == 0) {
+        auto& backend = Settings::values.renderer_backend;
+        if (Settings::ActiveProfile() == Settings::Profile::Switch2) {
+            return;
+        }
+        if (backend.UsingGlobal() &&
+            Settings::GlobalString(Settings::Profile::Switch1, backend) !=
+                Settings::GlobalString(Settings::Profile::Switch2, backend)) {
+            LOG_WARNING(Loader,
+                        "{} is a Switch 2 Edition, but the Switch 2 settings use another graphics "
+                        "API: keeping the Switch 1 settings",
+                        name);
+            return;
+        }
+        LOG_INFO(Loader, "{} is a Switch 2 Edition: using the Switch 2 settings", name);
+        Settings::SetActiveProfile(Settings::Profile::Switch2);
+        return;
+    }
+    constexpr u32 MovW0Zero = 0x2a1f03e0;
+    constexpr u32 Ret = 0xd65f03c0;
+    constexpr u32 MovW0One = 0x52800020;
+    std::array<u32, 2> code{};
+    if (address + sizeof(code) > image.size()) {
+        return;
+    }
+    std::memcpy(code.data(), image.data() + address, sizeof(code));
+    if (code[0] != MovW0Zero || code[1] != Ret) {
+        LOG_WARNING(Loader, "{}: nn::pl::IsRunningOnOunce is not the SDK stub, left as is", name);
+        return;
+    }
+    std::memcpy(image.data() + address, &MovW0One, sizeof(MovW0One));
+    LOG_INFO(Loader, "{}: nn::pl::IsRunningOnOunce answers true (Switch 2 Edition)", name);
+}
 struct MODHeader {
     u32_le magic;
     u32_le dynamic_offset;
     u32_le bss_start_offset;
     u32_le bss_end_offset;
-    u32_le eh_frame_hdr_start_offset;
-    u32_le eh_frame_hdr_end_offset;
+    // https://github.com/Atmosphere-NX/Atmosphere/pull/2835/changes
+    s32_le eh_frame_hdr_start_offset;
+    s32_le eh_frame_hdr_end_offset;
     u32_le module_offset; // Offset to runtime-generated module object. typically equal to .bss base
 };
 static_assert(sizeof(MODHeader) == 0x1c, "MODHeader has incorrect size.");
 
 constexpr u32 PageAlignSize(u32 size) {
     return static_cast<u32>((size + Core::Memory::YUZU_PAGEMASK) & ~Core::Memory::YUZU_PAGEMASK);
+}
+
+constexpr u64 PaperMarioTTYDProgramId = 0x0100ECD018EBE000ULL;
+constexpr u32 PaperMarioTTYDTrapOffset = 0x112F50;
+
+bool IsPaperMarioTTYD(u64 program_id) {
+    return (program_id & ~0xFFFULL) == PaperMarioTTYDProgramId;
+}
+
+void ApplyPaperMarioTTYDWorkaround(const Kernel::KProcess& process, std::string_view module_name,
+                                   std::span<u8> image, size_t module_start) {
+    static constexpr std::array<u8, 8> kTrapThenRet{
+        0xFE, 0xDE, 0xFF, 0xE7, 0xC0, 0x03, 0x5F, 0xD6,
+    };
+    static constexpr std::array<u8, 4> kNop{
+        0x1F, 0x20, 0x03, 0xD5,
+    };
+
+    if (!IsPaperMarioTTYD(process.GetProgramId()) || module_name != "sdk") {
+        return;
+    }
+
+    const size_t trap_offset = module_start + PaperMarioTTYDTrapOffset;
+    if (trap_offset + kTrapThenRet.size() > image.size()) {
+        return;
+    }
+
+    if (!std::equal(kTrapThenRet.begin(), kTrapThenRet.end(), image.begin() + trap_offset)) {
+        return;
+    }
+
+    std::copy(kNop.begin(), kNop.end(), image.begin() + trap_offset);
+    LOG_WARNING(Loader, "Applied Paper Mario TTYD crash workaround for {:016X} at nnSdk+{:#x}",
+                process.GetProgramId(), PaperMarioTTYDTrapOffset);
 }
 } // Anonymous namespace
 
@@ -70,7 +159,7 @@ FileType AppLoader_NSO::IdentifyType(const FileSys::VirtualFile& in_file) {
     return FileType::NSO;
 }
 
-std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::System& system, const FileSys::VfsFile& nso_file, VAddr load_base, bool should_pass_arguments, bool load_into_process, std::optional<FileSys::PatchManager> pm, std::vector<Core::NCE::Patcher>* patches, s32 patch_index) {
+std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::System& system, const FileSys::VfsFile& nso_file, const VAddr load_base, const bool should_pass_arguments, const bool load_into_process, VAddr* out_load_base, FileSys::ProgramMetadata metadata, std::optional<FileSys::PatchManager> pm, std::vector<Core::NCE::Patcher>* patches, s32 patch_index) {
     if (nso_file.GetSize() < sizeof(NSOHeader))
         return std::nullopt;
     NSOHeader nso_header{};
@@ -178,69 +267,8 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
         std::copy(pi_header.begin() + sizeof(NSOHeader), pi_header.end(), patchable_section.data());
     }
 
-    // Mario Kart World selects a 1- or 2-vblank frame mode in its main loop. Force its native
-    // 30 FPS mode, or let it choose dynamically using the whole frame time (CPU + GPU wait).
-    // Match the instruction sequence instead of relying on a title-version-specific address.
-    const bool mkw_dynamic = Settings::values.mkw_dynamic_fps.GetValue();
-    bool mkw_dynamic_fps_patch_applied = false;
-    if ((mkw_dynamic || Settings::values.mkw_30fps.GetValue()) && name == "main" &&
-        process.GetProgramId() == Settings::MarioKartWorldProgramId) {
-        constexpr u32 ModeLoadInsn = 0xB9421268; // ldr w8, [x19, #0x210]
-        const u32 mode = mkw_dynamic ? 0U : 2U;
-        const u32 mode_instruction = 0x52800008U | (mode << 5); // mov w8, #mode
-        const auto& text = nso_header.segments[0];
-        u8* const code = codeset.memory.data() + module_start + text.location;
-        const size_t count = text.size / sizeof(u32);
-        const auto word = [code](size_t index) {
-            u32 value;
-            std::memcpy(&value, code + index * sizeof(u32), sizeof(value));
-            return value;
-        };
-        size_t mode_site = 0;
-        size_t mode_matches = 0;
-        for (size_t i = 2; i + 8 < count; ++i) {
-            if (word(i) != ModeLoadInsn || word(i - 2) != 0x6B01013F || // cmp w9, w1
-                (word(i - 1) & 0xFF00001F) != 0x54000001 ||             // b.ne
-                (word(i + 1) & 0xFF00001F) != 0x35000008) {             // cbnz w8
-                continue;
-            }
-            for (size_t j = i + 2; j < i + 8; ++j) {
-                if (word(j) == 0x52A84E08) { // mov w8, #60.0f
-                    mode_site = i;
-                    ++mode_matches;
-                    break;
-                }
-            }
-        }
-
-        size_t frame_time_site = 0;
-        size_t frame_time_matches = 0;
-        if (mode_matches == 1 && mkw_dynamic) {
-            for (size_t i = mode_site + 1; i < mode_site + 32 && i < count; ++i) {
-                if ((word(i) & 0xFFFFFFE0) == 0xF9409660) { // ldr xN, [x19, #0x128]
-                    frame_time_site = i;
-                    ++frame_time_matches;
-                }
-            }
-        }
-
-        if (mode_matches == 1 && (!mkw_dynamic || frame_time_matches == 1)) {
-            std::memcpy(code + mode_site * sizeof(u32), &mode_instruction,
-                        sizeof(mode_instruction));
-            if (mkw_dynamic) {
-                const u32 whole_frame_time = 0xF9407660 | (word(frame_time_site) & 0x1F);
-                std::memcpy(code + frame_time_site * sizeof(u32), &whole_frame_time,
-                            sizeof(whole_frame_time));
-                mkw_dynamic_fps_patch_applied = true;
-            }
-            LOG_INFO(Loader, "Mario Kart World: {} FPS mode enabled (main+{:#x})",
-                     mkw_dynamic ? "dynamic" : "30",
-                     text.location + mode_site * sizeof(u32));
-        } else {
-            LOG_WARNING(Loader,
-                        "Mario Kart World FPS patch skipped (mode matches {}, frame-time matches {})",
-                        mode_matches, frame_time_matches);
-        }
+    if (Settings::values.nx2_switch2_edition.GetValue() && !Settings::CurrentProgramIsSwitch2()) {
+        AnswerIsRunningOnOunce(std::span<u8>(codeset.memory).subspan(module_start), name);
     }
 
 #ifdef HAS_NCE
@@ -313,25 +341,19 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
         }
     }
 
+    const bool is_hbl = true;
+    if (process
+        .LoadFromMetadata(metadata, image_size, 0, 0, is_hbl)
+        .IsError()) {
+        return false;
+    }
+
+    auto const new_load_base = process.GetEntryPoint().GetValue();
+    if (out_load_base)
+        *out_load_base = new_load_base; // no change
     // Load codeset for current process
-    if (name == "sdk") {
-        const bool matching_sdk =
-            Core::WindowTrace::Enabled() && process.GetProgramId() == Core::WindowTrace::ProgramId &&
-            Common::HexToString(std::span{nso_header.build_id}.first(20)) ==
-                "41D4DE4A3B78214AD20C896960DF0E5EA0ED595F";
-        Core::WindowTrace::sessions.Reset(&process, matching_sdk ? load_base : 0);
-        if (Core::WindowTrace::Enabled()) {
-            const auto session = Core::WindowTrace::sessions.Find(&process);
-            LOG_INFO(Loader, "Star Fox window trace: matching SDK={} base={:#x} session={}",
-                     matching_sdk, matching_sdk ? load_base : 0, session ? session->id : 0);
-        }
-    }
-    LOG_INFO(Loader, "Module {} loaded at {:#x} (size {:#x})", nso_file.GetName(), load_base, image_size);
-    process.LoadModule(system.Kernel(), std::move(codeset), load_base);
-    if (name == "main" && process.GetProgramId() == Settings::MarioKartWorldProgramId) {
-        process.SetMkwDynamicFpsPatchApplied(mkw_dynamic_fps_patch_applied);
-    }
-    return load_base + image_size;
+    process.LoadModule(system.Kernel(), std::move(codeset), new_load_base);
+    return new_load_base + image_size;
 }
 
 AppLoader_NSO::LoadResult AppLoader_NSO::Load(Kernel::KProcess& process, Core::System& system) {
@@ -339,24 +361,52 @@ AppLoader_NSO::LoadResult AppLoader_NSO::Load(Kernel::KProcess& process, Core::S
         return {ResultStatus::ErrorAlreadyLoaded, {}};
     }
 
-    modules.clear();
+    FileSys::VirtualFile npdm_file{};
+    metadata = FileSys::ProgramMetadata::GetDefault();
+    if (auto const dir = file->GetContainingDirectory()) {
+        npdm_file = dir->GetFile("main.npdm");
+        if (npdm_file) {
+            metadata.Load(npdm_file);
+        }
+    }
 
+    modules.clear();
     // Load module
-    const VAddr base_address = GetInteger(process.GetEntryPoint());
-    if (!LoadModule(process, system, *file, base_address, true, true)) {
+    VAddr base_address = GetInteger(process.GetEntryPoint());
+    if (!LoadModule(process, system, *file, base_address, true, true, &base_address, metadata)) {
         return {ResultStatus::ErrorLoadingNSO, {}};
     }
 
     modules.insert_or_assign(base_address, file->GetName());
     LOG_DEBUG(Loader, "loaded module {} @ {:#x}", file->GetName(), base_address);
 
+    if (npdm_file) {
+        LOG_WARNING(Loader, "creating associated rom-fs factories for likely standalone NSO");
+        u64 program_id{};
+        ReadProgramId(program_id);
+        system.GetFileSystemController().RegisterProcess(process.GetProcessId(), program_id, std::make_unique<FileSys::RomFSFactory>(*this, system.GetContentProvider(), system.GetFileSystemController()));
+    }
+
     is_loaded = true;
-    return {ResultStatus::Success, LoadParameters{Kernel::KThread::DefaultThreadPriority,
-                                                  Core::Memory::DEFAULT_STACK_SIZE}};
+    return {ResultStatus::Success, LoadParameters{Kernel::KThread::DefaultThreadPriority, Core::Memory::DEFAULT_STACK_SIZE}};
 }
 
 ResultStatus AppLoader_NSO::ReadNSOModules(Modules& out_modules) {
     out_modules = this->modules;
+    return ResultStatus::Success;
+}
+
+ResultStatus AppLoader_NSO::ReadProgramId(u64& out_program_id) {
+    if (metadata.GetTitleID() == 0)
+        return ResultStatus::ErrorNoControl;
+    out_program_id = metadata.GetTitleID();
+    return ResultStatus::Success;
+}
+
+ResultStatus AppLoader_NSO::ReadTitle(std::string& out_title) {
+    auto const raw_name = metadata.GetName();
+    out_title.resize(raw_name.size());
+    std::memcpy(out_title.data(), raw_name.data(), raw_name.size());
     return ResultStatus::Success;
 }
 

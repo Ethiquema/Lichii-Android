@@ -15,17 +15,20 @@
 #include "dynarmic/frontend/A64/a64_types.h"
 #include "dynarmic/frontend/A64/translate/a64_translate.h"
 #include "dynarmic/frontend/imm.h"
+#include "dynarmic/interface/A64/config.h"
 
 namespace Dynarmic::A64 {
 
 struct TranslatorVisitor final {
     using instruction_return_type = bool;
 
-    explicit TranslatorVisitor(IR::Block& block, LocationDescriptor descriptor, TranslationOptions options)
-            : ir(block, descriptor), options(std::move(options)) {}
+    explicit TranslatorVisitor(IR::Block& block, LocationDescriptor descriptor, A64::UserConfig const& conf)
+        : ir(block, descriptor)
+        , conf(conf)
+    {}
 
     A64::IREmitter ir;
-    TranslationOptions options;
+    A64::UserConfig const& conf;
 
     bool UnpredictableInstruction();
     bool DecodeError();
@@ -251,7 +254,7 @@ struct TranslatorVisitor final {
     bool CASP(bool sz, bool L, Reg Rs, bool o0, Reg Rn, Reg Rt);
     bool CASB(bool L, Reg Rs, bool o0, Reg Rn, Reg Rt);
     bool CASH(bool L, Reg Rs, bool o0, Reg Rn, Reg Rt);
-    bool CAS(bool sz, bool L, Reg Rs, bool o0, Reg Rn, Reg Rt);
+    bool CAS(Imm<2> sz, bool L, Reg Rs, bool o0, Reg Rn, Reg Rt);
 
     // Loads and stores - Load register (literal)
     bool LDR_lit_gen(bool opc_0, Imm<19> imm19, Reg Rt);
@@ -315,27 +318,16 @@ struct TranslatorVisitor final {
     bool LDUMINH(bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
     bool SWPH(bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
     bool LDAPRH(Reg Rn, Reg Rt);
-    bool LDADD(bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
-    bool LDCLR(bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
-    bool LDEOR(bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
-    bool LDSET(bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
+    bool LDADD(bool sz, bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
+    bool LDCLR(bool sz, bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
+    bool LDEOR(bool sz, bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
+    bool LDSET(bool sz, bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
     bool LDSMAX(bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
     bool LDSMIN(bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
     bool LDUMAX(bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
     bool LDUMIN(bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
-    bool SWP(bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
-    bool LDAPR(Reg Rn, Reg Rt);
-
-    // ARMv8.1+ forms decoded for Switch 2 code (load_store_atomic.cpp, pointer_authentication.cpp,
-    // memory_tagging.cpp)
-    bool AtomicMemOp(Imm<2> size, bool A, bool R, Reg Rs, Imm<4> op, Reg Rn, Reg Rt);
-    bool LDAPR_sz(Imm<2> size, Reg Rn, Reg Rt);
-    bool CompareAndSwap(Imm<2> size, bool L, Reg Rs, bool o0, Reg Rn, Reg Rt);
-    bool CompareAndSwapPair(bool sz, bool L, Reg Rs, bool o0, Reg Rn, Reg Rt);
-    bool PACAUT_reg(bool Z, Imm<3> op, Reg Rn, Reg Rd);
-    bool BRA_BLRA(bool Z, bool L, bool M, Reg Rn, Reg Rm);
-    bool STG_family(Imm<2> opc, Imm<9> imm9, Imm<2> mode, Reg Rn, Reg Rt);
-    bool STGP(Imm<2> mode, Imm<7> imm7, Reg Rt2, Reg Rn, Reg Rt);
+    bool SWP(bool sz, bool A, bool R, Reg Rs, Reg Rn, Reg Rt);
+    bool LDAPR(Imm<2> size, Reg Rn, Reg Rt);
 
     // Loads and stores - Load/Store register (register offset)
     bool STRx_reg(Imm<2> size, Imm<1> opc_1, Reg Rm, Imm<3> option, bool S, Reg Rn, Reg Rt);

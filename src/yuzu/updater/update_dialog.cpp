@@ -101,7 +101,7 @@ void UpdateDialog::Download() {
     client->set_write_timeout(timeout_seconds);
     client->set_follow_location(true);
 
-#ifdef YUZU_BUNDLED_OPENSSL
+#if defined(YUZU_BUNDLED_OPENSSL) && !defined(__OPENORBIS__)
     client->load_ca_cert_store(kCert, sizeof(kCert));
 #endif
 

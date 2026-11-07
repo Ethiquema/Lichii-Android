@@ -7,7 +7,7 @@
 
 #include <atomic>
 #include <algorithm>
-#include <cstdint>
+#include <bit>
 #include <cstring>
 #include <cstdlib>
 #include <mutex>
@@ -21,7 +21,6 @@
 #include "common/assert.h"
 #include "common/atomic_ops.h"
 #include "common/common_types.h"
-#include "common/heap_tracker.h"
 #include "common/logging.h"
 #include "common/page_table.h"
 #include "common/scope_exit.h"
@@ -32,11 +31,17 @@
 #include "core/gpu_dirty_memory_manager.h"
 #include "core/hardware_properties.h"
 #include "core/hle/kernel/k_page_table.h"
+#ifdef HAS_HYPERVISOR
+#include "core/arm/hypervisor/hv_vm.h"
+#endif
 #include "core/hle/kernel/k_process.h"
+#include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/physical_core.h"
 #include "core/memory.h"
 #include "video_core/gpu.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/host1x/host1x.h"
+#include "video_core/nx2_profile.h"
 #include "video_core/rasterizer_download_area.h"
 
 namespace Core::Memory {
@@ -65,36 +70,39 @@ struct Memory::Impl {
         } else {
             current_page_table->fastmem_arena = nullptr;
         }
-
-#ifdef __ANDROID__
-        heap_tracker.emplace(system.DeviceMemory().buffer);
-        host_buffer = std::addressof(*heap_tracker);
-#else
         host_buffer = std::addressof(system.DeviceMemory().buffer);
+#endif
+
+#ifdef HAS_HYPERVISOR
+        // EDEN_NX2_HYPERVISOR=1: application code runs natively in a VM whose page tables mirror
+        // this one from the start, so every mapping below reaches them.
+        // (The process's 64-bit flag is only set after this runs; a 64-bit address space,
+        // 36 or 39 bits, tells the same.)
+        if (Core::Hv::IsRequested() && process.IsApplication() &&
+            current_page_table->GetAddressSpaceBits() >= 36 && system.IsMulticore()) {
+            auto& buffer = system.DeviceMemory().buffer;
+            Core::Hv::Vm::Get().Attach(*current_page_table,
+                                       current_page_table->GetAddressSpaceBits(),
+                                       buffer.BackingBasePointer(), buffer.BackingSize());
+        }
 #endif
     }
 
-    void MapMemoryRegion(Common::PageTable& page_table, Common::ProcessAddress base, u64 size,
-                         Common::PhysicalAddress target, Common::MemoryPermission perms,
-                         bool separate_heap) {
+    void MapMemoryRegion(Common::PageTable& page_table, Common::ProcessAddress base, u64 size, Common::PhysicalAddress target, Common::MemoryPermission perms, bool separate_heap) {
         ASSERT_MSG((size & YUZU_PAGEMASK) == 0, "non-page aligned size: {:016X}", size);
         ASSERT_MSG((base & YUZU_PAGEMASK) == 0, "non-page aligned base: {:016X}", GetInteger(base));
-        ASSERT_MSG(target >= DramMemoryMap::Base, "Out of bounds target: {:016X}",
-                   GetInteger(target));
-        MapPages(page_table, base / YUZU_PAGESIZE, size / YUZU_PAGESIZE, target,
-                 Common::PageType::Memory);
+        ASSERT_MSG(target >= DramMemoryMap::Base, "Out of bounds target: {:016X}", GetInteger(target));
+        MapPages(page_table, base / YUZU_PAGESIZE, size / YUZU_PAGESIZE, target, Common::PageType::Memory);
 
         if (current_page_table->fastmem_arena) {
             host_buffer->Map(GetInteger(base), GetInteger(target) - DramMemoryMap::Base, size, perms, separate_heap);
         }
     }
 
-    void UnmapRegion(Common::PageTable& page_table, Common::ProcessAddress base, u64 size,
-                     bool separate_heap) {
+    void UnmapRegion(Common::PageTable& page_table, Common::ProcessAddress base, u64 size, bool separate_heap) {
         ASSERT_MSG((size & YUZU_PAGEMASK) == 0, "non-page aligned size: {:016X}", size);
         ASSERT_MSG((base & YUZU_PAGEMASK) == 0, "non-page aligned base: {:016X}", GetInteger(base));
-        MapPages(page_table, base / YUZU_PAGESIZE, size / YUZU_PAGESIZE, 0,
-                 Common::PageType::Unmapped);
+        MapPages(page_table, base / YUZU_PAGESIZE, size / YUZU_PAGESIZE, 0, Common::PageType::Unmapped);
 
         if (current_page_table->fastmem_arena) {
             host_buffer->Unmap(GetInteger(base), size, separate_heap);
@@ -106,15 +114,19 @@ struct Memory::Impl {
         ASSERT_MSG((size & YUZU_PAGEMASK) == 0, "non-page aligned size: {:016X}", size);
         ASSERT_MSG((vaddr & YUZU_PAGEMASK) == 0, "non-page aligned base: {:016X}", vaddr);
 
+#ifdef HAS_HYPERVISOR
+        if (auto* vm = HypervisorFor(page_table)) {
+            vm->Protect(vaddr, size, perms);
+        }
+#endif
+
         if (!current_page_table->fastmem_arena) {
             return;
         }
 
         u64 protect_bytes = 0, protect_begin = 0;
-
-        current_page_table->entries.CommitRegion(vaddr >> YUZU_PAGEBITS, (vaddr + size) >> YUZU_PAGEBITS);
         for (u64 addr = vaddr; addr < vaddr + size; addr += YUZU_PAGESIZE) {
-            const Common::PageType page_type = current_page_table->entries.GetUnchecked(addr >> YUZU_PAGEBITS).Type();
+            const Common::PageType page_type = current_page_table->entries[addr >> YUZU_PAGEBITS].ptr.Type();
             switch (page_type) {
             case Common::PageType::RasterizerCachedMemory:
                 if (protect_bytes > 0) {
@@ -135,14 +147,16 @@ struct Memory::Impl {
     }
 
     [[nodiscard]] u8* GetPointerFromRasterizerCachedMemory(u64 vaddr) const {
-        if (u64 paddr = current_page_table->entries[vaddr >> YUZU_PAGEBITS].Pointer(true); paddr)
-            return reinterpret_cast<u8*>(paddr) + vaddr;
+        Common::PhysicalAddress const paddr = current_page_table->entries[vaddr >> YUZU_PAGEBITS].addr;
+        if (paddr)
+            return system.DeviceMemory().GetPointer<u8>(paddr + vaddr);
         return {};
     }
 
     [[nodiscard]] u8* GetPointerFromDebugMemory(u64 vaddr) const {
-        if (u64 paddr = current_page_table->entries[vaddr >> YUZU_PAGEBITS].Pointer(true); paddr)
-            return reinterpret_cast<u8*>(paddr) + vaddr;
+        const Common::PhysicalAddress paddr = current_page_table->entries[vaddr >> YUZU_PAGEBITS].addr;
+        if (paddr != 0)
+            return system.DeviceMemory().GetPointer<u8>(paddr + vaddr);
         return {};
     }
 
@@ -170,63 +184,9 @@ struct Memory::Impl {
         }
     }
 
-    bool Read32Acquire(const Common::ProcessAddress addr, u32& value) {
-        value = 0;
-        if (!current_page_table || (addr & 3) != 0) {
-            return false;
-        }
-        auto* pointer = GetPointerImpl(GetInteger(addr), [] {}, [&] {
-            HandleRasterizerDownload(GetInteger(addr), sizeof(u32));
-        });
-        if (!pointer) {
-            return false;
-        }
-        u32_le actual{};
-        static_cast<void>(Common::AtomicCompareAndSwap(reinterpret_cast<u32_le*>(pointer),
-                                                     u32_le{0}, u32_le{0}, actual));
-        value = actual;
-        return true;
-    }
-
-    u64 Read64(const Common::ProcessAddress addr) {
-        if ((addr & 7) == 0) {
-            return Read<u64_le>(addr);
-        } else {
-            const u32 a{Read32(addr)};
-            const u32 b{Read32(addr + sizeof(u32))};
-            return (static_cast<u64>(b) << 32) | a;
-        }
-    }
-
-    void Write8(const Common::ProcessAddress addr, const u8 data) {
-        Write<u8>(addr, data);
-    }
-
-    void Write16(const Common::ProcessAddress addr, const u16 data) {
-        if ((addr & 1) == 0) {
-            Write<u16_le>(addr, data);
-        } else {
-            Write<u8>(addr, static_cast<u8>(data));
-            Write<u8>(addr + sizeof(u8), static_cast<u8>(data >> 8));
-        }
-    }
-
-    void Write32(const Common::ProcessAddress addr, const u32 data) {
-        if ((addr & 3) == 0) {
-            Write<u32_le>(addr, data);
-        } else {
-            Write16(addr, static_cast<u16>(data));
-            Write16(addr + sizeof(u16), static_cast<u16>(data >> 16));
-        }
-    }
-
-    void Write64(const Common::ProcessAddress addr, const u64 data) {
-        if ((addr & 7) == 0) {
-            Write<u64_le>(addr, data);
-        } else {
-            Write32(addr, static_cast<u32>(data));
-            Write32(addr + sizeof(u32), static_cast<u32>(data >> 32));
-        }
+    [[nodiscard]] inline u8* GetPointerFromDebugMemory(u64 vaddr) const {
+        auto const paddr = current_page_table->entries[vaddr >> YUZU_PAGEBITS].addr;
+        return paddr ? system.DeviceMemory().GetPointer<u8>(paddr + vaddr) : nullptr;
     }
 
     bool WriteExclusive8(const Common::ProcessAddress addr, const u8 data, const u8 expected) {
@@ -271,12 +231,10 @@ struct Memory::Impl {
         std::size_t page_index = addr >> YUZU_PAGEBITS;
         std::size_t page_offset = addr & YUZU_PAGEMASK;
         bool user_accessible = true;
-
-        current_page_table->entries.CommitRegion(page_index, page_index + (size >> YUZU_PAGEBITS) + 1);
         while (remaining_size != 0) {
             const std::size_t copy_amount = (std::min)(std::size_t(YUZU_PAGESIZE) - page_offset, remaining_size);
             const auto current_vaddr = u64((page_index << YUZU_PAGEBITS) + page_offset);
-            const auto [pointer, type, _] = current_page_table->entries.GetUnchecked(page_index).PointerTypeBlock();
+            const auto [pointer, type] = current_page_table->entries[page_index].ptr.PointerType();
             switch (type) {
             case Common::PageType::Unmapped: {
                 user_accessible = false;
@@ -327,28 +285,10 @@ struct Memory::Impl {
     }
 
     [[nodiscard]] inline const u8* GetSpan(const VAddr addr, const std::size_t size) const noexcept {
-        const auto first = current_page_table->entries[addr >> YUZU_PAGEBITS].Block();
-        const auto last = current_page_table->entries[(addr + size) >> YUZU_PAGEBITS].Block();
-        if (Common::PageTable::PageEntryData::CanFastSpan(first, last)) {
-            return GetPointerSilent(addr);
-        }
-        if (first != Common::PageTable::PageEntryData::INVALID_BLOCK_ID &&
-            last != Common::PageTable::PageEntryData::INVALID_BLOCK_ID) {
-            return nullptr;
-        }
-        return GetContiguousSpan(addr, size);
+        return (current_page_table->entries[addr >> YUZU_PAGEBITS].block == current_page_table->entries[(addr + size) >> YUZU_PAGEBITS].block) ? GetPointerSilent(addr) : nullptr;
     }
     [[nodiscard]] inline u8* GetSpan(const VAddr addr, const std::size_t size) noexcept {
-        const auto first = current_page_table->entries[addr >> YUZU_PAGEBITS].Block();
-        const auto last = current_page_table->entries[(addr + size) >> YUZU_PAGEBITS].Block();
-        if (Common::PageTable::PageEntryData::CanFastSpan(first, last)) {
-            return GetPointerSilent(addr);
-        }
-        if (first != Common::PageTable::PageEntryData::INVALID_BLOCK_ID &&
-            last != Common::PageTable::PageEntryData::INVALID_BLOCK_ID) {
-            return nullptr;
-        }
-        return GetContiguousSpan(addr, size);
+        return (current_page_table->entries[addr >> YUZU_PAGEBITS].block == current_page_table->entries[(addr + size) >> YUZU_PAGEBITS].block) ? GetPointerSilent(addr) : nullptr;
     }
 
     bool WriteBlockImpl(const Common::ProcessAddress addr, const void* buffer, const std::size_t size, bool unsafe) {
@@ -452,14 +392,11 @@ struct Memory::Impl {
         // The region is at a granularity of CPU pages.
 
         const u64 num_pages = ((vaddr + size - 1) >> YUZU_PAGEBITS) - (vaddr >> YUZU_PAGEBITS) + 1;
-
-        current_page_table->entries.CommitRegion(vaddr >> YUZU_PAGEBITS, (vaddr >> YUZU_PAGEBITS) + num_pages);
         for (u64 i = 0; i < num_pages; ++i, vaddr += YUZU_PAGESIZE) {
-            auto& entry = current_page_table->entries.GetUnchecked(vaddr >> YUZU_PAGEBITS);
-            const auto [pointer, type, block] = entry.PointerTypeBlock(true);
+            const Common::PageType page_type = current_page_table->entries[vaddr >> YUZU_PAGEBITS].ptr.Type();
             if (debug) {
                 // Switch page type to debug if now debug
-                switch (type) {
+                switch (page_type) {
                 case Common::PageType::Unmapped:
                     ASSERT(false && "Attempted to mark unmapped pages as debug");
                     break;
@@ -468,14 +405,14 @@ struct Memory::Impl {
                     // Page is already marked.
                     break;
                 case Common::PageType::Memory:
-                    entry.MarkDebug(pointer, block);
+                    current_page_table->entries[vaddr >> YUZU_PAGEBITS].ptr.Store(0, Common::PageType::DebugMemory);
                     break;
                 default:
                     UNREACHABLE();
                 }
             } else {
                 // Switch page type to non-debug if now non-debug
-                switch (type) {
+                switch (page_type) {
                 case Common::PageType::Unmapped:
                     ASSERT(false && "Attempted to mark unmapped pages as non-debug");
                     break;
@@ -484,7 +421,8 @@ struct Memory::Impl {
                     // Don't mess with already non-debug or rasterizer memory.
                     break;
                 case Common::PageType::DebugMemory: {
-                    entry.Store(false, Common::PageType::Memory, block, pointer);
+                    u8* const pointer = GetPointerFromDebugMemory(vaddr & ~YUZU_PAGEMASK);
+                    current_page_table->entries[vaddr >> YUZU_PAGEBITS].ptr.Store(uintptr_t(pointer) - (vaddr & ~YUZU_PAGEMASK), Common::PageType::Memory);
                     break;
                 }
                 default:
@@ -498,6 +436,15 @@ struct Memory::Impl {
         if (vaddr == 0 || !AddressSpaceContains(*current_page_table, vaddr, size)) {
             return;
         }
+
+#ifdef HAS_HYPERVISOR
+        // Native code writes guest memory directly: protect what the GPU caches track, as fastmem
+        // does, so those writes fault and reach the caches.
+        if (auto* vm = HypervisorFor(*current_page_table)) {
+            vm->MarkCached(vaddr, size, cached,
+                           cached && Settings::values.use_reactive_flushing.GetValue());
+        }
+#endif
 
         if (current_page_table->fastmem_arena) {
             Common::MemoryPermission perm{};
@@ -528,10 +475,8 @@ struct Memory::Impl {
         // is different). This assumes the specified GPU address region is contiguous as well.
 
         const u64 num_pages = ((vaddr + size - 1) >> YUZU_PAGEBITS) - (vaddr >> YUZU_PAGEBITS) + 1;
-        current_page_table->entries.CommitRegion(vaddr >> YUZU_PAGEBITS, (vaddr >> YUZU_PAGEBITS) + num_pages);
         for (u64 i = 0; i < num_pages; ++i, vaddr += YUZU_PAGESIZE) {
-            auto& entry = current_page_table->entries.GetUnchecked(vaddr >> YUZU_PAGEBITS);
-            const Common::PageType page_type = entry.Type();
+            const Common::PageType page_type= current_page_table->entries[vaddr >> YUZU_PAGEBITS].ptr.Type();
             if (cached) {
                 // Switch page type to cached if now cached
                 switch (page_type) {
@@ -541,7 +486,7 @@ struct Memory::Impl {
                     break;
                 case Common::PageType::DebugMemory:
                 case Common::PageType::Memory:
-                    entry.MarkRasterizerCached();
+                    current_page_table->entries[vaddr >> YUZU_PAGEBITS].ptr.Store(0, Common::PageType::RasterizerCachedMemory);
                     break;
                 case Common::PageType::RasterizerCachedMemory:
                     // There can be more than one GPU region mapped per CPU region, so it's common
@@ -563,13 +508,13 @@ struct Memory::Impl {
                     // that this area is already unmarked as cached.
                     break;
                 case Common::PageType::RasterizerCachedMemory: {
-                    if (auto [ptr, _, block] = entry.PointerTypeBlock(true); ptr == 0) {
+                    if (u8* const pointer = GetPointerFromRasterizerCachedMemory(vaddr & ~YUZU_PAGEMASK); pointer == nullptr) {
                         // It's possible that this function has been called while updating the
                         // pagetable after unmapping a VMA. In that case the underlying VMA will no
                         // longer exist, and we should just leave the pagetable entry blank.
-                        entry.Store(false, Common::PageType::Unmapped, block, 0);
+                        current_page_table->entries[vaddr >> YUZU_PAGEBITS].ptr.Store(0, Common::PageType::Unmapped);
                     } else {
-                        entry.Store(false, Common::PageType::Memory, block, ptr);
+                        current_page_table->entries[vaddr >> YUZU_PAGEBITS].ptr.Store(uintptr_t(pointer) - (vaddr & ~YUZU_PAGEMASK), Common::PageType::Memory);
                     }
                     break;
                 }
@@ -595,8 +540,6 @@ struct Memory::Impl {
     }
 
     void RasterizerArmReadTraps(u64 vaddr, u64 size) {
-        // Clean cached read areas also need invalidation when reactive flushing is enabled.
-        read_trap_generation.fetch_add(1, std::memory_order_release);
         if (vaddr == 0 || size == 0 || !AddressSpaceContains(*current_page_table, vaddr, size) ||
             !ReadTrapsEnabled()) {
             return;
@@ -693,29 +636,22 @@ struct Memory::Impl {
             ASSERT_MSG(type != Common::PageType::Memory,
                        "Mapping memory page without a pointer @ {:016x}", base * YUZU_PAGESIZE);
 
-            page_table.entries.ZeroRegion(base, end);
-        } else {
-            u64 mapping_id = block_count.load(std::memory_order_relaxed);
-            constexpr u64 exhausted_count =
-                u64{Common::PageTable::PageEntryData::INVALID_BLOCK_ID} + 1;
-            while (mapping_id < exhausted_count &&
-                   !block_count.compare_exchange_weak(mapping_id, mapping_id + 1,
-                                                      std::memory_order_relaxed)) {
-            }
-            const u16 current_block =
-                Common::PageTable::PageEntryData::BlockIdForMapping(mapping_id);
-            if (mapping_id == Common::PageTable::PageEntryData::INVALID_BLOCK_ID) {
-                LOG_WARNING(HW_Memory,
-                            "Page table block ids are exhausted; validating spans page by page");
-            }
-
-            page_table.entries.CommitRegion(base, end);
             while (base != end) {
-                auto host_ptr = reinterpret_cast<u64>(system.DeviceMemory().GetPointer<u8>(target)) - (base << YUZU_PAGEBITS);;
-                auto& entry = page_table.entries.GetUnchecked(base);
+                page_table.entries[base].ptr.Store(0, type);
+                page_table.entries[base].addr = 0;
+                page_table.entries[base].block = 0;
+                base += 1;
+            }
+        } else {
+            auto orig_base = base;
+            while (base != end) {
+                auto host_ptr = uintptr_t(system.DeviceMemory().GetPointer<u8>(target)) - (base << YUZU_PAGEBITS);
+                auto backing = GetInteger(target) - (base << YUZU_PAGEBITS);
+                page_table.entries[base].ptr.Store(host_ptr, type);
+                page_table.entries[base].addr = backing;
+                page_table.entries[base].block = orig_base << YUZU_PAGEBITS;
 
-                entry.Store(false, type, current_block, host_ptr);
-                ASSERT_MSG(page_table.entries[base].Pointer(),
+                ASSERT_MSG(page_table.entries[base].ptr.Pointer(),
                            "memory mapping base yield a nullptr within the table");
 
                 base += 1;
@@ -725,16 +661,16 @@ struct Memory::Impl {
     }
 
     template<typename F, typename G>
-    [[nodiscard]] u8* GetPointerImpl(u64 vaddr, F&& on_unmapped, G&& on_rasterizer) const {
+    [[nodiscard]] inline u8* GetPointerImpl(u64 vaddr, F&& on_unmapped, G&& on_rasterizer) const {
         // AARCH64 masks the upper 16 bit of all memory accesses
         vaddr &= 0xffffffffffffULL;
         if (AddressSpaceContains(*current_page_table, vaddr, 1)) [[likely]] {
             // Avoid adding any extra logic to this fast-path block
-            const auto raw = current_page_table->entries[vaddr >> YUZU_PAGEBITS].Raw();
-            if (auto pointer = Common::PageTable::PageEntryData::ExtractPointer(raw); pointer) [[likely]] {
+            const uintptr_t raw_pointer = current_page_table->entries[vaddr >> YUZU_PAGEBITS].ptr.Raw();
+            if (const uintptr_t pointer = Common::PageTable::PageInfo::ExtractPointer(raw_pointer)) [[likely]] {
                 return reinterpret_cast<u8*>(pointer + vaddr);
             } else {
-                switch (static_cast<Common::PageType>(raw.type)) {
+                switch (Common::PageTable::PageInfo::ExtractType(raw_pointer)) {
                 case Common::PageType::Memory:
                     ASSERT_MSG(false, "Mapped memory page without a pointer @ {:#016x}", vaddr);
                     return nullptr;
@@ -799,18 +735,20 @@ struct Memory::Impl {
     template <typename T>
     inline T Read(Common::ProcessAddress vaddr) noexcept requires(std::is_trivially_copyable_v<T>) {
         const u64 addr = GetInteger(vaddr);
-        if (auto const ptr = GetPointerImpl(addr, [addr]() {
-            // A guest spinning on a bad pointer reads unmapped memory tens of thousands of times
-            // a second: keep the first ones and then a sample.
-            static std::atomic<u64> unmapped_reads{};
-            if (const u64 count = unmapped_reads.fetch_add(1); count < 1000 || count % 100000 == 0) {
-                LOG_ERROR(HW_Memory, "Unmapped Read{} @ {:#016x} (#{})", sizeof(T) * 8, addr, count);
+        if (auto const ptr = GetPointerImpl(addr, [this, addr]() {
+            LOG_ERROR(HW_Memory, "Unmapped Read{} @ {:#016x}", sizeof(T) * 8, addr);
+            // Diagnostic (fork A): backtrace the first null-page read to find the faulting caller.
+            static bool traced = false;
+            static bool traced_wild = false;
+            if (addr < 0x1000 && !traced) {
+                traced = true;
+                system.CurrentPhysicalCore().LogBacktrace(system.Kernel());
+            } else if (addr >= (1ULL << 48) && !traced_wild) {
+                traced_wild = true;
+                system.CurrentPhysicalCore().LogBacktrace(system.Kernel());
             }
-            ++UnmappedReadFlag();
         }, [&]() {
-            if (!ReadTrapsEnabled() || ReadTrapArmed(addr & 0xffffffffffffULL, sizeof(T))) {
-                HandleRasterizerDownload(addr, sizeof(T));
-            }
+            HandleRasterizerDownload(addr, sizeof(T));
         }); ptr) [[likely]] {
             // It may be tempting to rewrite this particular section to use "reinterpret_cast";
             // afterall, it's trivially copyable so surely it can be copied ov- Alignment.
@@ -827,11 +765,37 @@ struct Memory::Impl {
     /// @tparam T The data type to write to memory.
     template <typename T>
     inline void Write(Common::ProcessAddress vaddr, const T data) noexcept requires(std::is_trivially_copyable_v<T>) {
-        const u64 addr = GetInteger(vaddr);
-        if (auto const ptr = GetPointerImpl(addr, [addr, data]() {
-            LOG_ERROR(HW_Memory, "Unmapped Write{} @ {:#016x} = {:#016x}", sizeof(T) * 8, addr, u64(data));
-        }, [&]() { HandleRasterizerWrite(addr, sizeof(T)); }); ptr) [[likely]]
-            std::memcpy(ptr, &data, sizeof(T));
+        auto const addr_c1 = GetInteger(vaddr);
+        if (!(sizeof(T) > 1 && (addr_c1 & 4095) + sizeof(T) > 4096)) {
+            if (auto const ptr_c1 = GetPointerImpl(addr_c1, [addr_c1] {
+                LOG_ERROR(HW_Memory, "Unmapped Read{} @ {:#016X}", sizeof(T) * 8, addr_c1);
+            }, [&] {
+                HandleRasterizerWrite(addr_c1, sizeof(T));
+            }); ptr_c1) {
+                std::memcpy(ptr_c1, &data, sizeof(T));
+            }
+        } else {
+            auto const addr_c2 = (addr_c1 & (~0xfff)) + 0x1000;
+            // page crossing: say if sizeof(T) = 2, vaddr = 4095
+            // 4095 + 2 mod 4096 = 1 => 2 - 1 = 1, thus c1=1, c2=1
+            auto const count_c2 = (addr_c1 + sizeof(T)) & 4095;
+            auto const count_c1 = sizeof(T) - count_c2;
+            if (auto const ptr_c1 = GetPointerImpl(addr_c1, [addr_c1] {
+                LOG_ERROR(HW_Memory, "Unmapped Write{} @ {:#016X}", sizeof(T) * 8, addr_c1);
+            }, [&] {
+                HandleRasterizerWrite(addr_c1, count_c1);
+            }); ptr_c1) {
+                if (auto const ptr_c2 = GetPointerImpl(addr_c2, [addr_c2] {
+                    LOG_ERROR(HW_Memory, "Unmapped Write{} @ {:#016X}", sizeof(T) * 8, addr_c2);
+                }, [&] {
+                    HandleRasterizerWrite(addr_c2, count_c2);
+                }); ptr_c2) {
+                    std::array<char, sizeof(T)> tmp = std::bit_cast<std::array<char, sizeof(T)>>(data);
+                    std::memcpy(ptr_c1, tmp.data() + 0, count_c1);
+                    std::memcpy(ptr_c2, tmp.data() + count_c1, count_c2);
+                }
+            }
+        }
     }
 
     template <typename T>
@@ -886,10 +850,7 @@ struct Memory::Impl {
         if (!gpu_device_memory) [[unlikely]] {
             gpu_device_memory = &system.Host1x().MemoryManager();
         }
-        if (!gpu_device_memory->IsPhysicalPointer(p)) [[unlikely]] {
-            ReportForeignPointer(v_address, p);
-            return;
-        }
+        VideoCommon::Nx2Profile::AddShared(VideoCommon::Nx2Profile::SharedCounter::SlowPathReads, 1);
         const size_t core = system.GetCurrentHostThreadID();
         if (core >= Core::Hardware::NUM_CPU_CORES) {
             // A service thread has no slot in the arrays below, and it does not use a slot of a
@@ -905,7 +866,9 @@ struct Memory::Impl {
             return;
         }
         auto& current_area = rasterizer_read_areas[core];
-        if (const u64 generation = read_trap_generation.load(std::memory_order_acquire);
+        // Both only grow, so the sum changes whenever either does.
+        if (const u64 generation = read_trap_generation.load(std::memory_order_acquire) +
+                                   gpu_device_memory->ReadAreaGeneration();
             read_area_generations[core] != generation) {
             current_area = {};
             read_area_generations[core] = generation;
@@ -916,8 +879,11 @@ struct Memory::Impl {
                 [[likely]] {
                 return;
             }
-            DisarmReadTraps(v_address, size);
+            // Flush first: another core's read of the page must fault until the data is there.
             current_area = system.GPU().OnCPURead(address, size);
+            if (current_area.release_read_trap) {
+                DisarmReadTraps(v_address, size);
+            }
         });
     }
 
@@ -968,7 +934,7 @@ struct Memory::Impl {
         PAddr last_address;
     };
 
-    void InvalidateGPUMemory(u8* p, size_t size) {
+    bool TryInvalidateGPUMemory(const u8* p, size_t size) {
         constexpr size_t sys_core = Core::Hardware::NUM_CPU_CORES - 1;
         const size_t core = (std::min)(system.GetCurrentHostThreadID(),
                                      sys_core); // any other calls threads go to syscore.
@@ -984,9 +950,13 @@ struct Memory::Impl {
                 sys_core_guard.unlock();
             }
         };
+        bool has_pending_writes = false;
         auto& gpu = system.GPU();
         gpu_device_memory->ApplyOpOnPointer(
-            p, scratch_buffers[core], [&](DAddr address) { gpu.InvalidateRegion(address, size, true); });
+            p, scratch_buffers[core], [&](DAddr address) { has_pending_writes |= gpu.MustFlushRegion(address, size); });
+        if (has_pending_writes) return false;
+        gpu_device_memory->ApplyOpOnPointer(p, scratch_buffers[core], [&](DAddr address) { gpu.InvalidateRegion(address, size); });
+        return true;
     }
 
     Core::System& system;
@@ -1003,13 +973,8 @@ struct Memory::Impl {
     std::array<Common::ScratchBuffer<u32>, Core::Hardware::NUM_CPU_CORES> scratch_buffers{};
     std::span<Core::GPUDirtyMemoryManager> gpu_dirty_managers;
     std::mutex sys_core_guard;
-#ifdef __ANDROID__
-    std::optional<Common::HeapTracker> heap_tracker;
-    Common::HeapTracker* host_buffer{};
-#else
     Common::HostMemory* host_buffer{};
 #endif
-    std::atomic<u64> block_count = 0;
 };
 
 Memory::Memory(Core::System& system_) : system{system_} {
@@ -1048,7 +1013,7 @@ bool Memory::IsValidVirtualAddress(const Common::ProcessAddress vaddr) const {
     if (page >= page_table.entries.size()) {
         return false;
     }
-    const auto [pointer, type, _] = page_table.entries[page].PointerTypeBlock();
+    const auto [pointer, type] = page_table.entries[page].ptr.PointerType();
     return pointer != 0 || type == Common::PageType::RasterizerCachedMemory ||
            type == Common::PageType::DebugMemory;
 }
@@ -1079,15 +1044,15 @@ const u8* Memory::GetPointer(Common::ProcessAddress vaddr) const {
 }
 
 u8 Memory::Read8(const Common::ProcessAddress addr) {
-    return impl->Read8(addr);
+    return impl->Read<u8>(addr);
 }
 
 u16 Memory::Read16(const Common::ProcessAddress addr) {
-    return impl->Read16(addr);
+    return impl->Read<u16_le>(addr);
 }
 
 u32 Memory::Read32(const Common::ProcessAddress addr) {
-    return impl->Read32(addr);
+    return impl->Read<u32_le>(addr);
 }
 
 bool Memory::Read32Acquire(const Common::ProcessAddress addr, u32& value) {
@@ -1095,23 +1060,23 @@ bool Memory::Read32Acquire(const Common::ProcessAddress addr, u32& value) {
 }
 
 u64 Memory::Read64(const Common::ProcessAddress addr) {
-    return impl->Read64(addr);
+    return impl->Read<u64_le>(addr);
 }
 
 void Memory::Write8(Common::ProcessAddress addr, u8 data) {
-    impl->Write8(addr, data);
+    impl->Write<u8>(addr, data);
 }
 
 void Memory::Write16(Common::ProcessAddress addr, u16 data) {
-    impl->Write16(addr, data);
+    impl->Write<u16_le>(addr, data);
 }
 
 void Memory::Write32(Common::ProcessAddress addr, u32 data) {
-    impl->Write32(addr, data);
+    impl->Write<u32_le>(addr, data);
 }
 
 void Memory::Write64(Common::ProcessAddress addr, u64 data) {
-    impl->Write64(addr, data);
+    impl->Write<u64_le>(addr, data);
 }
 
 bool Memory::WriteExclusive8(Common::ProcessAddress addr, u8 data, u8 expected) {
@@ -1203,37 +1168,29 @@ void Memory::MarkRegionDebug(Common::ProcessAddress vaddr, u64 size, bool debug)
     impl->MarkRegionDebug(GetInteger(vaddr), size, debug);
 }
 
-bool Memory::InvalidateNCE(Common::ProcessAddress vaddr, size_t size) {
+NCEAccessFaultAction Memory::InvalidateNCE(Common::ProcessAddress vaddr, size_t size) {
     [[maybe_unused]] bool mapped = true;
     [[maybe_unused]] bool rasterizer = false;
 
     u8* const ptr = impl->GetPointerImpl(
         GetInteger(vaddr),
         [&] {
-            LOG_ERROR(HW_Memory, "Unmapped InvalidateNCE for {} bytes @ {:#x}", size,
-                      GetInteger(vaddr));
+            LOG_ERROR(HW_Memory, "Unmapped InvalidateNCE for {} bytes @ {:#x}", size, GetInteger(vaddr));
             mapped = false;
         },
         [&] { rasterizer = true; });
-    if (rasterizer) {
-        impl->InvalidateGPUMemory(ptr, size);
-    }
-
 #ifdef __ANDROID__
     if (!rasterizer && mapped) {
         impl->host_buffer->DeferredMapSeparateHeap(GetInteger(vaddr));
     }
 #endif
 
-    return mapped && ptr != nullptr;
-}
-
-bool Memory::InvalidateSeparateHeap(void* fault_address) {
-#ifdef __ANDROID__
-    return impl->host_buffer->DeferredMapSeparateHeap(static_cast<u8*>(fault_address));
-#else
-    return false;
-#endif
+    if (rasterizer) {
+        if (!impl->TryInvalidateGPUMemory(ptr, size)) {
+            return NCEAccessFaultAction::Instruction;
+        }
+    }
+    return mapped && ptr != nullptr ? NCEAccessFaultAction::Retry : NCEAccessFaultAction::Unmapped;
 }
 
 } // namespace Core::Memory

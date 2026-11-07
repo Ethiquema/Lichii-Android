@@ -4,6 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <string_view>
+
+#include "common/fs/path_util.h"
 #include "common/string_util.h"
 #include "core/file_sys/fssrv/fssrv_sf_path.h"
 #include "core/hle/service/cmif_serialization.h"
@@ -13,37 +16,41 @@
 
 namespace Service::FileSystem {
 
+std::optional<ServiceFrameworkBase::FunctionInfoBase> IFileSystem::FindRequest(u32 key) {
+    static constexpr auto functions = CreateStaticMap(
+        FunctionInfo{0, D<&IFileSystem::CreateFile>, "CreateFile"},
+        FunctionInfo{1, D<&IFileSystem::DeleteFile>, "DeleteFile"},
+        FunctionInfo{2, D<&IFileSystem::CreateDirectory>, "CreateDirectory"},
+        FunctionInfo{3, D<&IFileSystem::DeleteDirectory>, "DeleteDirectory"},
+        FunctionInfo{4, D<&IFileSystem::DeleteDirectoryRecursively>, "DeleteDirectoryRecursively"},
+        FunctionInfo{5, D<&IFileSystem::RenameFile>, "RenameFile"},
+        FunctionInfo{6, D<&IFileSystem::RenameDirectory>, "RenameDirectory"},
+        FunctionInfo{7, D<&IFileSystem::GetEntryType>, "GetEntryType"},
+        FunctionInfo{8, D<&IFileSystem::OpenFile>, "OpenFile"},
+        FunctionInfo{9, D<&IFileSystem::OpenDirectory>, "OpenDirectory"},
+        FunctionInfo{10, D<&IFileSystem::Commit>, "Commit"},
+        FunctionInfo{11, D<&IFileSystem::GetFreeSpaceSize>, "GetFreeSpaceSize"},
+        FunctionInfo{12, D<&IFileSystem::GetTotalSpaceSize>, "GetTotalSpaceSize"},
+        FunctionInfo{13, D<&IFileSystem::CleanDirectoryRecursively>, "CleanDirectoryRecursively"},
+        FunctionInfo{14, D<&IFileSystem::GetFileTimeStampRaw>, "GetFileTimeStampRaw"},
+        FunctionInfo{15, nullptr, "QueryEntry"},
+        FunctionInfo{16, D<&IFileSystem::GetFileSystemAttribute>, "GetFileSystemAttribute"}
+    );
+    return HandlerTableGenerateWithFind(key, functions);
+}
+
 IFileSystem::IFileSystem(Core::System& system_, FileSys::VirtualDir dir_, SizeGetter size_getter_)
     : ServiceFramework{system_, "IFileSystem"}, backend{std::make_unique<FileSys::Fsa::IFileSystem>(
                                                     dir_)},
       size_getter{std::move(size_getter_)} {
-    static const FunctionInfo functions[] = {
-        {0, D<&IFileSystem::CreateFile>, "CreateFile"},
-        {1, D<&IFileSystem::DeleteFile>, "DeleteFile"},
-        {2, D<&IFileSystem::CreateDirectory>, "CreateDirectory"},
-        {3, D<&IFileSystem::DeleteDirectory>, "DeleteDirectory"},
-        {4, D<&IFileSystem::DeleteDirectoryRecursively>, "DeleteDirectoryRecursively"},
-        {5, D<&IFileSystem::RenameFile>, "RenameFile"},
-        {6, D<&IFileSystem::RenameDirectory>, "RenameDirectory"},
-        {7, D<&IFileSystem::GetEntryType>, "GetEntryType"},
-        {8, D<&IFileSystem::OpenFile>, "OpenFile"},
-        {9, D<&IFileSystem::OpenDirectory>, "OpenDirectory"},
-        {10, D<&IFileSystem::Commit>, "Commit"},
-        {11, D<&IFileSystem::GetFreeSpaceSize>, "GetFreeSpaceSize"},
-        {12, D<&IFileSystem::GetTotalSpaceSize>, "GetTotalSpaceSize"},
-        {13, D<&IFileSystem::CleanDirectoryRecursively>, "CleanDirectoryRecursively"},
-        {14, D<&IFileSystem::GetFileTimeStampRaw>, "GetFileTimeStampRaw"},
-        {15, nullptr, "QueryEntry"},
-        {16, D<&IFileSystem::GetFileSystemAttribute>, "GetFileSystemAttribute"},
-    };
-    RegisterHandlers(functions);
 }
 
 Result IFileSystem::CreateFile(const InLargeData<FileSys::Sf::Path, BufferAttr_HipcPointer> path,
                                s32 option, s64 size) {
     LOG_DEBUG(Service_FS, "called. file={}, option={:#x}, size={:#08x}", path->str, option, size);
 
-    R_RETURN(backend->CreateFile(FileSys::Path(path->str), size));
+    const auto fs_path = ResolveHomebrewCwdRootAlias(path->str, homebrew_initial_cwd);
+    R_RETURN(backend->CreateFile(FileSys::Path(fs_path.c_str()), size));
 }
 
 Result IFileSystem::DeleteFile(const InLargeData<FileSys::Sf::Path, BufferAttr_HipcPointer> path) {
@@ -102,7 +109,8 @@ Result IFileSystem::OpenFile(OutInterface<IFile> out_interface,
     LOG_DEBUG(Service_FS, "called. file={}, mode={}", path->str, mode);
 
     FileSys::VirtualFile vfs_file{};
-    R_TRY(backend->OpenFile(&vfs_file, FileSys::Path(path->str),
+    const auto fs_path = ResolveHomebrewCwdRootAlias(path->str, homebrew_initial_cwd);
+    R_TRY(backend->OpenFile(&vfs_file, FileSys::Path(fs_path.c_str()),
                             static_cast<FileSys::OpenMode>(mode)));
 
     *out_interface = std::make_shared<IFile>(system, vfs_file);
@@ -115,7 +123,8 @@ Result IFileSystem::OpenDirectory(OutInterface<IDirectory> out_interface,
     LOG_DEBUG(Service_FS, "called. directory={}, mode={}", path->str, mode);
 
     FileSys::VirtualDir vfs_dir{};
-    R_TRY(backend->OpenDirectory(&vfs_dir, FileSys::Path(path->str),
+    const auto fs_path = ResolveHomebrewCwdRootAlias(path->str, homebrew_initial_cwd);
+    R_TRY(backend->OpenDirectory(&vfs_dir, FileSys::Path(fs_path.c_str()),
                                  static_cast<FileSys::OpenDirectoryMode>(mode)));
 
     *out_interface = std::make_shared<IDirectory>(system, vfs_dir,
@@ -128,7 +137,8 @@ Result IFileSystem::GetEntryType(
     LOG_DEBUG(Service_FS, "called. file={}", path->str);
 
     FileSys::DirectoryEntryType vfs_entry_type{};
-    R_TRY(backend->GetEntryType(&vfs_entry_type, FileSys::Path(path->str)));
+    const auto fs_path = ResolveHomebrewCwdRootAlias(path->str, homebrew_initial_cwd);
+    R_TRY(backend->GetEntryType(&vfs_entry_type, FileSys::Path(fs_path.c_str())));
 
     *out_type = static_cast<u32>(vfs_entry_type);
     R_SUCCEED();

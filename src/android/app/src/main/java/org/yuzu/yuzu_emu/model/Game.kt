@@ -9,6 +9,8 @@ package org.yuzu.yuzu_emu.model
 import android.content.Intent
 import android.net.Uri
 import android.os.Parcelable
+import androidx.documentfile.provider.DocumentFile
+import java.io.File
 import java.util.HashSet
 import kotlinx.parcelize.Parcelize
 import kotlinx.serialization.Serializable
@@ -16,6 +18,7 @@ import org.yuzu.yuzu_emu.NativeLibrary
 import org.yuzu.yuzu_emu.R
 import org.yuzu.yuzu_emu.YuzuApplication
 import org.yuzu.yuzu_emu.activities.EmulationActivity
+import org.yuzu.yuzu_emu.fragments.EmulationFragment
 import org.yuzu.yuzu_emu.utils.DirectoryInitialization
 import org.yuzu.yuzu_emu.utils.FileUtil
 import org.yuzu.yuzu_emu.utils.NativeConfig
@@ -34,6 +37,17 @@ class Game(
 ) : Parcelable {
     val keyAddedToLibraryTime get() = "${path}_AddedToLibraryTime"
     val keyLastPlayedTime get() = "${path}_LastPlayed"
+
+    // Loose ExeFS (Switch 2) entries hold the real exefs/main path instead of a content URI.
+    val isLooseExeFS get() = path.startsWith("/")
+
+    val fileExists: Boolean
+        get() = if (isLooseExeFS) {
+            File(path).isFile
+        } else {
+            val uri = Uri.parse(path)
+            DocumentFile.fromSingleUri(YuzuApplication.appContext, uri)?.exists() == true
+        }
 
     val settingsName: String
         get() {
@@ -69,7 +83,11 @@ class Game(
     val launchIntent: Intent
         get() = Intent(YuzuApplication.appContext, EmulationActivity::class.java).apply {
             action = Intent.ACTION_VIEW
-            data = Uri.parse(path)
+            if (isLooseExeFS) {
+                putExtra(EmulationFragment.EXTRA_EXEFS_PATH, File(path).parent)
+            } else {
+                data = Uri.parse(path)
+            }
         }
 
     override fun equals(other: Any?): Boolean {

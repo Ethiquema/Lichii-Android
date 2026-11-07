@@ -75,9 +75,7 @@ public:
 
     void Finish();
 
-    void FlushDeferredClear() {}
-
-    StagingBufferMap UploadStagingBuffer(size_t size, bool deferred = false);
+    StagingBufferMap UploadStagingBuffer(size_t size);
 
     StagingBufferMap DownloadStagingBuffer(size_t size, bool deferred = false);
 
@@ -88,6 +86,10 @@ public:
     }
 
     u64 GetDeviceMemoryUsage() const;
+
+    u64 GetDeviceAllocationUsage() const {
+        return GetDeviceMemoryUsage();
+    }
 
     bool CanReportMemoryUsage() const {
         return device.CanReportMemoryUsage();
@@ -121,8 +123,7 @@ public:
                          Tegra::Engines::Fermi2D::Operation operation);
 
     void AccelerateImageUpload(Image& image, const StagingBufferMap& map,
-                               std::span<const VideoCommon::SwizzleParameters> swizzles,
-                               u32 z_start, u32 z_count);
+                               std::span<const VideoCommon::SwizzleParameters> swizzles);
 
     void InsertUploadMemoryBarrier();
 
@@ -141,7 +142,19 @@ public:
 
     bool HasNativeASTC() const noexcept;
 
-    void TickFrame() {}
+    void TickFrame() {
+        ++sync_point;
+    }
+
+    u64 CurrentSyncPoint() const noexcept {
+        return sync_point;
+    }
+
+    u64 CompletedSyncPoint() const noexcept {
+        return sync_point > SYNC_POINT_DELAY ? sync_point - SYNC_POINT_DELAY : 0;
+    }
+
+    void WaitSyncPoint(u64) {}
 
     StateTracker& GetStateTracker() {
         return state_tracker;
@@ -176,6 +189,9 @@ private:
     std::array<OGLFramebuffer, 4> rescale_read_fbos;
     const Settings::ResolutionScalingInfo& resolution;
     u64 device_access_memory;
+
+    static constexpr u64 SYNC_POINT_DELAY = 8;
+    u64 sync_point = 1;
 };
 
 class Image : public VideoCommon::ImageBase {
@@ -228,8 +244,6 @@ public:
     bool ScaleUp(bool ignore = false);
 
     bool ScaleDown(bool ignore = false);
-
-    u64 allocation_tick;
 
 private:
     void CopyBufferToImage(const VideoCommon::BufferImageCopy& copy, size_t buffer_offset);
@@ -367,12 +381,12 @@ private:
 };
 
 struct TextureCacheParams {
-    static constexpr bool ENABLE_VALIDATION = true;
     static constexpr bool FRAMEBUFFER_BLITS = true;
     static constexpr bool HAS_EMULATED_COPIES = true;
     static constexpr bool HAS_DEVICE_MEMORY_INFO = true;
     static constexpr bool IMPLEMENTS_ASYNC_DOWNLOADS = true;
     static constexpr bool HAS_MSAA_DOWNLOADS = false;
+    static constexpr bool USE_UNIFIED_MEMORY = false;
 
     using Runtime = OpenGL::TextureCacheRuntime;
     using Image = OpenGL::Image;

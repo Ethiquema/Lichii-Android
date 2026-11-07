@@ -13,6 +13,7 @@
 #include <queue>
 
 #include "common/settings.h"
+#include "shader_recompiler/shader_pool.h"
 #include "shader_recompiler/exception.h"
 #include "shader_recompiler/frontend/ir/basic_block.h"
 #include "shader_recompiler/frontend/ir/ir_emitter.h"
@@ -128,6 +129,7 @@ void AddNVNStorageBuffers(IR::Program& program) {
         })};
         if (it != descs.end()) {
             it->is_written |= program.info.stores_global_memory;
+            it->is_global_fallback = true;
             continue;
         }
         descs.push_back({
@@ -135,7 +137,16 @@ void AddNVNStorageBuffers(IR::Program& program) {
             .cbuf_offset = offset,
             .count = 1,
             .is_written = program.info.stores_global_memory,
+            .is_global_fallback = true,
         });
+    }
+}
+
+void ConfigureStorageBufferMappings(IR::Program& program, const HostTranslateInfo& host_info) {
+    // https://docs.vulkan.org/guide/latest/descriptor_arrays.html
+    // will be needed: descriptor array elements represent physical spans of one guest virtual buffer.
+    for (StorageBufferDescriptor& desc : program.info.storage_buffers_descriptors) {
+        desc.count = host_info.storage_buffer_segment_count;
     }
 }
 
@@ -151,12 +162,15 @@ std::map<IR::Attribute, IR::Attribute> GenerateLegacyToGenericMappings(
             for (size_t i = 0; i < count; ++i) {
                 mapping.insert({attr + i, previous_stage_mapping.at(attr + i)});
             }
-        } else {
-            for (size_t i = 0; i < count; ++i) {
-                mapping.insert({attr + i, unused_generics.front() + i});
-            }
-            unused_generics.pop();
+            return;
         }
+        if (unused_generics.empty()) {
+            return;
+        }
+        for (size_t i = 0; i < count; ++i) {
+            mapping.insert({attr + i, unused_generics.front() + i});
+        }
+        unused_generics.pop();
     };
     for (size_t index = 0; index < 4; ++index) {
         auto attr = IR::Attribute::ColorFrontDiffuseR + index * 4;
@@ -176,6 +190,42 @@ std::map<IR::Attribute, IR::Attribute> GenerateLegacyToGenericMappings(
     return mapping;
 }
 
+struct PassthroughVertices {
+    u32 count;
+    u32 first;
+    u32 stride;
+};
+
+OutputTopology GetPassthroughTopology(InputTopology input_topology) {
+    switch (input_topology) {
+    case InputTopology::Points:
+        return OutputTopology::PointList;
+    case InputTopology::Lines:
+    case InputTopology::LinesAdjacency:
+        return OutputTopology::LineStrip;
+    case InputTopology::Triangles:
+    case InputTopology::TrianglesAdjacency:
+        return OutputTopology::TriangleStrip;
+    }
+    return OutputTopology::TriangleStrip;
+}
+
+PassthroughVertices GetPassthroughVertices(InputTopology input_topology) {
+    switch (input_topology) {
+    case InputTopology::Points:
+        return {1, 0, 1};
+    case InputTopology::Lines:
+        return {2, 0, 1};
+    case InputTopology::LinesAdjacency:
+        return {2, 1, 1};
+    case InputTopology::Triangles:
+        return {3, 0, 1};
+    case InputTopology::TrianglesAdjacency:
+        return {3, 0, 2};
+    }
+    return {3, 0, 1};
+}
+
 void EmitGeometryPassthrough(IR::IREmitter& ir, const IR::Program& program,
                              const Shader::VaryingState& passthrough_mask,
                              bool passthrough_position,
@@ -192,16 +242,41 @@ void EmitGeometryPassthrough(IR::IREmitter& ir, const IR::Program& program,
     }
     for (u32 i = 0; i < program.output_vertices; i++) {
         // Assign generics from input
-        for (u32 j = 0; j < 32; j++) {
+        for (u32 j = 0; j < IR::NUM_GENERICS; j++) {
             if (!passthrough_mask.Generic(j)) {
                 continue;
             }
+            copy_vec4(IR::Attribute::Generic0X + (j * 4));
+        }
 
-            const IR::Attribute attr = IR::Attribute::Generic0X + (j * 4);
-            ir.SetAttribute(attr + 0, ir.GetAttribute(attr + 0, ir.Imm32(i)), ir.Imm32(0));
-            ir.SetAttribute(attr + 1, ir.GetAttribute(attr + 1, ir.Imm32(i)), ir.Imm32(0));
-            ir.SetAttribute(attr + 2, ir.GetAttribute(attr + 2, ir.Imm32(i)), ir.Imm32(0));
-            ir.SetAttribute(attr + 3, ir.GetAttribute(attr + 3, ir.Imm32(i)), ir.Imm32(0));
+        for (u32 j = 0; j < 4; j++) {
+            const IR::Attribute attr = IR::Attribute::ColorFrontDiffuseR + (j * 4);
+            if (!passthrough_mask.AnyComponent(attr)) {
+                continue;
+            }
+            copy_vec4(attr);
+        }
+
+        if (passthrough_mask[IR::Attribute::FogCoordinate]) {
+            ir.SetAttribute(IR::Attribute::FogCoordinate,
+                            ir.GetAttribute(IR::Attribute::FogCoordinate, ir.Imm32(i)),
+                            ir.Imm32(0));
+        }
+
+        for (u32 j = 0; j < IR::NUM_FIXEDFNCTEXTURE; j++) {
+            const IR::Attribute attr = IR::Attribute::FixedFncTexture0S + (j * 4);
+            if (!passthrough_mask.AnyComponent(attr)) {
+                continue;
+            }
+            copy_vec4(attr);
+        }
+
+        for (u32 j = 0; j < 8; j++) {
+            const IR::Attribute attr = IR::Attribute::ClipDistance0 + j;
+            if (!passthrough_mask[attr]) {
+                continue;
+            }
+            ir.SetAttribute(attr, ir.GetAttribute(attr, ir.Imm32(i)), ir.Imm32(0));
         }
 
         if (passthrough_position) {
@@ -308,30 +383,6 @@ void LowerGeometryPassthrough(const IR::Program& program, const HostTranslateInf
     }
 }
 
-// The lines of a 32-element group in a mesh program's stage buffer: one per attribute an output
-// map enables, in attribute order (system values, then generics).
-void AddMeshLines(const ProgramHeader& sph, boost::container::static_vector<u32, 136>& lines) {
-    const auto& c{sph.vtg.omap_systemc};
-    if (c.clip_distances != 0 || c.point_sprite_s != 0 || c.point_sprite_t != 0 ||
-        c.fog_coordinate != 0 || c.tessellation_eval_point_u != 0 ||
-        c.tessellation_eval_point_v != 0 || c.instance_id != 0 || c.vertex_id != 0) {
-        throw NotImplementedException("Mesh outputs past the generic attributes");
-    }
-    for (u32 bit = 0; bit < 8; ++bit) {
-        if (((sph.vtg.omap_systemb.raw >> bit) & 1) != 0) {
-            lines.push_back(static_cast<u32>(IR::Attribute::PrimitiveId) + bit);
-        }
-    }
-    for (u32 generic = 0; generic < 32; ++generic) {
-        const std::array<bool, 4> mask{sph.vtg.OutputGeneric(generic)};
-        for (u32 element = 0; element < 4; ++element) {
-            if (mask[element]) {
-                lines.push_back(static_cast<u32>(IR::Attribute::Generic0X) + generic * 4 + element);
-            }
-        }
-    }
-}
-
 void TightenOutputVertices(IR::Program& program) {
     if (program.stage != Stage::Geometry || program.is_geometry_passthrough) {
         return;
@@ -357,12 +408,13 @@ void TightenOutputVertices(IR::Program& program) {
 } // Anonymous namespace
 
 IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Block>& block_pool,
-                             Environment& env, Flow::CFG& cfg, const HostTranslateInfo& host_info) {
+                             Environment& env, Flow::CFG& cfg, const HostTranslateInfo& host_info,
+                             InputTopology input_topology) {
     HostTranslateInfo normalized_host_info{host_info};
     normalized_host_info.ApplyDescriptorLimitPolicy();
 
     IR::Program program;
-    program.syntax_list = BuildASL(inst_pool, block_pool, env, cfg, normalized_host_info);
+    program.syntax_list = BuildASL(pools, env, cfg, host_info);
     program.blocks = GenerateBlocks(program.syntax_list);
     program.post_order_blocks = PostOrder(program.syntax_list.front());
     program.stage = env.ShaderStage();
@@ -386,8 +438,10 @@ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Blo
             }
 
             if (!normalized_host_info.support_geometry_shader_passthrough) {
-                program.output_vertices = GetOutputTopologyVertices(program.output_topology);
-                LowerGeometryPassthrough(program, normalized_host_info);
+                program.output_topology = GetPassthroughTopology(input_topology);
+                program.output_vertices = GetPassthroughVertices(input_topology).count;
+                LowerGeometryPassthrough(program, normalized_host_info, input_topology);
+                program.is_geometry_passthrough = false;
             }
         }
         break;
@@ -411,7 +465,8 @@ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Blo
         const u32 threads{program.stage == Stage::Task ? init & 0x3f : (shader_b >> 20) & 0x3f};
         program.workgroup_size = {(std::max)(threads, 1U), 1, 1};
         if (program.stage == Stage::Mesh) {
-            if (program.mesh.topology != 4) {
+            if (program.mesh.topology != 0 && program.mesh.topology != 1 &&
+                program.mesh.topology != 4) {
                 throw NotImplementedException("Mesh output topology {} (SET_MESH_SHADER_A {:#010x})",
                                               program.mesh.topology, shader_a);
             }
@@ -445,7 +500,7 @@ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Blo
     Optimization::PositionPass(env, program);
     Optimization::BlitConstantsPass(env, program);
 
-    Optimization::GlobalMemoryToStorageBufferPass(env, program, normalized_host_info);
+    Optimization::GlobalMemoryToStorageBufferPass(program, normalized_host_info);
     Optimization::GeometryCompactionPass(program, normalized_host_info);
     Optimization::TexturePass(env, program, normalized_host_info);
 
@@ -475,7 +530,7 @@ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Blo
 
     CollectInterpolationInfo(env, program);
     AddNVNStorageBuffers(program);
-    Optimization::LimitSampledTextureArrays(program, normalized_host_info);
+    ConfigureStorageBufferMappings(program, normalized_host_info);
     return program;
 }
 
@@ -512,6 +567,52 @@ IR::Program MergeDualVertexPrograms(IR::Program& vertex_a, IR::Program& vertex_b
     return result;
 }
 
+void PrunePassthroughStores(IR::Program& program, const VaryingState& previous_stage_stores) {
+    if (program.stage != Stage::Geometry || program.is_geometry_passthrough) {
+        return;
+    }
+    VaryingState pruned;
+    for (size_t index = 0; index < program.info.passthrough.mask.size(); ++index) {
+        if (!program.info.passthrough.mask[index] || previous_stage_stores.mask[index]) {
+            continue;
+        }
+        const IR::Attribute attr{static_cast<IR::Attribute>(index)};
+        if (attr >= IR::Attribute::PositionX && attr <= IR::Attribute::PositionW) {
+            continue;
+        }
+        pruned.mask[index] = true;
+    }
+    if (pruned.mask.none()) {
+        return;
+    }
+    const auto erase_matching{[&pruned](IR::Block* block, IR::Opcode opcode, bool skip_used) {
+        auto it{block->begin()};
+        while (it != block->end()) {
+            IR::Inst& inst{*it};
+            if (inst.GetOpcode() != opcode ||
+                !pruned.mask[static_cast<size_t>(inst.Arg(0).Attribute())]) {
+                ++it;
+                continue;
+            }
+            if (skip_used && inst.HasUses()) {
+                ++it;
+                continue;
+            }
+            inst.Invalidate();
+            it = block->Instructions().erase(it);
+        }
+    }};
+    for (IR::Block* const block : program.post_order_blocks) {
+        erase_matching(block, IR::Opcode::SetAttribute, false);
+    }
+    for (IR::Block* const block : program.post_order_blocks) {
+        erase_matching(block, IR::Opcode::GetAttribute, true);
+    }
+    program.info.stores.mask &= ~pruned.mask;
+    program.info.loads.mask &= ~pruned.mask;
+    program.info.passthrough.mask &= ~pruned.mask;
+}
+
 void ConvertLegacyToGeneric(IR::Program& program, const Shader::RuntimeInfo& runtime_info) {
     auto& stores = program.info.stores;
     if (stores.Legacy()) {
@@ -524,19 +625,23 @@ void ConvertLegacyToGeneric(IR::Program& program, const Shader::RuntimeInfo& run
         program.info.legacy_stores_mapping =
             GenerateLegacyToGenericMappings(stores, unused_output_generics, {});
         for (IR::Block* const block : program.post_order_blocks) {
-            for (IR::Inst& inst : block->Instructions()) {
-                switch (inst.GetOpcode()) {
-                case IR::Opcode::SetAttribute: {
-                    const auto attr = inst.Arg(0).Attribute();
-                    if (IsLegacyAttribute(attr)) {
-                        stores.Set(program.info.legacy_stores_mapping[attr], true);
-                        inst.SetArg(0, Shader::IR::Value(program.info.legacy_stores_mapping[attr]));
-                    }
-                    break;
+            for (auto it = block->begin(); it != block->end();) {
+                IR::Inst& inst{*it};
+                if (inst.GetOpcode() != IR::Opcode::SetAttribute ||
+                    !IsLegacyAttribute(inst.Arg(0).Attribute())) {
+                    ++it;
+                    continue;
                 }
-                default:
-                    break;
+                const auto& mapping{program.info.legacy_stores_mapping};
+                const auto mapped{mapping.find(inst.Arg(0).Attribute())};
+                if (mapped == mapping.end()) {
+                    inst.Invalidate();
+                    it = block->Instructions().erase(it);
+                    continue;
                 }
+                stores.Set(mapped->second, true);
+                inst.SetArg(0, Shader::IR::Value(mapped->second));
+                ++it;
             }
         }
     }
@@ -558,10 +663,16 @@ void ConvertLegacyToGeneric(IR::Program& program, const Shader::RuntimeInfo& run
                 switch (inst.GetOpcode()) {
                 case IR::Opcode::GetAttribute: {
                     const auto attr = inst.Arg(0).Attribute();
-                    if (IsLegacyAttribute(attr)) {
-                        loads.Set(mappings[attr], true);
-                        inst.SetArg(0, Shader::IR::Value(mappings[attr]));
+                    if (!IsLegacyAttribute(attr)) {
+                        break;
                     }
+                    const auto mapped{mappings.find(attr)};
+                    if (mapped == mappings.end()) {
+                        inst.ReplaceUsesWith(IR::Value{0.0f});
+                        break;
+                    }
+                    loads.Set(mapped->second, true);
+                    inst.SetArg(0, Shader::IR::Value(mapped->second));
                     break;
                 }
                 default:
@@ -576,11 +687,12 @@ IR::Program GenerateGeometryPassthrough(ObjectPool<IR::Inst>& inst_pool,
                                         ObjectPool<IR::Block>& block_pool,
                                         const HostTranslateInfo& host_info,
                                         IR::Program& source_program,
-                                        Shader::OutputTopology output_topology) {
+                                        Shader::OutputTopology output_topology,
+                                        InputTopology input_topology) {
     IR::Program program;
     program.stage = Stage::Geometry;
     program.output_topology = output_topology;
-    program.output_vertices = GetOutputTopologyVertices(output_topology);
+    program.output_vertices = GetPassthroughVertices(input_topology).count;
 
     program.is_geometry_passthrough = false;
     program.info.loads.mask = source_program.info.stores.mask;
@@ -588,7 +700,7 @@ IR::Program GenerateGeometryPassthrough(ObjectPool<IR::Inst>& inst_pool,
     program.info.stores.Set(IR::Attribute::Layer, true);
     program.info.stores.Set(source_program.info.emulated_layer, false);
 
-    IR::Block* current_block = block_pool.Create(inst_pool);
+    IR::Block* current_block = &pools.block.emplace_back(pools.inst);
     auto& node{program.syntax_list.emplace_back()};
     node.type = IR::AbstractSyntaxNode::Type::Block;
     node.data.block = current_block;
@@ -597,7 +709,7 @@ IR::Program GenerateGeometryPassthrough(ObjectPool<IR::Inst>& inst_pool,
     EmitGeometryPassthrough(ir, program, program.info.stores, true,
                             source_program.info.emulated_layer, std::nullopt);
 
-    IR::Block* return_block{block_pool.Create(inst_pool)};
+    IR::Block* return_block{&pools.block.emplace_back(pools.inst)};
     IR::IREmitter{*return_block}.Epilogue();
     current_block->AddBranch(return_block);
 

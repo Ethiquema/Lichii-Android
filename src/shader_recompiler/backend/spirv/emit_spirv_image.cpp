@@ -6,7 +6,6 @@
 
 #include <boost/container/static_vector.hpp>
 
-#include "common/settings.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
@@ -362,6 +361,37 @@ Id Emit(MethodPtrType sparse_ptr, MethodPtrType non_sparse_ptr, EmitContext& ctx
     return ctx.OpCompositeExtract(result_type, sample, 1U);
 }
 
+bool IsDynamicPtp(IR::Inst* inst, const IR::Value& offset, const IR::Value& offset2) {
+    if (offset2.IsEmpty() || offset.IsEmpty() ||
+        inst->GetAssociatedPseudoOperation(IR::Opcode::GetSparseFromOp)) {
+        return false;
+    }
+    const auto constant{[](const IR::Value& value) {
+        return value.IsImmediate() || value.InstRecursive()->AreAllArgsImmediates();
+    }};
+    return !constant(offset) || !constant(offset2);
+}
+
+// Per-tap offsets the IR could not fold to constants (ConstOffsets must be constant): one gather
+// per tap with a runtime Offset, keeping the i0,j0 texel (w) of each footprint, which is the
+// texel a per-tap gather returns for that tap.
+template <typename GatherFn>
+Id GatherDynamicPtp(EmitContext& ctx, bool is_integer, Id result_type, const IR::Value& offset,
+                    const IR::Value& offset2, GatherFn&& gather) {
+    const std::array packed{ctx.Def(offset), ctx.Def(offset2)};
+    const Id component_type{is_integer ? ctx.U32[1] : ctx.F32[1]};
+    std::array<Id, 4> texels;
+    for (u32 tap = 0; tap < 4; ++tap) {
+        const Id vector{packed[tap / 2]};
+        const u32 first{(tap % 2) * 2};
+        const Id x{ctx.OpBitcast(ctx.S32[1], ctx.OpCompositeExtract(ctx.U32[1], vector, first))};
+        const Id y{ctx.OpBitcast(ctx.S32[1], ctx.OpCompositeExtract(ctx.U32[1], vector, first + 1))};
+        const Id tap_offset{ctx.OpCompositeConstruct(ctx.S32[2], x, y)};
+        texels[tap] = ctx.OpCompositeExtract(component_type, gather(tap_offset), 3U);
+    }
+    return ctx.OpCompositeConstruct(result_type, std::span<const Id>{texels.data(), texels.size()});
+}
+
 Id IsScaled(EmitContext& ctx, const IR::Value& index, Id member_index, u32 base_index) {
     const Id push_constant_u32{ctx.TypePointer(spv::StorageClass::PushConstant, ctx.U32[1])};
     Id bit{};
@@ -586,16 +616,10 @@ Id EmitImageSampleExplicitLod(EmitContext& ctx, IR::Inst* inst, const IR::Value&
     const bool is_integer{IsTextureInteger(ctx, info)};
     const Id result_type{is_integer ? ctx.U32[4] : ctx.F32[4]};
     const ImageOperands operands(ctx, false, true, false, lod, offset);
-
-    Id result = Emit(&EmitContext::OpImageSparseSampleExplicitLod,
-                     &EmitContext::OpImageSampleExplicitLod, ctx, inst, result_type,
-                     Texture(ctx, info, index), coords, operands.Mask(), operands.Span());
-#ifdef __ANDROID__
-    if (!is_integer && Settings::values.fix_bloom_effects.GetValue()) {
-        result = ctx.OpVectorTimesScalar(ctx.F32[4], result, ctx.Const(0.98f));
-    }
-#endif
-    return is_integer ? ctx.OpBitcast(ctx.F32[4], result) : result;
+ 	Id result = Emit(&EmitContext::OpImageSparseSampleExplicitLod,
+	                 &EmitContext::OpImageSampleExplicitLod, ctx, inst, result_type,
+	                 Texture(ctx, info, index), coords, operands.Mask(), operands.Span());
+	return is_integer ? ctx.OpBitcast(ctx.F32[4], result) : result;
 }
 
 Id EmitImageSampleDrefImplicitLod(EmitContext& ctx, IR::Inst* inst, const IR::Value& index,

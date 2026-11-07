@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
@@ -143,12 +143,6 @@ private:
             if (read_index == producer.index.load(std::memory_order::acquire)) {
                 return false;
             }
-        } else if constexpr (Mode == PopMode::Wait) {
-            // Wait until the queue is not empty.
-            std::unique_lock lock{consumer.cv_mutex};
-            consumer.cv.wait(lock, [this, read_index] {
-                return read_index != producer.index.load(std::memory_order::acquire);
-            });
         } else if constexpr (Mode == PopMode::WaitWithStopToken) {
             // Wait until the queue is not empty.
             std::unique_lock lock{consumer.cv_mutex};
@@ -158,6 +152,12 @@ private:
             if (stop_token.stop_requested()) {
                 return false;
             }
+        } else if constexpr (Mode == PopMode::Wait) {
+            // Wait until the queue is not empty.
+            std::unique_lock lock{consumer.cv_mutex};
+            consumer.cv.wait(lock, [this, read_index] {
+                return read_index != producer.index.load(std::memory_order::acquire);
+            });
         } else {
             static_assert(Mode < PopMode::Count, "Invalid PopMode.");
         }

@@ -163,8 +163,6 @@ Decoder::Decoder(Tegra::Host1x::NvdecCommon::VideoCodec codec) {
             return AV_CODEC_ID_VP8;
         case Tegra::Host1x::NvdecCommon::VideoCodec::VP9:
             return AV_CODEC_ID_VP9;
-        case Tegra::Host1x::NvdecCommon::VideoCodec::AV1:
-            return AV_CODEC_ID_AV1;
         default:
             UNIMPLEMENTED_MSG("Unknown codec {}", codec);
             return AV_CODEC_ID_NONE;
@@ -176,8 +174,7 @@ Decoder::Decoder(Tegra::Host1x::NvdecCommon::VideoCodec codec) {
         const char* mc_name = nullptr;
         switch (av_codec) {
         case AV_CODEC_ID_H264: mc_name = "h264_mediacodec"; break;
-        // Disabled: causes crashes in Diablo II
-        // case AV_CODEC_ID_VP8:  mc_name = "vp8_mediacodec";  break;
+        case AV_CODEC_ID_VP8:  mc_name = "vp8_mediacodec";  break;
         case AV_CODEC_ID_VP9:  mc_name = "vp9_mediacodec";  break;
         default: break;
         }

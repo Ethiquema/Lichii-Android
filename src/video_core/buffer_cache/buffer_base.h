@@ -20,8 +20,6 @@ namespace VideoCommon {
 
 enum class BufferFlagBits {
     Picked = 1 << 0,
-    CachedWrites = 1 << 1,
-    PreemtiveDownload = 1 << 2,
 };
 DECLARE_ENUM_FLAG_OPERATORS(BufferFlagBits)
 
@@ -58,15 +56,6 @@ public:
         flags |= BufferFlagBits::Picked;
     }
 
-    void MarkPreemtiveDownload() noexcept {
-        flags |= BufferFlagBits::PreemtiveDownload;
-    }
-
-    /// Unmark buffer as picked
-    void Unpick() noexcept {
-        flags &= ~BufferFlagBits::Picked;
-    }
-
     /// Increases the likeliness of this being a stream buffer
     void IncreaseStreamScore(int score) noexcept {
         stream_score += score;
@@ -87,15 +76,6 @@ public:
         return True(flags & BufferFlagBits::Picked);
     }
 
-    /// Returns true when the buffer has pending cached writes
-    [[nodiscard]] bool HasCachedWrites() const noexcept {
-        return True(flags & BufferFlagBits::CachedWrites);
-    }
-
-    bool IsPreemtiveDownload() const noexcept {
-        return True(flags & BufferFlagBits::PreemtiveDownload);
-    }
-
     /// Returns the base CPU address of the buffer
     [[nodiscard]] VAddr CpuAddr() const noexcept {
         return cpu_addr;
@@ -109,12 +89,12 @@ public:
         return static_cast<u32>(other_cpu_addr - cpu_addr);
     }
 
-    size_t getLRUID() const noexcept {
-        return lru_id;
+    u64 GetFrameTick() const noexcept {
+        return frame_tick;
     }
 
-    void setLRUID(size_t lru_id_) {
-        lru_id = lru_id_;
+    void SetFrameTick(u64 tick) noexcept {
+        frame_tick = tick;
     }
 
     size_t SizeBytes() const {
@@ -129,13 +109,49 @@ public:
         write_tick = write_tick_;
     }
 
+    u64 ContentSerial() const noexcept {
+        return content_serial;
+    }
+
+    void MarkContentModified() noexcept {
+        content_serial = ++next_content_serial;
+    }
+
+    [[nodiscard]] bool HasDrawHazard(u64 pass, u64 wfi, DAddr addr, u64 size,
+                                     bool check_feedback) const noexcept {
+        return draw_write_pass == pass &&
+               (draw_write_wfi < wfi || (check_feedback && draw_write_feedback)) &&
+               addr < draw_write_end && addr + size > draw_write_begin;
+    }
+
+    void MarkDrawWrite(u64 pass, u64 wfi, DAddr addr, u64 size, bool feedback) noexcept {
+        if (draw_write_pass != pass) {
+            draw_write_pass = pass;
+            draw_write_begin = addr;
+            draw_write_end = addr + size;
+            draw_write_feedback = false;
+        }
+        draw_write_wfi = wfi;
+        draw_write_feedback |= feedback;
+        draw_write_begin = (std::min)(draw_write_begin, addr);
+        draw_write_end = (std::max)(draw_write_end, addr + size);
+    }
+
 private:
+    static inline u64 next_content_serial = 0;
+
     VAddr cpu_addr = 0;
     BufferFlagBits flags{};
     int stream_score = 0;
-    size_t lru_id = SIZE_MAX;
+    u64 frame_tick = 0;
     size_t size_bytes = 0;
     u64 write_tick = 0;
+    u64 content_serial = ++next_content_serial;
+    u64 draw_write_pass = 0;
+    u64 draw_write_wfi = 0;
+    DAddr draw_write_begin = 0;
+    DAddr draw_write_end = 0;
+    bool draw_write_feedback = false;
 };
 
 } // namespace VideoCommon

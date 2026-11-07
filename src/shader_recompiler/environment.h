@@ -31,7 +31,7 @@ struct CbufWordKey {
 
 struct CbufWordKeyHash {
     constexpr size_t operator()(const CbufWordKey& k) const noexcept {
-        return (size_t(k.index) << 32) ^ k.offset;
+        return size_t((u64(k.index) << 32) ^ u64(k.offset));
     }
 };
 
@@ -40,9 +40,10 @@ struct HandleKey {
     u32 sec_index, sec_offset, sec_shift_left;
     u32 count;
     bool has_secondary;
+    u32 mask, sec_mask;
     constexpr bool operator==(const HandleKey& o) const noexcept {
-        return std::tie(index, offset, shift_left, sec_index, sec_offset, sec_shift_left, count, has_secondary)
-            == std::tie(o.index, o.offset, o.shift_left, o.sec_index, o.sec_offset, o.sec_shift_left, o.count, o.has_secondary);
+        return std::tie(index, offset, shift_left, sec_index, sec_offset, sec_shift_left, count, has_secondary, mask, sec_mask)
+            == std::tie(o.index, o.offset, o.shift_left, o.sec_index, o.sec_offset, o.sec_shift_left, o.count, o.has_secondary, o.mask, o.sec_mask);
     }
 };
 struct HandleKeyHash {
@@ -52,6 +53,7 @@ struct HandleKeyHash {
         h ^= (size_t(k.sec_index) << 33) ^ (size_t(k.sec_offset) << 2);
         h ^= (size_t(k.sec_shift_left) << 3);
         h ^= (size_t(k.count) << 7);
+        h ^= (size_t(k.mask) << 11) ^ (size_t(k.sec_mask) << 13);
         return h ^ (k.has_secondary ? 0x9e3779b97f4a7c15ULL : 0ULL);
     }
 };
@@ -66,7 +68,7 @@ struct ConstBufferAddr {
     IR::U32 dynamic_offset;
     u32 count;
     bool has_secondary;
-    u32 handle_program{~0U}; ///< index in Info::handle_programs for a handle computed per draw
+    BufferTextureSource buffer_source{};
 };
 
 class Environment {
@@ -76,20 +78,6 @@ public:
     [[nodiscard]] virtual u64 ReadInstruction(u32 address) = 0;
 
     [[nodiscard]] virtual u32 TranslateProgramAddress(u32 address) const { return address; }
-
-    /// A Switch 2 native program lowered to Maxwell instructions. Its storage buffer pointers are
-    /// raw 8-byte arguments in constant buffers, without the NVN descriptor layout.
-    [[nodiscard]] virtual bool IsNativeProgram() const { return false; }
-
-    /// Native programs: whether the 8-byte constant at (index, offset) is a mapped GPU address.
-    /// Native argument tables mix pointers with scalars (sizes, strides).
-    [[nodiscard]] virtual bool IsCbufStorageBufferPointer(u32, u32) { return true; }
-
-    /// Native programs: whether the 8 bytes at `indirect` past the pointer at (index, offset) are
-    /// a mapped GPU address (a pointer table the program loads its buffer pointer from).
-    [[nodiscard]] virtual bool IsCbufIndirectStorageBufferPointer(u32, u32, u32) {
-        return true;
-    }
 
     [[nodiscard]] virtual u32 ReadCbufValue(u32 cbuf_index, u32 cbuf_offset) = 0;
 

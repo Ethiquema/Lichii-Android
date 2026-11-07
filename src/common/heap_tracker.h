@@ -7,7 +7,7 @@
 #include <mutex>
 #include <set>
 #include <shared_mutex>
-
+#include <boost/container/map.hpp>
 #include "common/host_memory.h"
 #include "common/intrusive_red_black_tree.h"
 
@@ -65,17 +65,15 @@ public:
     bool DeferredMapSeparateHeap(size_t virtual_offset);
 
 private:
-    using AddrTreeTraits =
-        Common::IntrusiveRedBlackTreeMemberTraitsDeferredAssert<&SeparateHeapMap::addr_node>;
-    using AddrTree = AddrTreeTraits::TreeType<SeparateHeapMapAddrComparator>;
-
-    using TickTreeTraits =
-        Common::IntrusiveRedBlackTreeMemberTraitsDeferredAssert<&SeparateHeapMap::tick_node>;
-    using TickTree = TickTreeTraits::TreeType<SeparateHeapMapTickComparator>;
-
-    AddrTree m_mappings{};
-    TickTree m_resident_mappings{};
-
+    // TODO: You may want to "fake-map" the first 2GB of 64-bit address space
+    // and dedicate it entirely to a recursive PTE mapping :)
+    // However Ankerl would be way better than using an RB tree, in all senses - but
+    // there is a strict requirement for ordering to be imposed accross the map itself
+    // which is not achievable with the unordered property.
+    using AddrTree = boost::container::map<VAddr, SeparateHeapMap>;
+    AddrTree m_mappings;
+    using TicksTree = boost::container::map<VAddr, SeparateHeapMap>;
+    TicksTree m_resident_mappings;
 private:
     void SplitHeapMap(VAddr offset, size_t size);
     void SplitHeapMapLocked(VAddr offset);

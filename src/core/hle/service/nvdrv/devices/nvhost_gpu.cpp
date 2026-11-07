@@ -5,11 +5,8 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
 #include <cstdlib>
-#include <mutex>
+#include <fstream>
 #include <cstring>
 #include <vector>
 #include "common/assert.h"
@@ -21,12 +18,13 @@
 #include "core/hle/service/nvdrv/core/syncpoint_manager.h"
 #include "core/hle/service/nvdrv/devices/ioctl_serialization.h"
 #include "core/hle/service/nvdrv/devices/nvhost_gpu.h"
-#include "core/hle/service/nvdrv/devices/nx2_stub_device.h"
+#include "core/hle/service/nvdrv/devices/native_gpu_context.h"
 #include "core/hle/service/nvdrv/nvdrv.h"
 #include "core/memory.h"
 #include "video_core/control/channel_state.h"
 #include "video_core/engines/puller.h"
 #include "video_core/gpu.h"
+#include "video_core/memory_manager.h"
 #include "video_core/host1x/host1x.h"
 #include "video_core/memory_manager.h"
 
@@ -42,7 +40,7 @@ Tegra::CommandHeader BuildFenceAction(Tegra::Engines::Puller::FenceOperation op,
 
 nvhost_gpu::nvhost_gpu(Core::System& system_, EventInterface& events_interface_,
                        NvCore::Container& core_)
-    : nvdevice{system_}, events_interface{events_interface_}, core{core_},
+    : nvdevice{system_, Type::GpuChannel}, events_interface{events_interface_}, core{core_},
       syncpoint_manager{core_.GetSyncpointManager()}, nvmap{core.GetNvMapFile()},
       channel_state{system.GPU().AllocateChannel()} {
     channel_syncpoint = syncpoint_manager.AllocateSyncpoint(false);
@@ -98,6 +96,11 @@ NvResult nvhost_gpu::Ioctl1(DeviceFD fd, Ioctl command, std::span<const u8> inpu
             return WrapFixedVariable(this, &nvhost_gpu::SubmitGPFIFOBase1, input, output, fd, true);
         case 0x1d:
             return WrapFixed(this, &nvhost_gpu::ChannelSetTimeslice, input, output);
+        case 0x1f:
+            if (UsesNativeAbi() && command.raw == 0xc008481f) {
+                return WrapFixed(this, &nvhost_gpu::SetPreemptionModes, input, output);
+            }
+            break;
         default:
             break;
         }
@@ -150,6 +153,7 @@ NvResult nvhost_gpu::Ioctl3(DeviceFD fd, Ioctl command, std::span<const u8> inpu
 
 void nvhost_gpu::OnOpen(NvCore::SessionId session_id, DeviceFD fd) {
     sessions[fd] = session_id;
+    channel_state->native_abi = UsesNativeAbi();
 }
 
 void nvhost_gpu::OnClose(DeviceFD fd) {
@@ -185,6 +189,14 @@ NvResult nvhost_gpu::ZCullBind(IoctlZCullBind& params) {
 NvResult nvhost_gpu::SetErrorNotifier(IoctlSetErrorNotifier& params) {
     LOG_WARNING(Service_NVDRV, "(STUBBED) called, offset={:X}, size={:X}, mem={:X}", params.offset,
                 params.size, params.mem);
+    // Like the host driver, clear the notifier when it is installed: NVN polls its status word and
+    // treats a non-zero value (whatever the buffer held before) as a channel error.
+    if (const auto handle = nvmap.GetHandle(params.mem);
+        handle && handle->address && params.size && params.size <= 0x10000 &&
+        params.offset + params.size <= handle->size) {
+        const std::vector<u8> zeros(params.size);
+        system.ApplicationMemory().WriteBlock(handle->address + params.offset, zeros.data(), zeros.size());
+    }
     return NvResult::Success;
 }
 
@@ -196,7 +208,9 @@ NvResult nvhost_gpu::SetChannelPriority(IoctlChannelSetPriority& params) {
     case ChannelPriority::Low: channel_timeslice = 1300; break;
     case ChannelPriority::Medium: channel_timeslice = 2600; break;
     case ChannelPriority::High: channel_timeslice = 5200; break;
-    default : return NvResult::BadParameter;
+    default:
+        LOG_WARNING(Service_NVDRV, "unknown channel priority {:#X}", channel_priority);
+        break;
     }
 
     return NvResult::Success;
@@ -300,47 +314,23 @@ NvResult nvhost_gpu::AllocateObjectContext(IoctlAllocObjCtx& params) {
         params.flags = allowed_mask;
     }
 
-    if (g_nx2_driver) {
-        // Switch 2 NvRm asks for Ampere classes, or class 0 (it reads the class numbers from a
-        // characteristics layout we don't know yet). Map them onto the Maxwell engine slots.
-        u32 mapped = params.class_num;
-        switch (params.class_num) {
-        case 0xC797: case 0xC697: case 0xC597: mapped = static_cast<u32>(CtxClasses::Ctx3D); break;
-        case 0xC7C0: case 0xC6C0: case 0xC5C0: mapped = static_cast<u32>(CtxClasses::CtxCompute); break;
-        case 0xC7B5: case 0xC6B5: case 0xC5B5: mapped = static_cast<u32>(CtxClasses::CtxDMA); break;
-        case 0xC56F: case 0xC76F: mapped = static_cast<u32>(CtxClasses::CtxChannelGPFIFO); break;
-        case 0: {
-            for (const auto candidate : {CtxClasses::Ctx3D, CtxClasses::CtxCompute, CtxClasses::CtxDMA,
-                                         CtxClasses::Ctx2D, CtxClasses::CtxKepler}) {
-                const auto index = GetObjectContextClassNumberIndex(candidate);
-                if (index >= 0 && !ctxObjs[index].has_value()) {
-                    mapped = static_cast<u32>(candidate);
-                    break;
-                }
-            }
-            break;
-        }
-        default:
-            break;
-        }
-        if (mapped != params.class_num) {
-            LOG_WARNING(Service_NVDRV, "Switch 2 object class {:#x} -> {:#x}", params.class_num, mapped);
-            params.class_num = mapped;
-        }
-    }
+    params.obj_id = 0;
 
     s32_le ctx_class_number_index =
         GetObjectContextClassNumberIndex(static_cast<CtxClasses>(params.class_num));
+    if (const auto native_slot = GetNativeGpuContextSlot(params.class_num)) {
+        if (UsesNativeAbi()) { ctx_class_number_index = *native_slot; }
+    }
     if (ctx_class_number_index < 0) {
-        LOG_ERROR(Service_NVDRV, "Invalid class number for object context: {:#x}",
-                  params.class_num);
-        return NvResult::BadParameter;
+        LOG_WARNING(Service_NVDRV, "Untracked class number for object context: {:#X}",
+                    params.class_num);
+        return NvResult::Success;
     }
 
     if (ctxObjs[ctx_class_number_index].has_value()) {
-        LOG_WARNING(Service_NVDRV, "Object context for class {:#x} already allocated on this channel",
-                    params.class_num);
-        return NvResult::AlreadyAllocated;
+        LOG_DEBUG(Service_NVDRV, "Object context for class {:#X} already allocated on this channel",
+                  params.class_num);
+        return NvResult::Success;
     }
 
     // Defer actual hardware context binding until channel is initialized.
@@ -349,7 +339,7 @@ NvResult nvhost_gpu::AllocateObjectContext(IoctlAllocObjCtx& params) {
     return NvResult::Success;
 }
 
-static boost::container::small_vector<Tegra::CommandHeader, 512> BuildWaitCommandList(
+static std::vector<Tegra::CommandHeader> BuildWaitCommandList(
     NvFence fence) {
     return {
         Tegra::BuildCommandHeader(Tegra::BufferMethods::SyncpointPayload, 1,
@@ -362,50 +352,29 @@ static boost::container::small_vector<Tegra::CommandHeader, 512> BuildWaitComman
 }
 
 static boost::container::small_vector<Tegra::CommandHeader, 512> BuildIncrementCommandList(
-    NvFence fence) {
+    NvFence fence, u32 increment_count = 2) {
     boost::container::small_vector<Tegra::CommandHeader, 512> result{
         Tegra::BuildCommandHeader(Tegra::BufferMethods::SyncpointPayload, 1,
                                   Tegra::SubmissionMode::Increasing),
         {}};
 
-    for (u32 count = 0; count < 2; ++count) {
+    for (u32 count = 0; count < increment_count; ++count) {
         result.push_back(Tegra::BuildCommandHeader(Tegra::BufferMethods::SyncpointOperation, 1,
                                                    Tegra::SubmissionMode::Increasing));
         result.push_back(
             BuildFenceAction(Tegra::Engines::Puller::FenceOperation::Increment, fence.id));
     }
 
-    return result;
-}
-
-// Switch 2 pushbuffers signal completion with semaphore releases, never host1x syncpoint methods,
-// but the driver still has the kernel raise the syncpoint max by the submission's increment value
-// and then waits for that value. Append the increments after its commands.
-static boost::container::small_vector<Tegra::CommandHeader, 512> BuildIncrementCountCommandList(
-    NvFence fence, u32 count) {
-    boost::container::small_vector<Tegra::CommandHeader, 512> result{
-        Tegra::BuildCommandHeader(Tegra::BufferMethods::WaitForIdle, 1,
-                                  Tegra::SubmissionMode::Increasing),
-        {},
-        Tegra::BuildCommandHeader(Tegra::BufferMethods::SyncpointPayload, 1,
-                                  Tegra::SubmissionMode::Increasing),
-        {}};
-    for (u32 i = 0; i < count; ++i) {
-        result.push_back(Tegra::BuildCommandHeader(Tegra::BufferMethods::SyncpointOperation, 1,
-                                                   Tegra::SubmissionMode::Increasing));
-        result.push_back(
-            BuildFenceAction(Tegra::Engines::Puller::FenceOperation::Increment, fence.id));
-    }
     return result;
 }
 
 static boost::container::small_vector<Tegra::CommandHeader, 512> BuildIncrementWithWfiCommandList(
-    NvFence fence) {
+    NvFence fence, u32 increment_count = 2) {
     boost::container::small_vector<Tegra::CommandHeader, 512> result{
         Tegra::BuildCommandHeader(Tegra::BufferMethods::WaitForIdle, 1,
                                   Tegra::SubmissionMode::Increasing),
         {}};
-    auto increment_list{BuildIncrementCommandList(fence)};
+    auto increment_list{BuildIncrementCommandList(fence, increment_count)};
     result.insert(result.end(), increment_list.begin(), increment_list.end());
     return result;
 }
@@ -423,10 +392,45 @@ NvResult nvhost_gpu::SubmitGPFIFOImpl(IoctlSubmitGpfifo& params, Tegra::CommandL
         system.GPU().InitChannel(*channel_state, channel_state->program_id);
     }
 
+    if (UsesNativeAbi() && native_submit_logs++ < 8) {
+        LOG_DEBUG(Service_NVDRV, "native submit channel={}, initialized={}, entries={}, flags={:#x}, fence={}:{}",
+                  channel_state->bind_id, channel_state->initialized, entries.command_lists.size(),
+                  params.flags.raw, params.fence.id, params.fence.value);
+        for (size_t i = 0; i < std::min<size_t>(entries.command_lists.size(), 4); ++i) {
+            const auto& entry = entries.command_lists[i];
+            std::array<u32, 16> words{};
+            const size_t bytes = std::min<size_t>(entry.size * sizeof(u32), sizeof(words));
+            const bool mapped = channel_state->memory_manager && bytes &&
+                channel_state->memory_manager->IsFullyMappedRange(entry.addr, bytes);
+            if (mapped) { channel_state->memory_manager->ReadBlockUnsafe(entry.addr, words.data(), bytes); }
+            if (mapped && entry.size > 1000 && std::getenv("EDEN_NATIVE_FRAME_CAPTURE")) {
+                std::vector<u32> contents(static_cast<size_t>(entry.size));
+                channel_state->memory_manager->ReadBlockUnsafe(entry.addr, contents.data(), contents.size() * sizeof(u32));
+                std::ofstream dump("native-init-channel-" + std::to_string(channel_state->bind_id) + "-" + std::to_string(i) + ".bin", std::ios::binary);
+                dump.write(reinterpret_cast<const char*>(contents.data()), contents.size() * sizeof(u32));
+            }
+            LOG_DEBUG(Service_NVDRV, "native pushbuffer entry={} raw={:#x}, address={:#x}, words={}, mapped={}, data={:08x}",
+                      i, entry.raw, static_cast<u64>(entry.addr), static_cast<u64>(entry.size),
+                      mapped, fmt::join(words, ","));
+        }
+    }
+
+    if (UsesNativeAbi() && std::getenv("EDEN_NATIVE_FRAME_CAPTURE") && native_submit_logs < 100) {
+        for (size_t i = 0; i < entries.command_lists.size(); ++i) {
+            const auto& entry = entries.command_lists[i];
+            const auto bytes = static_cast<size_t>(entry.size) * sizeof(u32);
+            if (!bytes || bytes > 0x100000 || !channel_state->memory_manager->IsFullyMappedRange(entry.addr, bytes)) continue;
+            std::vector<u32> contents(static_cast<size_t>(entry.size));
+            channel_state->memory_manager->ReadBlockUnsafe(entry.addr, contents.data(), bytes);
+            std::ofstream dump("native-submit-" + std::to_string(channel_state->bind_id) + "-" + std::to_string(native_submit_logs) + "-" + std::to_string(i) + ".bin", std::ios::binary);
+            dump.write(reinterpret_cast<const char*>(contents.data()), bytes);
+        }
+    }
+
     const auto bind_id = channel_state->bind_id;
 
     if (g_nx2_driver) {
-        for ([[maybe_unused]] const auto& entry : entries.command_lists) {
+        for (const auto& entry : entries.command_lists) {
             LOG_TRACE(Service_NVDRV, "nx2 GPFIFO entry raw={:#018x} addr={:#x} size={:#x}", entry.raw,
                      entry.addr.Value(), entry.size.Value());
         }
@@ -467,8 +471,17 @@ NvResult nvhost_gpu::SubmitGPFIFOImpl(IoctlSubmitGpfifo& params, Tegra::CommandL
                 // queued map changes would copy as zeros (Pokopia's first lists). DmaPusher::Push
                 // copies it after the map instead.
                 const u64 bytes = static_cast<u64>(entry.size) * sizeof(u32);
+                static std::atomic<u64> counted_entries{};
+                static std::atomic<u64> deferred_total{};
+                const u64 counted = ++counted_entries;
                 if (system.GPU().IsMapPending(entry.addr, bytes)) {
                     entries.deferred_entries.push_back(i);
+                    if (const u64 deferred = ++deferred_total; deferred <= 8 || deferred % 1000 == 0) {
+                        LOG_INFO(Service_NVDRV,
+                                 "Command list entry {:#x}+{:#x} is behind a queued GPU map and is "
+                                 "copied after it ({} of {} entries so far)",
+                                 u64{entry.addr}, bytes, deferred, counted);
+                    }
                 } else {
                     channel_state->memory_manager->ReadBlockUnsafe(
                         entry.addr, entries.submitted_words.data() + offset,
@@ -491,33 +504,29 @@ NvResult nvhost_gpu::SubmitGPFIFOImpl(IoctlSubmitGpfifo& params, Tegra::CommandL
         }
     }
 
+    const u32 native_completion = UsesNativeAbi() && flags.increment_value.Value() && !flags.fence_increment.Value() ? params.fence.value : 0;
+    if (native_completion > 64) return NvResult::BadParameter;
     params.fence.id = channel_syncpoint;
 
     u32 increment{(flags.fence_increment.Value() != 0 ? 2 : 0) +
                   (flags.increment_value.Value() != 0 ? params.fence.value : 0)};
     params.fence.value = syncpoint_manager.IncrementSyncpointMaxExt(channel_syncpoint, increment);
-    gpu.PushGPUEntries(bind_id, std::move(entries));
-
-    if (g_nx2_driver && !flags.fence_increment.Value() && increment > 0) {
-        gpu.PushGPUEntries(bind_id,
-                           Tegra::CommandList{BuildIncrementCountCommandList(params.fence, increment)});
-    }
-
     if (flags.fence_increment.Value()) {
         if (flags.suppress_wfi.Value()) {
-            gpu.PushGPUEntries(bind_id,
-                               Tegra::CommandList{BuildIncrementCommandList(params.fence)});
+            entries.prefetch_command_list = BuildIncrementCommandList(params.fence);
         } else {
-            gpu.PushGPUEntries(bind_id,
-                               Tegra::CommandList{BuildIncrementWithWfiCommandList(params.fence)});
+            entries.prefetch_command_list = BuildIncrementWithWfiCommandList(params.fence);
         }
     }
+    gpu.PushGPUEntries(bind_id, std::move(entries));
 
-    if (g_nx2_driver) {
-        LOG_TRACE(Service_NVDRV,
-                 "nx2 SubmitGPFIFO entries={} flags={:#x} fence_out=({}, {}) guest_value={}",
-                 params.num_entries, flags.raw, params.fence.id, params.fence.value,
-                 system.Host1x().GetSyncpointManager().GetGuestSyncpointValue(params.fence.id));
+    if (native_completion) {
+        // The native C56F stream reports its completion count without emitting
+        // host syncpoint methods. Order actual increments after that GPU work.
+        gpu.PushGPUEntries(bind_id, Tegra::CommandList{flags.suppress_wfi.Value()
+            ? BuildIncrementCommandList(params.fence, native_completion)
+            : BuildIncrementWithWfiCommandList(params.fence, native_completion)});
+        LOG_DEBUG(Service_NVDRV, "Native ordered completion: syncpoint={}, increments={}, target={}", channel_syncpoint, native_completion, params.fence.value);
     }
     flags.raw = 0;
 
@@ -618,6 +627,26 @@ NvResult nvhost_gpu::GetWaitbase(IoctlGetWaitbase& params) {
     return NvResult::Success;
 }
 
+NvResult nvhost_gpu::SetPreemptionModes(IoctlPreemptionModes& params) {
+    LOG_DEBUG(Service_NVDRV, "native preemption graphics={}, compute={}", params.graphics,
+              params.compute);
+    if (!channel_state->initialized) {
+        return NvResult::InvalidState;
+    }
+    // Zero retains the current mode. Context switches follow complete commands,
+    // satisfying both wait-for-idle and compute thread-block boundaries.
+    if (params.graphics > 1 || params.compute > 2) {
+        return NvResult::NotSupported;
+    }
+    if (params.graphics != 0) {
+        graphics_preemption_mode = params.graphics;
+    }
+    if (params.compute != 0) {
+        compute_preemption_mode = params.compute;
+    }
+    return NvResult::Success;
+}
+
 NvResult nvhost_gpu::ChannelSetTimeout(IoctlChannelSetTimeout& params) {
     LOG_INFO(Service_NVDRV, "called, timeout={:#x}", params.timeout);
 
@@ -626,10 +655,6 @@ NvResult nvhost_gpu::ChannelSetTimeout(IoctlChannelSetTimeout& params) {
 
 NvResult nvhost_gpu::ChannelSetTimeslice(IoctlSetTimeslice& params) {
     LOG_INFO(Service_NVDRV, "called, timeslice={:#x}", params.timeslice);
-
-    if (params.timeslice < 1000 || params.timeslice > 5000) {
-        return NvResult::BadParameter;
-    }
 
     channel_timeslice = params.timeslice;
 
@@ -644,6 +669,10 @@ Kernel::KEvent* nvhost_gpu::QueryEvent(u32 event_id) {
         return sm_exception_breakpoint_pause_report_event;
     case 3:
         return error_notifier_event;
+    case 7:
+        // The native SDK requests this event immediately before configuring
+        // CHANNEL_SET_ERROR_NOTIFIER, then wraps it in its channel error wait.
+        return UsesNativeAbi() ? error_notifier_event : nullptr;
     default:
         if (g_nx2_driver) {
             // Switch 2 NVN also asks for event 7 and multi-waits on it with its syncpoint events.
@@ -658,6 +687,38 @@ Kernel::KEvent* nvhost_gpu::QueryEvent(u32 event_id) {
         LOG_CRITICAL(Service_NVDRV, "Unknown Ctrl GPU Event {}", event_id);
         return nullptr;
     }
+}
+
+NvResult nvhost_gpu::BindToTsg(DeviceFD group, Kernel::KProcess* process, std::shared_ptr<Tegra::NativeMacroContext> macros) {
+    const std::scoped_lock lock{tsg_mutex};
+    if (tsg_group) { return NvResult::Busy; }
+    bool owned{};
+    for (const auto& [fd, session_id] : sessions) {
+        const auto* session = core.GetSession(session_id);
+        owned |= session && session->process == process;
+    }
+    if (!owned) { return NvResult::AccessDenied; }
+    if (channel_state->native_abi) {
+        channel_state->native_macro_context = std::move(macros);
+        if (channel_state->payload) {
+            channel_state->payload->maxwell_3d.SetNativeMacroContext(channel_state->native_macro_context);
+        }
+    }
+    tsg_group = group;
+    return NvResult::Success;
+}
+
+void nvhost_gpu::UnbindFromTsg(DeviceFD group) {
+    const std::scoped_lock lock{tsg_mutex};
+    if (tsg_group == group) { tsg_group.reset(); }
+}
+
+bool nvhost_gpu::UsesNativeAbi() const {
+    for (const auto& [fd, session_id] : sessions) {
+        const auto* session = core.GetSession(session_id);
+        if (session && session->process && session->process->UsesPAuthReturns()) { return true; }
+    }
+    return false;
 }
 
 } // namespace Service::Nvidia::Devices

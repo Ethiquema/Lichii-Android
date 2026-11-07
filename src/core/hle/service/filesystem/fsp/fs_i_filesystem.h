@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <string>
+
 #include "common/common_funcs.h"
 #include "core/file_sys/fs_filesystem.h"
 #include "core/file_sys/fsa/fs_i_filesystem.h"
@@ -26,7 +28,8 @@ class IDirectory;
 
 class IFileSystem final : public ServiceFramework<IFileSystem> {
 public:
-    explicit IFileSystem(Core::System& system_, FileSys::VirtualDir dir_, SizeGetter size_getter_);
+    explicit IFileSystem(Core::System& system_, FileSys::VirtualDir dir_, SizeGetter size_getter_,
+                         std::string homebrew_initial_cwd_ = {});
 
     Result CreateFile(const InLargeData<FileSys::Sf::Path, BufferAttr_HipcPointer> path, s32 option,
                       s64 size);
@@ -58,8 +61,10 @@ public:
     Result GetFileSystemAttribute(Out<FileSys::FileSystemAttribute> out_attribute);
 
 private:
+    std::optional<FunctionInfoBase> FindRequest(u32 key) override;
     std::unique_ptr<FileSys::Fsa::IFileSystem> backend;
     SizeGetter size_getter;
+    std::string homebrew_initial_cwd;
 };
 
 } // namespace Service::FileSystem

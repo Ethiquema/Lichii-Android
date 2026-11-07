@@ -7,8 +7,10 @@
 #pragma once
 
 #include <array>
+#include <unordered_map>
 
 #include <sirit/sirit.h>
+#include "common/container/unordered_map.h"
 #include "common/container/unordered_set.h"
 
 #include "shader_recompiler/backend/bindings.h"
@@ -114,7 +116,6 @@ struct UniformDefinitions {
 };
 
 struct StorageTypeDefinition {
-    Id array{};
     Id element{};
 };
 
@@ -173,8 +174,11 @@ public:
     [[nodiscard]] Id BitOffset8(const IR::Value& offset);
     [[nodiscard]] Id BitOffset16(const IR::Value& offset);
 
+    Id CallGlobalMemory(IR::Opcode opcode, Id result_type, Id address, Id value);
+    void AtomicBitFieldInsert(Id pointer, Id value, Id offset, Id count);
+
     Id Const(u32 value) {
-        return Constant(U32[1], value);
+        return CachedConstant(u32_constants, U32[1], value, value);
     }
 
     Id Const(u32 element_1, u32 element_2) {
@@ -208,7 +212,19 @@ public:
     }
 
     Id Const(f32 value) {
-        return Constant(F32[1], value);
+        return CachedConstant(f32_constants, F32[1], std::bit_cast<u32>(value), value);
+    }
+
+    /// Sirit deduplicates constants, but by hashing a freshly allocated copy of their words on
+    /// every call; immediates are emitted over and over, so remember the ids of scalar constants.
+    /// Keys are bit patterns, like Sirit's (0.0f and -0.0f stay distinct).
+    template <typename T>
+    Id CachedConstant(::Common::unordered_map<u32, Id>& cache, Id type, u32 bits, T value) {
+        const auto [it, is_new]{cache.try_emplace(bits)};
+        if (is_new) {
+            it->second = Constant(type, value);
+        }
+        return it->second;
     }
 
     const Profile& profile;
@@ -229,6 +245,9 @@ public:
     VectorTypes S32;
     VectorTypes F16;
     VectorTypes F64;
+
+    ::Common::unordered_map<u32, Id> u32_constants;
+    ::Common::unordered_map<u32, Id> f32_constants;
 
     Id true_value{};
     Id false_value{};
@@ -259,6 +278,11 @@ public:
 
     std::array<UniformDefinitions, Info::MAX_CBUFS> cbufs{};
     std::array<StorageDefinitions, Info::MAX_SSBOS> ssbos{};
+    std::array<u32, Info::MAX_SSBOS> storage_buffer_mapping_bases{};
+    std::array<u32, Info::MAX_SSBOS> storage_buffer_mapping_counts{};
+    Id storage_buffer_mapping{};
+    Id storage_buffer_mapping_u32{};
+    Id storage_buffer_map_func{};
     std::vector<TextureBufferDefinition> texture_buffers;
     std::vector<ImageBufferDefinition> image_buffers;
     std::vector<TextureDefinition> textures;
@@ -287,6 +311,7 @@ public:
     Id point_coord{};
     Id tess_coord{};
     Id clip_distances{};
+    Id input_clip_distances{};
     Id layer{};
     Id viewport_index{};
     Id viewport_mask{};
@@ -313,7 +338,11 @@ public:
 
     Id local_memory{};
 
+    /// True when this shader's shared memory uses SPV_KHR_workgroup_memory_explicit_layout.
+    /// False when the host lacks the extension or a width this shader accesses natively.
     bool uses_explicit_workgroup_layout{};
+    u32 shared_memory_declared_bytes{};
+    [[nodiscard]] Id BoundSharedOffset(Id offset, u32 access_bytes);
     Id shared_memory_u8{};
     Id shared_memory_u16{};
     Id shared_memory_u32{};
@@ -337,17 +366,7 @@ public:
     Id f32x2_min_cas{};
     Id f32x2_max_cas{};
 
-    Id write_storage_cas_loop_func{};
-
-    Id load_global_func_u32{};
-    Id load_global_func_u32x2{};
-    Id load_global_func_u32x4{};
-    Id write_global_func_u32{};
-    Id write_global_func_u32x2{};
-    Id write_global_func_u32x4{};
-    Id atomic_add_global_func_u32{};
-    Id atomic_umax_global_func_u32{};
-    Id atomic_cas_global_func_u32{};
+    std::unordered_map<IR::Opcode, Id> global_memory_funcs;
 
     bool need_input_position_indirect{};
     Id input_position{};
@@ -369,32 +388,6 @@ public:
     std::vector<Id> interfaces;
     std::vector<std::pair<u32, spv::Op>> opcode_rewrites;
 
-    // Task and mesh programs. Their stage buffer: the task's output region is the task payload
-    // (the mesh stage's input region); the mesh output regions live in workgroup memory until
-    // the epilogue copies them to the outputs. The two mesh instructions Sirit lacks are emitted
-    // as OpStore markers with these operands and replaced after assembly (PatchMeshInstructions).
-    struct MeshLineTarget {
-        Id variable;    ///< arrayed output
-        u32 element;    ///< vector element, or ~0 for a scalar output
-        bool is_float;  ///< bitcast the stage buffer word to F32
-    };
-    Id mesh_payload{};
-    Id mesh_payload_u32{};  ///< pointer type to one payload word
-    Id mesh_attributes{};
-    Id mesh_map{};
-    Id mesh_primitive_count{};
-    Id mesh_shared_u32{};   ///< pointer type to one workgroup word
-    Id mesh_primitive_indices{};
-    MeshInfo mesh_info{};
-    u32 mesh_threads{};
-    u32 mesh_attribute_words{};
-    u32 mesh_map_bytes{};
-    u32 mesh_primitive_base{}; ///< first word of the per-primitive groups
-    std::vector<MeshLineTarget> mesh_vertex_targets;
-    std::vector<MeshLineTarget> mesh_primitive_targets;
-    std::array<Id, 2> mesh_outputs_marker{};
-    std::array<Id, 4> mesh_tasks_marker{};
-
     Id load_const_func_u8{};
     Id load_const_func_u16{};
     Id load_const_func_u32{};
@@ -409,6 +402,7 @@ public:
     bool uses_nonuniform_storage_image{};
     bool uses_nonuniform_uniform_texel_buffer{};
     bool uses_nonuniform_storage_texel_buffer{};
+    bool uses_nonuniform_storage_buffer{};
 
 private:
     void DefineCommonTypes(const Info& info);
@@ -419,13 +413,13 @@ private:
     void DefineSharedMemoryFunctions(const IR::Program& program);
     void DefineConstantBuffers(const Info& info, u32& binding);
     void DefineConstantBufferIndirectFunctions(const Info& info);
+    void DefineStorageBufferMappings(const Info& info, u32& binding);
     void DefineStorageBuffers(const Info& info, u32& binding);
     void DefineTextureBuffers(const Info& info, u32& binding);
     void DefineImageBuffers(const Info& info, u32& binding);
     void DefineTextures(const Info& info, u32& binding, u32& scaling_index);
     void DefineImages(const Info& info, u32& binding, u32& scaling_index);
     void DefineAttributeMemAccess(const Info& info);
-    void DefineWriteStorageCasLoopFunction(const Info& info);
     void DefineGlobalMemoryFunctions(const IR::Program& program);
     void DefineRescalingInput(const Info& info);
     void DefineRescalingInputPushConstant();

@@ -123,7 +123,9 @@ abstract class SettingsItem(
             IntSetting.RENDERER_FRAME_GEN_TARGET_RATE.key,
             IntSetting.RENDERER_FRAME_GEN_QUEUE_TARGET.key,
             BooleanSetting.RENDERER_FRAME_GEN_FLOW_SCALE_AUTO.key,
-            IntSetting.RENDERER_FRAME_GEN_FLOW_SCALE.key
+            IntSetting.RENDERER_FRAME_GEN_FLOW_SCALE.key,
+            BooleanSetting.RENDERER_FRAME_GEN_FP16.key,
+            BooleanSetting.RENDERER_FRAME_GEN_DUMP_FLOW.key
         )
 
         const val TYPE_HEADER = 0
@@ -141,14 +143,12 @@ abstract class SettingsItem(
         const val TYPE_SPINBOX = 12
         const val TYPE_LAUNCHABLE = 13
         const val TYPE_PATH = 14
-        const val TYPE_GPU_UNSWIZZLE = 15
         const val TYPE_FX_TOOLBAR = 16
         const val TYPE_FX_PRESET = 17
         const val TYPE_FX_SHADER = 18
         const val TYPE_FX_BUTTON = 19
 
         const val FASTMEM_COMBINED = "fastmem_combined"
-        const val GPU_UNSWIZZLE_COMBINED = "gpu_unswizzle_combined"
 
         val emptySetting = object : AbstractSetting {
             override val key: String = ""
@@ -174,6 +174,15 @@ abstract class SettingsItem(
                 )
             )
             put(
+                SingleChoiceSetting(
+                    IntSetting.HOMEBREW_NXLINK_SERVER_MODE,
+                    titleId = R.string.nxlink_server_mode,
+                    descriptionId = R.string.nxlink_server_mode_description,
+                    choicesId = R.array.nxlinkServerModeEntries,
+                    valuesId = R.array.nxlinkServerModeValues
+                )
+            )
+            put(
                 SwitchSetting(
                     BooleanSetting.RENDERER_USE_SPEED_LIMIT,
                     titleId = R.string.frame_limit_enable,
@@ -194,6 +203,20 @@ abstract class SettingsItem(
                     BooleanSetting.RENDERER_VERTEX_INPUT_DYNAMIC_STATE,
                     titleId = R.string.vertex_input_dynamic_state,
                     descriptionId = R.string.vertex_input_dynamic_state_description
+                )
+            )
+            put(
+                SwitchSetting(
+                    BooleanSetting.RENDERER_DYNAMIC_RENDERING,
+                    titleId = R.string.dynamic_rendering,
+                    descriptionId = R.string.dynamic_rendering_description
+                )
+            )
+            put(
+                SwitchSetting(
+                    BooleanSetting.RENDERER_WORKGROUP_MEMORY_EXPLICIT_LAYOUT,
+                    titleId = R.string.workgroup_memory_explicit_layout,
+                    descriptionId = R.string.workgroup_memory_explicit_layout_description
                 )
             )
             put(
@@ -314,6 +337,13 @@ abstract class SettingsItem(
                     BooleanSetting.CORE_SYNC_CORE_SPEED,
                     titleId = R.string.use_sync_core,
                     descriptionId = R.string.use_sync_core_description
+                )
+            )
+            put(
+                SwitchSetting(
+                    BooleanSetting.ENABLE_CHEATS_BY_DEFAULT,
+                    titleId = R.string.enable_cheats_by_default,
+                    descriptionId = R.string.enable_cheats_by_default_description
                 )
             )
             put(
@@ -708,6 +738,20 @@ abstract class SettingsItem(
                 )
             )
             put(
+                SwitchSetting(
+                    BooleanSetting.RENDERER_FRAME_GEN_FP16,
+                    titleId = R.string.frame_gen_fp16,
+                    descriptionId = R.string.frame_gen_fp16_description
+                )
+            )
+            put(
+                SwitchSetting(
+                    BooleanSetting.RENDERER_FRAME_GEN_DUMP_FLOW,
+                    titleId = R.string.frame_gen_dump_flow,
+                    descriptionId = R.string.frame_gen_dump_flow_description
+                )
+            )
+            put(
                 SingleChoiceSetting(
                     IntSetting.RENDERER_SCREEN_LAYOUT,
                     titleId = R.string.renderer_screen_layout,
@@ -779,51 +823,19 @@ abstract class SettingsItem(
                 )
             )
             put(
+                SwitchSetting(
+                    BooleanSetting.RENDERER_UNIFIED_MEMORY,
+                    titleId = R.string.renderer_unified_memory,
+                    descriptionId = R.string.renderer_unified_memory_description
+                )
+            )
+            put(
                 SingleChoiceSetting(
                     IntSetting.FAST_GPU_TIME,
                     titleId = R.string.fast_gpu_time,
                     descriptionId = R.string.fast_gpu_time_description,
                     choicesId = R.array.gpuEntries,
                     valuesId = R.array.gpuValues
-                )
-            )
-            put(
-                SingleChoiceSetting(
-                    IntSetting.GPU_UNSWIZZLE_TEXTURE_SIZE,
-                    titleId = R.string.gpu_unswizzle_texture_size,
-                    descriptionId = R.string.gpu_unswizzle_texture_size_description,
-                    choicesId = R.array.gpuTextureSizeSwizzleEntries,
-                    valuesId = R.array.gpuTextureSizeSwizzleValues
-                )
-            )
-            put(
-                SingleChoiceSetting(
-                    IntSetting.GPU_UNSWIZZLE_STREAM_SIZE,
-                    titleId = R.string.gpu_unswizzle_stream_size,
-                    descriptionId = R.string.gpu_unswizzle_stream_size_description,
-                    choicesId = R.array.gpuSwizzleEntries,
-                    valuesId = R.array.gpuSwizzleValues
-                )
-            )
-            put(
-                SingleChoiceSetting(
-                    IntSetting.GPU_UNSWIZZLE_CHUNK_SIZE,
-                    titleId = R.string.gpu_unswizzle_chunk_size,
-                    descriptionId = R.string.gpu_unswizzle_chunk_size_description,
-                    choicesId = R.array.gpuSwizzleChunkEntries,
-                    valuesId = R.array.gpuSwizzleChunkValues
-                )
-            )
-            put(
-                GpuUnswizzleSetting(
-                    titleId = R.string.gpu_unswizzle_settings,
-                    descriptionId = R.string.gpu_unswizzle_settings_description,
-                    textureSizeChoicesId = R.array.gpuTextureSizeSwizzleEntries,
-                    textureSizeValuesId = R.array.gpuTextureSizeSwizzleValues,
-                    streamSizeChoicesId = R.array.gpuSwizzleEntries,
-                    streamSizeValuesId = R.array.gpuSwizzleValues,
-                    chunkSizeChoicesId = R.array.gpuSwizzleChunkEntries,
-                    chunkSizeValuesId = R.array.gpuSwizzleChunkValues
                 )
             )
             put(
@@ -868,13 +880,6 @@ abstract class SettingsItem(
             )
             put(
                 SwitchSetting(
-                    BooleanSetting.RESCALE_HACK,
-                    titleId = R.string.rescale_hack,
-                    descriptionId = R.string.rescale_hack_description
-                )
-            )
-            put(
-                SwitchSetting(
                     BooleanSetting.EMULATE_BGR565,
                     titleId = R.string.emulate_bgr565,
                     descriptionId = R.string.emulate_bgr565_description
@@ -889,6 +894,13 @@ abstract class SettingsItem(
             )
             put(
                 SwitchSetting(
+                    BooleanSetting.RELOCATE_36BIT_ADDRESS_SPACE,
+                    titleId = R.string.relocate_36bit_address_space,
+                    descriptionId = R.string.relocate_36bit_address_space_description
+                )
+            )
+            put(
+                SwitchSetting(
                     BooleanSetting.RENDERER_REACTIVE_FLUSHING,
                     titleId = R.string.renderer_reactive_flushing,
                     descriptionId = R.string.renderer_reactive_flushing_description
@@ -896,9 +908,30 @@ abstract class SettingsItem(
             )
             put(
                 SwitchSetting(
+                    BooleanSetting.RENDERER_BARRIER_FEEDBACK_LOOPS,
+                    titleId = R.string.renderer_barrier_feedback_loops,
+                    descriptionId = R.string.renderer_barrier_feedback_loops_description
+                )
+            )
+            put(
+                SwitchSetting(
                     BooleanSetting.ENABLE_BUFFER_HISTORY,
                     titleId = R.string.enable_buffer_history,
                     descriptionId = R.string.enable_buffer_history_description
+                )
+            )
+            put(
+                SwitchSetting(
+                    BooleanSetting.ENABLE_GPU_BUFFER_READBACK,
+                    titleId = R.string.enable_gpu_buffer_readback,
+                    descriptionId = R.string.enable_gpu_buffer_readback_description
+                )
+            )
+            put(
+                SwitchSetting(
+                    BooleanSetting.USE_UNIFIED_MEMORY,
+                    titleId = R.string.use_unified_memory,
+                    descriptionId = R.string.use_unified_memory_description
                 )
             )
             put(
@@ -913,6 +946,13 @@ abstract class SettingsItem(
                     BooleanSetting.SYNC_MEMORY_OPERATIONS,
                     titleId = R.string.sync_memory_operations,
                     descriptionId = R.string.sync_memory_operations_description
+                )
+            )
+            put(
+                SwitchSetting(
+                    BooleanSetting.STALL_ON_GPU_FENCE_WAIT,
+                    titleId = R.string.stall_on_gpu_fence_wait,
+                    descriptionId = R.string.stall_on_gpu_fence_wait_description
                 )
             )
             put(
@@ -981,15 +1021,6 @@ abstract class SettingsItem(
                     BooleanSetting.ENABLE_QLAUNCH_BUTTON,
                     titleId = R.string.enable_qlaunch_button,
                     descriptionId = R.string.enable_qlaunch_button_description,
-                )
-            )
-            put(
-                SingleChoiceSetting(
-                    IntSetting.APP_LANGUAGE,
-                    titleId = R.string.app_language,
-                    descriptionId = R.string.app_language_description,
-                    choicesId = R.array.appLanguageNames,
-                    valuesId = R.array.appLanguageValues
                 )
             )
             put(
@@ -1092,6 +1123,16 @@ abstract class SettingsItem(
                     valueHint = R.string.gpu_log_ring_buffer_size_hint,
                     min = 64,
                     max = 4096
+                )
+            )
+            put(
+                SpinBoxSetting(
+                    IntSetting.PRODUCT_MODEL,
+                    titleId = R.string.product_model,
+                    descriptionId = R.string.product_model_description,
+                    valueHint = R.string.product_model,
+                    min = 1,
+                    max = 2
                 )
             )
 

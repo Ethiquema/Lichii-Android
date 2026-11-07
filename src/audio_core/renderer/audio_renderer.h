@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -83,16 +86,12 @@ public:
                          std::span<u8> output);
 
 private:
-    /// System core
-    Core::System& core;
     /// Manager this renderer is registered with
     Manager& manager;
-    /// Is the audio renderer initialized?
-    bool initialized{};
     /// Is the system registered with the manager?
     bool system_registered{};
     /// Audio render system, main driver of audio rendering
-    System system;
+    System audio_system;
 };
 
 } // namespace Renderer

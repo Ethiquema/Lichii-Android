@@ -11,8 +11,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
+import android.os.Process
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import org.yuzu.yuzu_emu.NativeLibrary
 import org.yuzu.yuzu_emu.R
 import org.yuzu.yuzu_emu.activities.EmulationActivity
 
@@ -25,6 +27,8 @@ class ForegroundService : Service() {
         const val EMULATION_RUNNING_NOTIFICATION = 0x1000
 
         const val ACTION_STOP = "stop"
+
+        private const val TASK_REMOVED_STOP_TIMEOUT_MS = 5000L
     }
 
     private fun showRunningNotification() {
@@ -76,4 +80,20 @@ class ForegroundService : Service() {
 
     override fun onDestroy() =
         NotificationManagerCompat.from(this).cancel(EMULATION_RUNNING_NOTIFICATION)
+
+    // Swiping the app away from recents ends the game. Otherwise the paused session stays in the
+    // cached process (where Android may freeze it) until the app is force-stopped.
+    // Fallback: the process is then ended, also when the session does not shut down in time.
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.info("[ForegroundService] Task removed; stopping emulation and ending the process")
+        Thread({
+            if (NativeLibrary.isRunning() &&
+                !NativeLibrary.stopEmulationAndWait(TASK_REMOVED_STOP_TIMEOUT_MS)
+            ) {
+                Log.warning("[ForegroundService] Emulation did not stop in time")
+            }
+            Process.killProcess(Process.myPid())
+        }, "TaskRemovedStop").start()
+    }
 }

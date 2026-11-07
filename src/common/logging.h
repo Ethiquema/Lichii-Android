@@ -143,6 +143,7 @@ void Stop();
 
 /// The global filter will prevent any messages from even being processed if they are filtered.
 void SetGlobalFilter(const Filter& filter);
+[[nodiscard]] bool IsMessageEnabled(Class log_class, Level log_level);
 void SetColorConsoleBackendEnabled(bool enabled);
 
 /// A line kept by the in-memory log ring (the debug server's log tail).

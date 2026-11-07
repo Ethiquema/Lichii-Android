@@ -24,10 +24,8 @@
 #include <queue>
 
 #include "common/common_types.h"
-#include "common/spin_recursive_mutex.h"
-#include "common/hash.h"
 #include "common/literals.h"
-#include "common/lru_cache.h"
+
 #include <ranges>
 #include "common/scratch_buffer.h"
 #include "common/slot_vector.h"
@@ -35,6 +33,7 @@
 #include "common/thread_worker.h"
 #include "video_core/compatible_formats.h"
 #include "video_core/control/channel_state_cache.h"
+#include "video_core/cache_reclaim.h"
 #include "video_core/delayed_destruction_ring.h"
 #include "video_core/engines/fermi_2d.h"
 #include "video_core/game_dlss_status.h"
@@ -56,6 +55,10 @@ struct ChannelState;
 
 namespace VideoCommon {
 
+/// Set around a 2D blit to read its source as this format instead of the surface's (for formats the
+/// 2D engine has no surface format for, e.g. E5B9G9R9 by the NX2 upscale stand-in). GPU thread only.
+inline thread_local std::optional<VideoCore::Surface::PixelFormat> g_blit_source_format;
+
 using Tegra::Texture::TICEntry;
 using Tegra::Texture::TSCEntry;
 using VideoCore::Surface::PixelFormat;
@@ -69,6 +72,7 @@ struct ImageViewInOut {
 
 struct AsyncDecodeContext {
     ImageId image_id;
+    Common::ScratchBuffer<u8> input_data;
     Common::ScratchBuffer<u8> decoded_data;
     boost::container::small_vector<BufferImageCopy, 16> copies;
     std::mutex mutex;
@@ -76,7 +80,7 @@ struct AsyncDecodeContext {
     bool cancelled{}; ///< The image was deleted meanwhile: drop the result (GPU thread only).
 };
 
-using TextureCacheGPUMap = ::Common::unordered_map<u64, std::vector<ImageId>, Common::IdentityHash<u64>>;
+using TextureCacheGPUMap = ::Common::unordered_map<u64, std::vector<ImageId>>;
 
 class TextureCacheChannelInfo : public ChannelInfo {
 public:
@@ -103,8 +107,6 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     /// Address shift for caching images into a hash table
     static constexpr u64 YUZU_PAGEBITS = 20;
 
-    /// Enables debugging features to the texture cache
-    static constexpr bool ENABLE_VALIDATION = P::ENABLE_VALIDATION;
     /// Implement blits as copies between framebuffers
     static constexpr bool FRAMEBUFFER_BLITS = P::FRAMEBUFFER_BLITS;
     /// True when some copies have to be emulated
@@ -113,13 +115,14 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     static constexpr bool HAS_DEVICE_MEMORY_INFO = P::HAS_DEVICE_MEMORY_INFO;
     /// True when the API can do asynchronous texture downloads.
     static constexpr bool IMPLEMENTS_ASYNC_DOWNLOADS = P::IMPLEMENTS_ASYNC_DOWNLOADS;
+    static constexpr bool USE_UNIFIED_MEMORY = P::USE_UNIFIED_MEMORY;
 
     static constexpr size_t UNSET_CHANNEL{(std::numeric_limits<size_t>::max)()};
 
 #ifdef YUZU_LEGACY
-    static constexpr s64 TARGET_THRESHOLD = 3_GiB;
+    static constexpr u64 RECLAIM_HEADROOM = 192_MiB;
 #else
-    static constexpr s64 TARGET_THRESHOLD = 4_GiB;
+    static constexpr u64 RECLAIM_HEADROOM = 256_MiB;
 #endif
 
     // Periodic statistics (TickFrame).
@@ -139,20 +142,17 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     u32 seen_pressure_events{};   ///< Allocator pressure events already answered
     u64 pressure_margin{};        ///< Extra room under the budget after images did not fit
     u64 pressure_quiet_frames{};  ///< Frames since the last such image
-    u64 slack_margin{};           ///< Extra room for allocator block space the driver counts as used
     u64 astc_opaque_images{};
     u64 astc_alpha_images{};
     std::vector<u8> astc_scan_buffer;
     u64 images_deleted{};
     std::map<u64, std::pair<u32, GPUVAddr>> created_shapes;
-    bool debug_stats{true}; ///< Collect what only the debug statistics lines use
 
     static constexpr s64 DEFAULT_EXPECTED_MEMORY = 1_GiB + 125_MiB;
     static constexpr s64 DEFAULT_CRITICAL_MEMORY = 1_GiB + 625_MiB;
-    /// The most device memory the collector lets the cache fill before it collects in earnest,
-    /// on every GPU (ApplyThresholdOverrides).
-    static constexpr u64 MaxCriticalMemory = 5_GiB;
+    static constexpr u64 HEAP_PRESSURE_HEADROOM = 512_MiB;
     static constexpr size_t GC_EMERGENCY_COUNTS = 2;
+    static constexpr size_t MAX_GC_DOWNLOADS_PER_PASS = 4;
 
     using Runtime = typename P::Runtime;
     using Image = typename P::Image;
@@ -162,53 +162,6 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     using Framebuffer = typename P::Framebuffer;
     using AsyncBuffer = typename P::AsyncBuffer;
     using BufferType = typename P::BufferType;
-
-    static constexpr u32 LayerUploadMinSize = 64U << 20;
-    static constexpr size_t LargeScratchCapacity = 64U << 20;
-
-    /// Splits large 2D image uploads into smaller chunks, avoiding multi-hundred MiB staging buffers.
-    bool UploadInChunks(Image& image);
-
-    /// Large layered images whose refresh can decode only the layers written since the last one.
-    [[nodiscard]] bool UploadsByLayer(const ImageBase& image) const noexcept;
-
-    /// Records the layers a write of [cpu_addr, +size) touches.
-    void MarkLayersWritten(Image& image, DAddr cpu_addr, size_t size);
-
-    /// SparseTiles images: notes a written range, uploaded with the next refresh.
-    void MarkRangeWritten(Image& image, DAddr cpu_addr, size_t size);
-
-    /// SparseTiles images: binds and uploads the parts written since the last upload.
-    void RefreshSparseTiles(Image& image);
-
-    /// Image::BindTiles, counting what it binds in total_used_memory.
-    bool BindSparseTiles(Image& image, std::span<const LevelRect> rects);
-
-    /// Image::BackTilesWhole, counting what it binds in total_used_memory.
-    bool BackSparseTilesWhole(Image& image);
-
-    /// Uploads the image's dirty layers. False when it needs a full upload instead.
-    bool UploadWrittenLayers(Image& image);
-
-    /// Gives the written layers of a SparseLayers image memory and uploads them.
-    void RefreshSparseLayers(Image& image);
-
-    /// Image::BindLayers, with the memory it binds counted in total_used_memory.
-    std::vector<u32> BindSparseLayers(Image& image, std::span<const u32> layers);
-
-    /// Uploads `layers` of the image from guest memory.
-    void UploadLayers(Image& image, std::span<const u32> layers);
-
-    struct PendingUnswizzle {
-        ImageId image_id;
-        VideoCommon::ImageInfo info;
-        size_t current_offset = 0;
-        size_t total_size = 0;
-        AsyncBuffer staging_buffer;
-        size_t last_submitted_offset = 0;
-        size_t bytes_per_slice;
-        bool initialized = false;
-    };
 
     struct BlitImages {
         ImageId dst_id;
@@ -223,6 +176,10 @@ public:
     /// Notify the cache that a new frame has been queued
     void TickFrame();
 
+    u64 ReclaimMemory(u64 target_bytes, bool allow_download);
+
+    void ReclaimDeferredResources(u64 completed_sync_point);
+
     /// Return a constant reference to the given image view id
     [[nodiscard]] const ImageView& GetImageView(ImageViewId id) const noexcept;
 
@@ -231,6 +188,9 @@ public:
 
     /// Get the imageview from the graphics descriptor table in the specified index
     [[nodiscard]] ImageView& GetImageView(u32 index) noexcept;
+
+    // Publish the CPU-readable collision image. Caller holds the cache mutex.
+    bool PublishComputeCollisionImage(u32 index);
 
     /// Mark an image as modified from the GPU
     void MarkModification(ImageId id) noexcept;
@@ -277,6 +237,12 @@ public:
     /// Mark images in a range as modified from the CPU
     void WriteMemory(DAddr cpu_addr, size_t size);
 
+    /// Replaces the contents of the images fully inside a range that a GPU buffer wrote, with the
+    /// data of that buffer
+    template <typename BufferHandle>
+    void UpdateImagesFromBuffer(DAddr cpu_addr, size_t size, BufferHandle buffer,
+                                u64 buffer_offset);
+
     /// Download contents of host images to guest memory in a region
     void DownloadMemory(DAddr cpu_addr, size_t size);
 
@@ -294,17 +260,11 @@ public:
                    const Tegra::Engines::Fermi2D::Config& copy);
 
     /// Stand-in for a DLSS evaluation: temporal upscale of src into dst (see the runtime's
-    /// TemporalUpscale). False when unsupported; the caller retains its native dispatch.
+    /// TemporalUpscale). False when the images cannot take it; the caller then blits.
     bool TemporalUpscale(const Tegra::Engines::Fermi2D::Surface& dst,
                          const Tegra::Engines::Fermi2D::Surface& src,
                          const Tegra::Engines::Fermi2D::Surface& motion_vectors,
-                         const Tegra::Texture::TICEntry* depth, std::array<f32, 2> jitter,
-                         std::array<f32, 2> motion_scale, bool use_history);
-
-    /// Health check of a game's DLSS network output (dst) against its input (src); see the
-    /// runtime's ProbeGameDlssOutput. Returns an earlier check's result when one is ready.
-    std::optional<VideoCore::GameDlssProbe> ProbeGameDlssOutput(
-        const Tegra::Engines::Fermi2D::Surface& dst, const Tegra::Engines::Fermi2D::Surface& src);
+                         std::array<f32, 2> jitter, std::array<f32, 2> motion_scale);
 
     /// Try to find a cached image view in the given CPU address
     [[nodiscard]] std::pair<ImageView*, bool> TryFindFramebufferImageView(
@@ -348,7 +308,7 @@ public:
     /// Prepare an image to be used
     void PrepareImage(ImageId image_id, bool is_modification, bool invalidate);
 
-    Common::SpinRecursiveMutex mutex;
+    std::mutex mutex;
 
 private:
     /// Iterate over all page indices in a range
@@ -384,8 +344,25 @@ private:
 
     void OnGPUASRegister(size_t map_id) final override;
 
-    /// Runs the Garbage Collector.
-    void RunGarbageCollector();
+    u64 ImageSizeBytes(const ImageBase& image);
+
+    u64 DeviceUsage(bool force_refresh);
+
+    void EnsureHeadroom(bool allow_download);
+
+    void QueueEvictionDownload(Image& image);
+
+    void TickEvictionDownloads(u64 completed_sync_point);
+
+    void FlushEvictionDownloads();
+
+    void RunAllocationGarbageCollector(size_t requested_bytes);
+
+    /// Fills image_view_ids in the image views in indices
+    template <bool has_blacklists>
+    void FillImageViews(DescriptorTable<TICEntry>& table,
+                        std::span<ImageViewId> cached_image_view_ids,
+                        std::span<ImageViewInOut> views);
 
     /// Find or create an image view in the guest descriptor table
     ImageViewId VisitImageView(u32 index, bool compute);
@@ -397,6 +374,8 @@ private:
     [[nodiscard]] bool IsDownloadable(const ImageBase& image) const noexcept;
 
     void RefreshContents(Image& image, ImageId image_id);
+
+    [[nodiscard]] bool IsAstcDataUnchanged(Image& image);
 
     /// Upload data from guest to an image
     template <typename StagingBuffer>
@@ -419,7 +398,8 @@ private:
 
     /// Create a new image and join perfectly matching existing images
     /// Remove joined images from the cache
-    [[nodiscard]] ImageId JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DAddr cpu_addr);
+    [[nodiscard]] ImageId JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DAddr cpu_addr,
+                                     RelaxedOptions options);
 
     [[nodiscard]] ImageId FindDMAImage(const ImageInfo& info, GPUVAddr gpu_addr);
 
@@ -469,6 +449,23 @@ private:
     /// Stop tracking CPU reads and writes for image
     void UntrackImage(ImageBase& image, ImageId image_id);
 
+    /// Records a CPU write into a large 2D image page by page instead of untracking it whole.
+    /// Returns false when the image does not qualify (the caller marks it modified as usual).
+    bool MarkPartialWrite(ImageBase& image, DAddr cpu_addr, size_t size);
+
+    /// Uploads a large plain 2D image in chunks; false if it does not qualify.
+    bool UploadInChunks(Image& image);
+
+    /// Records a GPU remap of a small part of a large 2D image for a partial re-upload instead of
+    /// marking the whole image remapped (which replaces it). False if the image does not qualify.
+    bool MarkPartialRemap(ImageBase& image, GPUVAddr gpu_addr, size_t size);
+
+    /// Tracks the pages of a partial write again and forgets them.
+    void RestorePartialPages(ImageBase& image);
+
+    /// Uploads the block rows the recorded pages cover. Returns false if the layout is not handled.
+    bool RefreshPartialContents(Image& image);
+
     /// Delete image from the cache
     void DeleteImage(ImageId image, bool immediate_delete = false);
 
@@ -515,16 +512,8 @@ private:
     bool ScaleDown(Image& image);
     u64 GetScaledImageSizeBytes(const ImageBase& image);
 
-    /// The device memory an image counts for in total_used_memory between two driver readings:
-    /// none for an unbacked image (too large to back, or over unwritten sparse blocks), what is
-    /// bound to its layers for a SparseLayers one.
-    u64 ImageMemoryBytes(const Image& image) const;
-
     void QueueAsyncDecode(Image& image, ImageId image_id);
     void TickAsyncDecode();
-
-    void QueueAsyncUnswizzle(Image& image, ImageId image_id);
-    void TickAsyncUnswizzle();
 
     Runtime& runtime;
 
@@ -533,19 +522,12 @@ private:
 
     RenderTargets render_targets;
     u64 render_targets_serial = 0;
-    u32 rt_active_mask = 0;
-    std::array<ImageId, 8> rt_image_id{};
     ImageId rt_depth_image_id{};
-    u64 texture_bindings_serial = 0;
-    u64 last_feedback_loop_serial = 0;
-    u64 last_feedback_texture_serial = 0;
-    bool last_feedback_loop_result = false;
-    bool feedback_depth_dirty = true;
     FramebufferId last_framebuffer_id{};
     u64 last_framebuffer_serial = 0;
 
     ::Common::unordered_map<RenderTargets, FramebufferId> framebuffers;
-    ::Common::unordered_map<u64, std::vector<ImageMapId>, Common::IdentityHash<u64>> page_table;
+    ::Common::unordered_map<u64, std::vector<ImageMapId>> page_table;
     ::Common::unordered_map<ImageId, boost::container::small_vector<ImageViewId, 16>> sparse_views;
 
     DAddr virtual_invalid_space{};
@@ -562,12 +544,12 @@ private:
     bool clearing_render_targets = false;
     bool is_rescaling = false;
     u64 total_used_memory = 0;
-    u64 minimum_memory;
-    u64 expected_memory;
-    u64 critical_memory;
-    size_t gpu_unswizzle_maxsize = 0;
-    size_t swizzle_chunk_size = 0;
-    u32 swizzle_slices_per_batch = 0;
+    u64 device_local_memory = 0;
+    u64 minimum_memory = 0;
+    u64 expected_memory = 0;
+    u64 critical_memory = 0;
+    u64 heap_headroom = 0;
+    bool heap_pressure = false;
 
     struct BufferDownload {
         GPUVAddr address;
@@ -591,40 +573,23 @@ private:
     std::vector<AsyncBuffer> uncommitted_async_buffers;
     std::deque<std::vector<AsyncBuffer>> async_buffers;
     std::deque<AsyncBuffer> async_buffers_death_ring;
+    std::vector<std::pair<ImageId, AsyncBuffer>> eviction_staging;
 
-    struct LRUItemParams {
-        using ObjectType = ImageId;
-        using TickType = u64;
+
+
+    DeferredDestructionQueue<Image> sentenced_images;
+    DeferredDestructionQueue<ImageView> sentenced_image_view;
+    DeferredDestructionQueue<Framebuffer> sentenced_framebuffers;
+
+    struct PendingEvictionDownload {
+        AsyncBuffer staging;
+        Tegra::MemoryManager* gpu_memory;
+        boost::container::small_vector<VideoCommon::BufferImageCopy, 16> copies;
+        VideoCommon::ImageInfo info;
+        GPUVAddr gpu_addr;
+        u64 sync_point;
     };
-    Common::LeastRecentlyUsedCache<LRUItemParams> lru_cache;
-
- #ifdef YUZU_LEGACY
-    static constexpr size_t TICKS_TO_DESTROY = 6;
- #else
-    static constexpr size_t TICKS_TO_DESTROY = 8;
-#endif
-    DelayedDestructionRing<Image, TICKS_TO_DESTROY> sentenced_images;
-    /// Device memory of the images in each slot of sentenced_images (same index): deleted, but
-    /// counted in the driver's usage until the ring destroys them.
-    std::array<u64, TICKS_TO_DESTROY> sentenced_image_bytes{};
-    size_t sentenced_image_index = 0;
-    /// Deleted images on runtimes that report GPU progress (CurrentTick, IsFree): destroyed, with
-    /// their device memory, as soon as the GPU is past them rather than TICKS_TO_DESTROY frames
-    /// later. While the collector deletes dozens a frame, eight frames of them held 1-1.5 GB of
-    /// VRAM above its threshold (title 1 on an 8 GB card: 6.6-7.0 GB in use against 5 GiB).
-    struct GpuSentencedImage {
-        u64 tick;
-        u64 bytes;
-        Image image;
-    };
-    std::deque<GpuSentencedImage> gpu_sentenced_images;
-    u64 gpu_sentenced_bytes{};
-
-    /// Bytes of images per device memory block, for the collector (refreshed every 60 frames).
-    std::unordered_map<u64, u64> block_image_bytes;
-    u64 block_image_bytes_frame{~0ULL};
-    DelayedDestructionRing<ImageView, TICKS_TO_DESTROY> sentenced_image_view;
-    DelayedDestructionRing<Framebuffer, TICKS_TO_DESTROY> sentenced_framebuffers;
+    std::deque<PendingEvictionDownload> pending_eviction_downloads;
 
     ::Common::unordered_map<GPUVAddr, ImageAllocId> image_allocs_table;
 
@@ -635,14 +600,10 @@ private:
     u64 modification_tick = 0;
     u64 frame_tick = 0;
 
-    Common::ThreadWorker texture_decode_worker{1, "TextureDecoder", {},
-                                               Common::ThreadPlacement::Efficiency};
+    Common::ThreadWorker texture_decode_worker{1, "TextureDecoder"};
     std::vector<std::unique_ptr<AsyncDecodeContext>> async_decodes;
     /// Guest memory images were uploaded from since the last cold hint (device address, size).
     std::vector<std::pair<DAddr, u64>> uploaded_ranges;
-
-    std::deque<PendingUnswizzle> unswizzle_queue;
-    u8 current_unswizzle_frame;
 
     // Join caching
     boost::container::small_vector<ImageId, 4> join_overlap_ids;
@@ -651,6 +612,7 @@ private:
     boost::container::small_vector<ImageId, 4> join_right_aliased_ids;
     ::Common::unordered_set<ImageId> join_ignore_textures;
     boost::container::small_vector<ImageId, 4> join_bad_overlap_ids;
+    boost::container::small_vector<ImageId, 4> join_stale_ids;
     struct JoinCopy {
         bool is_alias;
         ImageId id;

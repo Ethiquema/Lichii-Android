@@ -11,20 +11,25 @@
 namespace FileSys {
 
 enum class BisPartitionId : u32 {
+    BootPartition1Root = 0,
+    BootPartition2Root = 10,
     UserDataRoot = 20,
-    CalibrationBinary = 27,
-    CalibrationFile = 28,
     BootConfigAndPackage2Part1 = 21,
     BootConfigAndPackage2Part2 = 22,
     BootConfigAndPackage2Part3 = 23,
     BootConfigAndPackage2Part4 = 24,
     BootConfigAndPackage2Part5 = 25,
     BootConfigAndPackage2Part6 = 26,
+    CalibrationBinary = 27,
+    CalibrationFile = 28,
     SafeMode = 29,
+    User = 30,
     System = 31,
     SystemProperEncryption = 32,
     SystemProperPartition = 33,
-    User = 30,
+    SignedSystemPartitionOnSafeMode = 34,
+    DeviceTreeBlob = 35,
+    System0 = 36,
 };
 
 class RegisteredCache;
@@ -40,6 +45,7 @@ public:
 
     VirtualDir GetSystemNANDContentDirectory() const;
     VirtualDir GetUserNANDContentDirectory() const;
+    VirtualDir GetSystem0NANDContentDirectory() const;
 
     RegisteredCache* GetSystemNANDContents() const;
     RegisteredCache* GetUserNANDContents() const;

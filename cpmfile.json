@@ -5,14 +5,23 @@
         "repo": "lioncash/biscuit",
         "version": "v0.19.0"
     },
+    "atmosphere_zstd_bic": {
+        "hash": "204f7573ea40de2878759c7ff5b2c016111fc29ae8574df50a3a0db9018c3b012f9040ea7466559130424d4335f2dfd6d7abfdc4d4d67e8a34531b8284f0cc6a",
+        "repo": "Atmosphere-NX/Atmosphere",
+        "version": "3ace80cc7b87e1837fccca1522801bbf6fddc6aa"
+    },
     "boost": {
-        "artifact": "boost-%VERSION%.tar.zst",
+        "artifact": "%VERSION%-cmake.tar.xz",
         "find_args": "CONFIG OPTIONAL_COMPONENTS headers context system fiber filesystem",
-        "hash": "681d97be4386767662e230b2e7c9754d45e709cc5db4e747c23c27d1f5b0e87770bdf19b0bc44dcb0e8349324887bbb8fffb432098f4d0ce74a5043021a90afc",
-        "min_version": "1.84",
+        "hash": "6ae6e94664fe7f2fb01976b59b276ac5df8085c7503fa829d810fbfe495960cfec44fa2c36e2cb23480bc19c956ed199d4952b02639a00a6c07625d4e7130c2d",
+        "min_version": "1.57",
         "package": "Boost",
-        "repo": "eden-emulator/ext-boost",
-        "version": "1.92.0"
+        "patches": [
+            "0001-clang-cl.patch",
+            "0004-openorbis.patch"
+        ],
+        "repo": "boostorg/boost",
+        "version": "boost-1.90.0"
     },
     "boost_headers": {
         "bundled": true,
@@ -38,22 +47,11 @@
             "CPP_JWT_USE_VENDORED_NLOHMANN_JSON OFF"
         ],
         "patches": [
-            "0001-fix-missing-decl.patch"
+            "0001-fix-missing-decl.patch",
+            "0002-libcxx.patch"
         ],
         "repo": "arun11299/cpp-jwt",
         "version": "7f24eb4c32"
-    },
-    "cubeb": {
-        "find_args": "CONFIG",
-        "hash": "8a4bcb2f83ba590f52c66626e895304a73eb61928dbc57777e1822e55378e3568366f17f9da4b80036cc2ef4ea9723c32abf6e7d9bbe00fb03654f0991596ab0",
-        "options": [
-            "USE_SANITIZERS OFF",
-            "BUILD_TESTS OFF",
-            "BUILD_TOOLS OFF",
-            "BUNDLE_SPEEX ON"
-        ],
-        "repo": "mozilla/cubeb",
-        "version": "fa02160712"
     },
     "discord-rpc": {
         "find_args": "MODULE",
@@ -70,23 +68,16 @@
         "version": "v1.3.18"
     },
     "ffmpeg": {
-        "hash": "ed177621176b3961bdcaa339187d3a7688c1c8b060b79c4bb0257cbc67ad7021ae5d5adca5303b45625abbbe3d9aafdd87ce777b8690ac295290d744c875489a",
+        "hash": "68f46abf0d5dc47ab95083d59e273131a8df7948b82e62db00f00fa416e1d0bd24b799671b5a60752209bb2ac0f75295055ed0085c89a98113323cde23b69710",
         "repo": "FFmpeg/FFmpeg",
-        "version": "c7b5f1537d"
+        "version": "6efe500d2e"
     },
     "ffmpeg-ci": {
         "ci": true,
         "name": "ffmpeg",
         "package": "FFmpeg",
         "repo": "crueter-ci/FFmpeg",
-        "version": "9.0.2-1790726865-946fcce07b"
-    },
-    "ffmpeg-ci-av1": {
-        "ci": true,
-        "name": "ffmpeg",
-        "package": "FFmpeg",
-        "repo": "Takoroka/ffmpeg-av1",
-        "version": "9.0.2-av1-1"
+        "version": "9.0.1-1788303113-bf1b838f2a"
     },
     "fmt": {
         "hash": "f0da82c545b01692e9fd30fdfb613dbb8dd9716983dcd0ff19ac2a8d36f74beb5540ef38072fdecc1e34191b3682a8542ecbf3a61ef287dbba0a2679d4e023f2",
@@ -111,7 +102,7 @@
         "find_args": "MODULE GLOBAL",
         "hash": "159ed94965018f2a371d45a3bfc1961e5fb1549e501ded70a6b4532d7fe99d0579c18b5195aff6e35f96f399b426cea2650ec9fb75ef80d4c9edeccb51f2e6c9",
         "options": [
-            "HTTPLIB_REQUIRE_OPENSSL ON",
+            "HTTPLIB_REQUIRE_OPENSSL OFF",
             "HTTPLIB_DISABLE_MACOSX_AUTOMATIC_ROOT_CERTIFICATES ON"
         ],
         "patches": [
@@ -187,7 +178,8 @@
         "min_version": "3.0.0",
         "package": "OpenSSL",
         "patches": [
-            "0001-add-bundled-cert.patch"
+            "0001-add-bundled-cert.patch",
+            "0002-fix-gnu-openorbis.patch"
         ],
         "repo": "openssl/openssl",
         "version": "openssl-3.6.2"
@@ -209,26 +201,11 @@
             "0001-cpmutil-compat.patch",
             "0002-use-ccache.patch",
             "0003-use-cmake-compiler-flags.patch",
-            "0004-use-shell-wrapper.patch"
+            "0004-use-shell-wrapper.patch",
+            "0005-cross-compile.patch"
         ],
         "repo": "jimmy-park/openssl-cmake",
         "version": "3.6.2"
-    },
-    "opus": {
-        "bundled": true,
-        "find_args": "MODULE",
-        "hash": "9506147b0de35befda8633ff272981cc2575c860874791bd455b752f797fd7dbd1079f0ba42ccdd7bb1fe6773fa5e84b3d75667c2883dd1fb2d0e4a5fa4f8387",
-        "min_version": "1.3",
-        "options": [
-            "OPUS_PRESUME_NEON ON"
-        ],
-        "package": "Opus",
-        "patches": [
-            "0001-disable-clang-runtime-neon.patch",
-            "0002-no-install.patch"
-        ],
-        "repo": "xiph/opus",
-        "version": "a3f0ec02b3"
     },
     "quazip": {
         "hash": "609c240c7f029ac26a37d8fbab51bc16284e05e128b78b9b9c0e95d083538c36047a67d682759ac990e4adb0eeb90f04f1ea7fe2253bbda7e7e3bcce32e53dd8",
@@ -251,12 +228,37 @@
         "repo": "crosire/reshade",
         "version": "v6.8.0"
     },
+    "scarletnx": {
+        "bundled": true,
+        "hash": "93f7e6810644253d6396239092d5769c44b005fa7a17cf39c6d773050a19de74fca1f96bb6eec7cb40384eb158b2595c9e1171ad592d8eb8326fd31f5632f505",
+        "options": [
+            "SNX_BUILD_NX OFF",
+            "SNX_BUILD_GNUABI OFF",
+            "SNX_BUILD_3DS OFF",
+            "SNX_BUILD_VITA OFF",
+            "SNX_BUILD_AGB OFF",
+            "SNX_DEPLOY OFF",
+            "SNX_BUILD_TESTING OFF",
+            "SNX_BUILD_GUI OFF",
+            "SNX_MULTICALL OFF",
+            "SNX_TRACY OFF",
+            "SNX_RECOMPILER_SHARED OFF",
+            "SNX_LLVM_SHARED OFF"
+        ],
+        "package": "ScarletNX",
+        "repo": "scarletnx/ScarletNX",
+        "version": "f16810ce9c"
+    },
     "sdl3": {
         "hash": "df5a323af7ac366661a3c0e887969c72584d232f3cc211419d59b0487b620b6b2859d4549c9e8df002ee489290062e466fcfddf7edc0872a37b1f2845e81c0f3",
         "min_version": "3.2.10",
         "package": "SDL3",
         "repo": "libsdl-org/SDL",
-        "version": "release-3.4.8"
+        "version": "release-3.4.8",
+        "patches": [
+            "0001-ps4.patch",
+            "0002-ps4-drivers.patch"
+        ]
     },
     "sdl3-ci": {
         "ci": true,
@@ -277,6 +279,9 @@
         "hash": "b7cd6885acae3fc8698288d19febba0dd45e4a02a2b6563d2eb995a988d0847046e8d16a5dea7e0bf832b4321bcec134cdbafc553f6ede039e4cf34525c5dce5",
         "options": [
             "SIRIT_USE_SYSTEM_SPIRV_HEADERS ON"
+        ],
+        "patches": [
+            "0001-libcxx.patch"
         ],
         "repo": "eden-emulator/sirit",
         "version": "v1.0.5"
@@ -338,7 +343,10 @@
         "hash": "8812ae84cbe49e6a3418ade9c458d3be6d74a3dffd319d4502007b564d580998056e8190414368ec11b27bc83993c7a0dad713c31bcc3d9553b51243efee3753",
         "numeric_version": "1.4.341.0",
         "repo": "KhronosGroup/Vulkan-ValidationLayers",
-        "version": "vulkan-sdk-%NUMERIC_VERSION%"
+        "tag": "vulkan-sdk-%VERSION%",
+        "git_version": "1.4.350.0",
+        "artifact": "android-binaries-%VERSION%.zip",
+        "hash": "5cbed0369d4c325c8ea9ab5a1d78d98ec721bdfae4d772dac23803f31aa909be6e132fca3b64d507e6b9835f9be9d0848407adbf74365fd3f37ae99add502d21"
     },
     "xbyak": {
         "hash": "e0aa0a603dd3ac1a39d82213df1e73c042831aec2d6b2fe382c899651eaae4ed7e8aeb6be9c41ea0097087c9d091961ab18f313cd6a9e10d621715ffd49bfe36",
@@ -364,13 +372,17 @@
     },
     "zstd": {
         "find_args": "MODULE",
-        "hash": "2b006c3c110c38bd2f5896b42d36a38931c8eae261f30552f9a9fd04458d218d8f1a1425f117fd12af545ed77042e4b2d1a1a9b6286c4d0b9d74ef79f20a8f08",
+        "hash": "cc5ad4b119a9c2ea57f0b71eeff01113bb506e0d17000159c5409cb8236d22e38c52d5e9e97e7947a4bf1b2dfc44b6c503ab2d9aedbd59458435c6a2849cb029",
         "min_version": "1.5",
         "options": [
             "ZSTD_BUILD_SHARED OFF"
         ],
+        "patches": [
+            "0001-zbic-support.patch"
+        ],
         "repo": "facebook/zstd",
         "source_subdir": "build/cmake",
-        "version": "33618c8"
+        "version": "b8d6101fba",
+        "bundled": true
     }
 }

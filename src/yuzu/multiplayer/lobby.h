@@ -126,14 +126,13 @@ public:
 
 public slots:
     void SetFilterOwned(bool);
-    void SetFilterEmpty(bool);
-    void SetFilterFull(bool);
+    void SetFilterPublic(bool);
     void SetFilterSearch(const QString&);
 
 private:
     QStandardItemModel* game_list;
     bool filter_owned = false;
     bool filter_empty = false;
-    bool filter_full = false;
+    bool filter_public = false;
     QString filter_search;
 };

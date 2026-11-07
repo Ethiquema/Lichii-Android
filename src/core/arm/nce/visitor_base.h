@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-FileCopyrightText: Copyright 2023 merryhime <https://mary.rs>
 // SPDX-License-Identifier: GPL-2.0-or-later
@@ -7,9 +10,9 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wshadow"
 
-#include <dynarmic/frontend/A64/a64_types.h>
-#include <dynarmic/frontend/A64/decoder/a64.h>
-#include <dynarmic/frontend/imm.h>
+#include "dynarmic/frontend/A64/a64_types.h"
+#include "dynarmic/frontend/A64/decoder/a64.h"
+#include "dynarmic/frontend/imm.h"
 
 #pragma GCC diagnostic pop
 
@@ -28,6 +31,32 @@ public:
     virtual ~VisitorBase() {}
 
     virtual bool UnallocatedEncoding() {
+        return false;
+    }
+
+    // ARMv8.1+ encodings added to the decoder table for Switch 2 code
+    virtual bool LDAPR_sz(Imm<2> size, Reg Rn, Reg Rt) {
+        return false;
+    }
+    virtual bool AtomicMemOp(Imm<2> size, bool A, bool R, Reg Rs, Imm<4> op, Reg Rn, Reg Rt) {
+        return false;
+    }
+    virtual bool CompareAndSwap(Imm<2> size, bool L, Reg Rs, bool o0, Reg Rn, Reg Rt) {
+        return false;
+    }
+    virtual bool CompareAndSwapPair(bool sz, bool L, Reg Rs, bool o0, Reg Rn, Reg Rt) {
+        return false;
+    }
+    virtual bool PACAUT_reg(bool Z, Imm<3> op, Reg Rn, Reg Rd) {
+        return false;
+    }
+    virtual bool BRA_BLRA(bool Z, bool L, bool M, Reg Rn, Reg Rm) {
+        return false;
+    }
+    virtual bool STG_family(Imm<2> opc, Imm<9> imm9, Imm<2> mode, Reg Rn, Reg Rt) {
+        return false;
+    }
+    virtual bool STGP(Imm<2> mode, Imm<7> imm7, Reg Rt2, Reg Rn, Reg Rt) {
         return false;
     }
 

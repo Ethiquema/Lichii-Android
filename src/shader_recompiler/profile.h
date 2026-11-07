@@ -18,10 +18,8 @@ struct Profile {
     bool support_descriptor_aliasing{};
     bool support_int8{};
     bool support_uniform_and_storage_buffer_8bit{};
-    bool support_storage_buffer_8bit{};
     bool support_int16{};
     bool support_uniform_and_storage_buffer_16bit{};
-    bool support_storage_buffer_16bit{};
     bool support_int64{};
     bool support_vertex_instance_id{};
     bool support_float_controls{};
@@ -65,6 +63,7 @@ struct Profile {
     bool support_storage_image_array_nonuniform_indexing{};
     bool support_uniform_texel_buffer_array_nonuniform_indexing{};
     bool support_storage_texel_buffer_array_nonuniform_indexing{};
+    bool support_storage_buffer_array_nonuniform_indexing{};
 
     bool warp_size_potentially_larger_than_guest{};
 
@@ -89,6 +88,8 @@ struct Profile {
     bool has_broken_signed_operations{};
     /// Float controls break when fp16 is enabled
     bool has_broken_fp16_float_controls{};
+    /// Forcing fp32 signed zero, Inf and NaN preservation miscompiles on some drivers
+    bool has_broken_fp32_signed_zero_nan_preserve{};
     /// Declaring fp32 denorm flush to zero miscompiles on some drivers
     bool has_broken_fp32_denorm_flush{};
     /// Dynamic vec4 indexing is broken on some OpenGL drivers
@@ -107,6 +108,9 @@ struct Profile {
     u32 max_subgroup_size{};
 
     u32 gl_max_compute_smem_size{};
+
+    /// Largest workgroup shared memory allocation the device accepts, 0 when unconstrained
+    u32 max_shared_memory_size{};
 
     /// Maxwell and earlier nVidia architectures have broken robust support
     bool has_broken_robust{};

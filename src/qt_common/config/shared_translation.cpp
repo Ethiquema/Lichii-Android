@@ -17,11 +17,15 @@
 #include "common/settings_enums.h"
 #include "common/settings_setting.h"
 #include "common/time_zone.h"
-#include "qt_common/config/uisettings.h"
+#include "qt_common/uisettings.h"
+#include <map>
+#include <memory>
+#include <utility>
 
 namespace ConfigurationShared {
 
-std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
+std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent)
+{
     std::unique_ptr<TranslationMap> translations = std::make_unique<TranslationMap>();
     const auto& tr = [](const char* text) -> QString { return QCoreApplication::translate("ConfigurationShared", text); };
 
@@ -86,6 +90,10 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Synchronizes CPU core speed with the game's maximum rendering speed to boost FPS "
               "without affecting game speed (animations, physics, etc.).\n"
               "Can help reduce stuttering at lower framerates."));
+    INSERT(Settings, enable_cheats_by_default, tr("Enable cheats by default"),
+           tr("Enables regular cheats when a game starts. Master Code entries are always enabled. "
+              "Individual cheats can still be toggled from Cheats in the menu bar while the game is "
+              "running."));
 
     // Cpu
     INSERT(Settings, cpu_accuracy, tr("Accuracy:"),
@@ -145,23 +153,8 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "Higher resolutions require more VRAM and bandwidth.\n"
               "Options lower than 1X can cause artifacts."));
     INSERT(Settings, scaling_filter, tr("Window Adapting Filter:"), QString());
-    INSERT(Settings, game_dlss_network, tr("Use the game's own DLSS"),
-           tr("Runs a Switch 2 game's own DLSS (its upscaling network, translated for this GPU) "
-              "instead of AMD FSR 3.1 in its place.\nAMD FSR 3.1 still draws while the network is "
-              "checked, when it can't run on this GPU, with resolution scaling, and for the rest "
-              "of the session if its output fails Lichii's checks.\nTakes effect when a game "
-              "starts."));
-    INSERT(Settings, fsr_sharpening_slider, tr("RCAS Sharpness:"),
-           tr("Strength of RCAS (AMD's contrast-adaptive sharpening) on the upscaler used in place "
-              "of a game's DLSS (AMD FSR 3.1); 0% turns it off.\nAlso sets the sharpening "
-              "of the AMD FSR 1 and SGSR window adapting filters."));
-    INSERT(Settings, nvidia_dlss, tr("Use NVIDIA DLSS in place of a game's DLSS (experimental)"),
-           tr("Uses NVIDIA DLSS on GeForce RTX cards in place of a Switch 2 game's own DLSS, "
-              "instead of AMD FSR 3.1.\nNeeds NVIDIA's Streamline loader, and NVIDIA DLSS unless "
-              "the NVIDIA app has downloaded it; Lichii does not ship NVIDIA's files. Use the "
-              "download button below.\nCurrently requires Fire Emblem: Fortune's Weave and "
-              "EDEN_NX2_DLSS_REPLACEMENT=dlss. Without that override, its spatial workaround "
-              "remains active.\nTakes effect when a game starts."));
+    INSERT(Settings, fsr_sharpening_slider, tr("FSR Sharpness:"),
+           tr("Determines how sharpened the image will look using FSR's or SGSR's dynamic contrast."));
     INSERT(Settings, anti_aliasing, tr("Anti-Aliasing Method:"),
            tr("The anti-aliasing method to use.\nSMAA offers the best quality.\nFXAA "
               "can produce a more stable picture in lower resolutions."));
@@ -169,6 +162,25 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, post_shader_preset, QString(), QString());
     INSERT(Settings, post_shader_enabled, tr("Enable post-processing effects"),
            tr("Applies post-processing effects to the final image."));
+    INSERT(Settings, frame_gen, tr("Frame generation (Lossless Scaling)"),
+           tr("Generates intermediate frames with the Lossless Scaling frame generation "
+              "shaders.\nRequires your own legal copy of Lossless.dll and forces VSync (FIFO)."));
+    INSERT(Settings, frame_gen_multiplier, tr("Frame generation multiplier:"),
+           tr("How many frames are shown for each frame the game renders.\nOnly used when the "
+              "target frame rate is 0."));
+    INSERT(Settings, frame_gen_target_rate, tr("Frame generation target rate:"),
+           tr("Pick the rate your display can actually show. The multiplier then rises or falls "
+              "on its own to hold it.\n0 uses the fixed multiplier."));
+    INSERT(Settings, frame_gen_flow_scale_auto, tr("Match motion estimation to the game"),
+           tr("Estimate motion at the resolution the game actually renders instead of the "
+              "upscaled output."));
+    INSERT(Settings, frame_gen_flow_scale, tr("Motion estimation resolution:"),
+           tr("Resolution of the optical flow pass, as a fraction of the game's render "
+              "resolution.\nLowering it is the cheapest way to reclaim performance."));
+    INSERT(Settings, frame_gen_queue_target, tr("Frame generation queue target:"),
+           tr("How many finished frames may wait ahead of the display.\nLarger queues absorb GPU "
+              "spikes at the cost of input latency."));
+    INSERT(Settings, frame_gen_dump_flow, QString(), QString());
     INSERT(Settings, fullscreen_mode, tr("Fullscreen Mode:"),
            tr("The method used to render the window in fullscreen.\nBorderless offers the best "
               "compatibility with the on-screen keyboard that some games request for "
@@ -194,14 +206,6 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "GPU: Use the GPU's compute shaders to decode ASTC textures (recommended).\n"
               "CPU Asynchronously: Use the CPU to decode ASTC textures on demand. Eliminates"
               "ASTC decoding\nstuttering but may present artifacts."));
-    INSERT(Settings, astc_recompression, tr("ASTC Recompression Method:"),
-           tr("Most GPUs lack support for ASTC textures and must decompress to an"
-              "intermediate format: RGBA8.\n"
-              "BC1/BC3: The intermediate format will be recompressed to BC1 or BC3 format,\n"
-              " saving VRAM but degrading image quality."));
-    INSERT(Settings, frame_pacing_mode, tr("Frame Pacing Mode (Vulkan only)"),
-           tr("Controls how the emulator manages frame pacing to reduce stuttering and make the "
-              "frame rate smoother and more consistent."));
     INSERT(Settings, vram_usage_mode, tr("VRAM Usage Mode:"),
            tr("Selects whether the emulator should prefer to conserve memory or make maximum usage "
               "of available video memory for performance.\nAggressive mode may impact performance "
@@ -228,6 +232,33 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, frame_gen_queue_target, tr("Queue Target"), QString());
     INSERT(Settings, frame_gen_dump_flow, tr("Dump Optical Flow"), QString());
 
+    // Switch 2
+    INSERT(Settings, nx2_gpu_split, tr("GPU thread split:"),
+           tr("Runs the GPU engines on a second thread, and the macros on the first one, so "
+              "command processing keeps up with the game.\nOnly with Normal GPU accuracy, no "
+              "safe DMA and the Vulkan renderer."));
+    INSERT(Settings, nx2_swap_interval, tr("Force swap interval:"),
+           tr("Number of display refreshes each frame is shown for: 1 is 60 FPS, 2 is 30 FPS. "
+              "0 uses what the game asks for."));
+    INSERT(Settings, nx2_temporal_upscale, tr("AMD FSR 3.1 in place of DLSS"),
+           tr("Replaces the game's DLSS pass with AMD FidelityFX Super Resolution 3.1 fed with "
+              "the game's motion vectors and depth (Fire Emblem: Fortune's Weave). Off: a plain "
+              "upscaling blit."));
+    INSERT(Settings, nx2_idle_spin_us, tr("Idle CPU core spin (microseconds):"),
+           tr("How long an idle emulated core polls for new work before it sleeps. Can cut "
+              "latency between the game's job threads, at the cost of host CPU time. 0 is off."));
+    INSERT(Settings, nx2_switch2_edition, tr("Run Switch 2 Editions of Switch 1 games"),
+           tr("Tells Switch 1 games that ask whether they run on a Switch 2 that they do, as the "
+              "console does. Such a game (the Switch 1 program of a Switch 2 Edition) then uses "
+              "the settings on this page. The Switch 2 Edition content itself needs the "
+              "Edition's Switch 2 program."));
+    INSERT(Settings, nx2_mesh_shaders, tr("Mesh shaders"),
+           tr("Draw the game's task and mesh shader draws (needs VK_EXT_mesh_shader). Off "
+              "skips them, to compare."));
+    INSERT(Settings, nx2_vram_limit_mib, tr("Limit video memory (MiB):"),
+           tr("Treats the GPU as if it had this much video memory, to test smaller cards. 0 is "
+              "off. Applies when a game starts."));
+
     // Renderer (Advanced Graphics)
     INSERT(Settings, use_asynchronous_gpu_emulation, QString(), QString());
 
@@ -235,6 +266,10 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Ensures data consistency between compute and memory operations.\nThis option fixes "
               "issues in games, but may degrade performance.\nUnreal Engine 4 games often see the "
               "most significant changes thereof."));
+    INSERT(Settings, stall_on_gpu_fence_wait, tr("Pause CPU on GPU fence timeouts"),
+           tr("When a game keeps timing out while waiting for the GPU, pauses every CPU thread "
+              "until the GPU catches up.\nDisabling it keeps the other threads running, which can "
+              "reduce stutter but may break games that rely on it."));
     INSERT(Settings, async_presentation, tr("Enable asynchronous presentation (Vulkan only)"),
            tr("Slightly improves performance by moving presentation to a separate CPU thread."));
     INSERT(
@@ -253,26 +288,11 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Controls the GPU fence synchronization behavior.\nImmediate is the fastest option, but can introduce some issues.\nBalanced offers better compatibility and may fix issues in some games.\nAccurate further improves compatibility at the cost of some performance.\nDefault follows the GPU Mode setting."));
     INSERT(Settings, use_asynchronous_shaders, tr("Enable asynchronous shader compilation"),
            tr("May reduce shader stutter."));
+    INSERT(Settings, use_unified_memory, tr("Enable unified memory access"),
+           tr("Lets the GPU write buffer readbacks directly into guest memory."));
     INSERT(Settings, gpu_clock, tr("GPU Clocks"),
            tr("Makes the game believe GPU work finishes faster than it does, so it stops lowering "
               "resolution and render distance to fit the Switch's clocks."));
-    INSERT(Settings, gpu_unswizzle_enabled, tr("GPU Unswizzle"),
-           tr("Accelerates BCn 3D texture decoding using GPU compute.\n"
-              "Disable if experiencing crashes or graphical glitches."));
-    INSERT(Settings, gpu_unswizzle_texture_size, tr("GPU Unswizzle Max Texture Size"),
-           tr("Sets the maximum size (MiB) for GPU-based texture unswizzling.\n"
-              "While the GPU is faster for medium and large textures, the CPU may be more "
-              "efficient for very small ones.\n"
-              "Adjust this to find the balance between GPU acceleration and CPU overhead."));
-    INSERT(Settings, gpu_unswizzle_stream_size, tr("GPU Unswizzle Stream Size"),
-           tr("Sets the maximum amount of texture data (in MiB) processed per frame.\n"
-              "Higher values can reduce stutter during texture loading but may impact frame "
-              "consistency."));
-    INSERT(Settings, gpu_unswizzle_chunk_size, tr("GPU Unswizzle Chunk Size"),
-           tr("Determines the number of depth slices processed in a single dispatch.\n"
-              "Increasing this can improve throughput on high-end GPUs but may cause TDR or driver "
-              "timeouts on weaker hardware."));
-
     INSERT(Settings, use_vulkan_driver_pipeline_cache, tr("Use Vulkan pipeline cache"),
            tr("Enables GPU vendor-specific pipeline cache.\nThis option can improve shader loading "
               "time significantly in cases where the Vulkan driver does not store pipeline cache "
@@ -288,13 +308,6 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, use_video_framerate, tr("Sync to framerate of video playback"),
            tr("Run the game at normal speed during video playback, even when the framerate is "
               "unlocked."));
-    INSERT(Settings, mkw_30fps, tr("Mario Kart World: 30 FPS mode"),
-           tr("Forces the game to use its native 30 FPS mode at normal game speed. "
-              "Takes effect after restarting the game."));
-    INSERT(Settings, mkw_dynamic_fps, tr("Mario Kart World: dynamic FPS (experimental)"),
-           tr("Lets the game adjust between 30 and 60 FPS using whole-frame timing to maintain "
-              "normal game speed. Takes effect after restarting the game and takes precedence over "
-              "the 30 FPS mode."));
     INSERT(Settings, barrier_feedback_loops, tr("Barrier feedback loops"),
            tr("Improves rendering of transparency effects in specific games."));
     INSERT(Settings, enable_buffer_history, tr("Enable buffer history"),
@@ -311,6 +324,12 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, vertex_input_dynamic_state, tr("Vertex Input Dynamic State"),
            tr("Enables vertex input dynamic state feature for better quality and performance."));
 
+    INSERT(Settings, dynamic_rendering, tr("Dynamic Rendering"),
+           tr("Renders without render pass and framebuffer objects.\n"
+              "Results vary by driver: some gain performance, others lose it."));
+
+    INSERT(Settings, workgroup_memory_explicit_layout, QString(), QString());
+
     INSERT(
         Settings, sample_shading, tr("Sample Shading"),
         tr("Allows the fragment shader to execute per sample in a multi-sampled fragment "
@@ -326,6 +345,8 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, device_name, tr("Device Name"), tr("The name of the console."));
     INSERT(Settings, program_args, tr("Homebrew Args"),
            tr("Command-line arguments passed to homebrew at launch (e.g. -noglsl)."));
+    INSERT(Settings, homebrew_nxlink_server_mode, tr("nxlink Server"),
+           tr("Starts a local nxlink server for homebrew stdout/stderr streams."));
     INSERT(Settings, custom_rtc, tr("Custom RTC Date:"),
            tr("This option allows to change the clock of the console.\n"
               "Can be used to manipulate time in games."));
@@ -342,6 +363,10 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "their resolution, details and supported controllers and depending on this setting.\n"
               "Setting to Handheld can help improve performance for low end systems."));
     INSERT(Settings, current_user, QString(), QString());
+    INSERT(Settings, serial_unit, tr("Unit Serial"), QString());
+    INSERT(Settings, serial_battery, tr("Battery Serial"), QString());
+    INSERT(Settings, product_model, tr("Product Model"), QString());
+    INSERT(Settings, debug_knobs, tr("Debug knobs"), QString());
 
     // Controls
 
@@ -369,6 +394,15 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Hides the mouse after 2.5s of inactivity."));
     INSERT(UISettings, check_for_updates, tr("Check for updates"),
            tr("Whether or not to check for updates upon startup."));
+    INSERT(UISettings,
+           enable_global_overrides,
+           tr("Enable global game overrides"),
+           tr("When enabled, per-game settings from the global overrides.ini file will be applied."));
+    INSERT(UISettings,
+           auto_update_overrides,
+           tr("Auto-update game overrides"),
+           tr("Automatically download the latest game overrides list from GitHub on startup."));
+    INSERT(UISettings, overrides_consent_given, QString(), QString());
 
     // Linux
     INSERT(UISettings, enable_gamemode, tr("Enable Gamemode"), QString());
@@ -388,11 +422,11 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     return translations;
 }
 
-std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
-    std::unique_ptr<ComboboxTranslationMap> translations =
-        std::make_unique<ComboboxTranslationMap>();
-    const auto& tr = [](const char* text, const char* context = "") {
-        return QCoreApplication::translate("ConfigurationShared", text, context);
+std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent)
+{
+    std::unique_ptr<ComboboxTranslationMap> translations = std::make_unique<ComboboxTranslationMap>();
+    const auto& tr = [&](const char* text, const char* context = "") {
+        return parent->tr(text, context);
     };
 
 #define PAIR(ENUM, VALUE, TRANSLATION) {static_cast<u32>(Settings::ENUM::VALUE), (TRANSLATION)}
@@ -416,21 +450,6 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                               PAIR(AstcDecodeMode, Cpu, tr("CPU")),
                               PAIR(AstcDecodeMode, Gpu, tr("GPU")),
                               PAIR(AstcDecodeMode, CpuAsynchronous, tr("CPU Asynchronous")),
-                          }});
-    translations->insert(
-        {Settings::EnumMetadata<Settings::AstcRecompression>::Index(),
-         {
-             PAIR(AstcRecompression, Uncompressed, tr("Uncompressed (Best quality)")),
-             PAIR(AstcRecompression, Bc1, tr("BC1 (Low quality)")),
-             PAIR(AstcRecompression, Bc3, tr("BC3 (Medium quality)")),
-         }});
-    translations->insert({Settings::EnumMetadata<Settings::FramePacingMode>::Index(),
-                          {
-                              PAIR(FramePacingMode, Target_Auto, tr("Auto")),
-                              PAIR(FramePacingMode, Target_30, tr("30 FPS")),
-                              PAIR(FramePacingMode, Target_60, tr("60 FPS")),
-                              PAIR(FramePacingMode, Target_90, tr("90 FPS")),
-                              PAIR(FramePacingMode, Target_120, tr("120 FPS")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::VramUsageMode>::Index(),
                           {
@@ -476,7 +495,12 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
     translations->insert({Settings::EnumMetadata<Settings::CpuBackend>::Index(),
                           {
                               PAIR(CpuBackend, Dynarmic, tr("Dynarmic")),
+#ifdef HAS_NCE
                               PAIR(CpuBackend, Nce, tr("NCE")),
+#endif
+#ifdef HAS_SCARLETNX
+                              PAIR(CpuBackend, ScarletNx, tr("ScarletNX")),
+#endif
                           }});
     translations->insert({Settings::EnumMetadata<Settings::FullscreenMode>::Index(),
                           {
@@ -509,7 +533,14 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
     translations->insert({Settings::EnumMetadata<Settings::FrameGenType>::Index(),
                           {
                               PAIR(FrameGenType, Lsfg, tr("Lossless Scaling (LSFG)")),
-                              PAIR(FrameGenType, Fsr3, tr("Optical Flow Interpolation (built-in)")),
+                              PAIR(FrameGenType, Fsr3, tr("AMD FidelityFX Super Resolution 3 (FSR 3)")),
+                          }});
+    translations->insert({Settings::EnumMetadata<Settings::Nx2GpuSplit>::Index(),
+                          {
+                              PAIR(Nx2GpuSplit, Off, tr("Off")),
+                              PAIR(Nx2GpuSplit, Engines, tr("Engines")),
+                              PAIR(Nx2GpuSplit, EnginesAndMacros,
+                                   tr("Engines and macros (Recommended)")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::ScalingFilter>::Index(),
                           {
@@ -519,7 +550,7 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                               PAIR(ScalingFilter, Gaussian, tr("Gaussian")),
                               PAIR(ScalingFilter, Lanczos, tr("Lanczos")),
                               PAIR(ScalingFilter, ScaleForce, tr("ScaleForce")),
-                              PAIR(ScalingFilter, Fsr, tr("AMD FidelityFX Super Resolution 1 (FSR 1)")),
+                              PAIR(ScalingFilter, Fsr, tr("AMD FidelityFX Super Resolution")),
                               PAIR(ScalingFilter, Area, tr("Area")),
                               PAIR(ScalingFilter, Mmpx, tr("MMPX")),
                               PAIR(ScalingFilter, ZeroTangent, tr("Zero-Tangent")),
@@ -528,13 +559,14 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                               PAIR(ScalingFilter, Spline1, tr("Spline-1")),
                               PAIR(ScalingFilter, Sgsr, tr("Snapdragon Game Super Resolution")),
                               PAIR(ScalingFilter, SgsrEdge, tr("Snapdragon Game Super Resolution EdgeDir")),
-                              PAIR(ScalingFilter, Fsr3, tr("AMD FidelityFX Super Resolution 1, softer sharpening")),
+                              PAIR(ScalingFilter, Fsr3, tr("AMD FidelityFX Super Resolution 3")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::AntiAliasing>::Index(),
                           {
                               PAIR(AntiAliasing, None, tr("None")),
                               PAIR(AntiAliasing, Fxaa, tr("FXAA")),
                               PAIR(AntiAliasing, Smaa, tr("SMAA")),
+                              PAIR(AntiAliasing, Ssaa, tr("SSAA")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::AspectRatio>::Index(),
                           {
@@ -590,58 +622,58 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
     translations->insert(
         {Settings::EnumMetadata<Settings::TimeZone>::Index(),
          {
-             {static_cast<u32>(Settings::TimeZone::Auto),
-              tr("Auto (%1)", "Auto select time zone")
-                  .arg(QString::fromStdString(
-                      Settings::GetTimeZoneString(Settings::TimeZone::Auto)))},
-             {static_cast<u32>(Settings::TimeZone::Default),
-              tr("Default (%1)", "Default time zone")
-                  .arg(QString::fromStdString(Common::TimeZone::GetDefaultTimeZone()))},
-             PAIR(TimeZone, Cet, tr("CET")),
-             PAIR(TimeZone, Cst6Cdt, tr("CST6CDT")),
-             PAIR(TimeZone, Cuba, tr("Cuba")),
-             PAIR(TimeZone, Eet, tr("EET")),
-             PAIR(TimeZone, Egypt, tr("Egypt")),
-             PAIR(TimeZone, Eire, tr("Eire")),
-             PAIR(TimeZone, Est, tr("EST")),
-             PAIR(TimeZone, Est5Edt, tr("EST5EDT")),
-             PAIR(TimeZone, Gb, tr("GB")),
-             PAIR(TimeZone, GbEire, tr("GB-Eire")),
-             PAIR(TimeZone, Gmt, tr("GMT")),
-             PAIR(TimeZone, GmtPlusZero, tr("GMT+0")),
-             PAIR(TimeZone, GmtMinusZero, tr("GMT-0")),
-             PAIR(TimeZone, GmtZero, tr("GMT0")),
-             PAIR(TimeZone, Greenwich, tr("Greenwich")),
-             PAIR(TimeZone, Hongkong, tr("Hongkong")),
-             PAIR(TimeZone, Hst, tr("HST")),
-             PAIR(TimeZone, Iceland, tr("Iceland")),
-             PAIR(TimeZone, Iran, tr("Iran")),
-             PAIR(TimeZone, Israel, tr("Israel")),
-             PAIR(TimeZone, Jamaica, tr("Jamaica")),
-             PAIR(TimeZone, Japan, tr("Japan")),
-             PAIR(TimeZone, Kwajalein, tr("Kwajalein")),
-             PAIR(TimeZone, Libya, tr("Libya")),
-             PAIR(TimeZone, Met, tr("MET")),
-             PAIR(TimeZone, Mst, tr("MST")),
-             PAIR(TimeZone, Mst7Mdt, tr("MST7MDT")),
-             PAIR(TimeZone, Navajo, tr("Navajo")),
-             PAIR(TimeZone, Nz, tr("NZ")),
-             PAIR(TimeZone, NzChat, tr("NZ-CHAT")),
-             PAIR(TimeZone, Poland, tr("Poland")),
-             PAIR(TimeZone, Portugal, tr("Portugal")),
-             PAIR(TimeZone, Prc, tr("PRC")),
-             PAIR(TimeZone, Pst8Pdt, tr("PST8PDT")),
-             PAIR(TimeZone, Roc, tr("ROC")),
-             PAIR(TimeZone, Rok, tr("ROK")),
-             PAIR(TimeZone, Singapore, tr("Singapore")),
-             PAIR(TimeZone, Turkey, tr("Turkey")),
-             PAIR(TimeZone, Uct, tr("UCT")),
-             PAIR(TimeZone, Universal, tr("Universal")),
-             PAIR(TimeZone, Utc, tr("UTC")),
-             PAIR(TimeZone, WSu, tr("W-SU")),
-             PAIR(TimeZone, Wet, tr("WET")),
-             PAIR(TimeZone, Zulu, tr("Zulu")),
-         }});
+          {static_cast<u32>(Settings::TimeZone::Auto),
+           tr("Auto (%1)", "Auto select time zone")
+               .arg(QString::fromStdString(
+                   Settings::GetTimeZoneString(Settings::TimeZone::Auto)))},
+          {static_cast<u32>(Settings::TimeZone::Default),
+           tr("Default (%1)", "Default time zone")
+               .arg(QString::fromStdString(Common::TimeZone::GetDefaultTimeZone()))},
+          PAIR(TimeZone, Cet, tr("CET")),
+          PAIR(TimeZone, Cst6Cdt, tr("CST6CDT")),
+          PAIR(TimeZone, Cuba, tr("Cuba")),
+          PAIR(TimeZone, Eet, tr("EET")),
+          PAIR(TimeZone, Egypt, tr("Egypt")),
+          PAIR(TimeZone, Eire, tr("Eire")),
+          PAIR(TimeZone, Est, tr("EST")),
+          PAIR(TimeZone, Est5Edt, tr("EST5EDT")),
+          PAIR(TimeZone, Gb, tr("GB")),
+          PAIR(TimeZone, GbEire, tr("GB-Eire")),
+          PAIR(TimeZone, Gmt, tr("GMT")),
+          PAIR(TimeZone, GmtPlusZero, tr("GMT+0")),
+          PAIR(TimeZone, GmtMinusZero, tr("GMT-0")),
+          PAIR(TimeZone, GmtZero, tr("GMT0")),
+          PAIR(TimeZone, Greenwich, tr("Greenwich")),
+          PAIR(TimeZone, Hongkong, tr("Hongkong")),
+          PAIR(TimeZone, Hst, tr("HST")),
+          PAIR(TimeZone, Iceland, tr("Iceland")),
+          PAIR(TimeZone, Iran, tr("Iran")),
+          PAIR(TimeZone, Israel, tr("Israel")),
+          PAIR(TimeZone, Jamaica, tr("Jamaica")),
+          PAIR(TimeZone, Japan, tr("Japan")),
+          PAIR(TimeZone, Kwajalein, tr("Kwajalein")),
+          PAIR(TimeZone, Libya, tr("Libya")),
+          PAIR(TimeZone, Met, tr("MET")),
+          PAIR(TimeZone, Mst, tr("MST")),
+          PAIR(TimeZone, Mst7Mdt, tr("MST7MDT")),
+          PAIR(TimeZone, Navajo, tr("Navajo")),
+          PAIR(TimeZone, Nz, tr("NZ")),
+          PAIR(TimeZone, NzChat, tr("NZ-CHAT")),
+          PAIR(TimeZone, Poland, tr("Poland")),
+          PAIR(TimeZone, Portugal, tr("Portugal")),
+          PAIR(TimeZone, Prc, tr("PRC")),
+          PAIR(TimeZone, Pst8Pdt, tr("PST8PDT")),
+          PAIR(TimeZone, Roc, tr("ROC")),
+          PAIR(TimeZone, Rok, tr("ROK")),
+          PAIR(TimeZone, Singapore, tr("Singapore")),
+          PAIR(TimeZone, Turkey, tr("Turkey")),
+          PAIR(TimeZone, Uct, tr("UCT")),
+          PAIR(TimeZone, Universal, tr("Universal")),
+          PAIR(TimeZone, Utc, tr("UTC")),
+          PAIR(TimeZone, WSu, tr("W-SU")),
+          PAIR(TimeZone, Wet, tr("WET")),
+          PAIR(TimeZone, Zulu, tr("Zulu")),
+          }});
     translations->insert({Settings::EnumMetadata<Settings::AudioMode>::Index(),
                           {
                               PAIR(AudioMode, Mono, tr("Mono")),
@@ -679,30 +711,6 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                               PAIR(GpuClock, Normal, tr("Normal")),
                               PAIR(GpuClock, Boost, tr("Boost")),
                               PAIR(GpuClock, Overclock, tr("Overclock")),
-                          }});
-    translations->insert({Settings::EnumMetadata<Settings::GpuUnswizzleSize>::Index(),
-                          {
-                              PAIR(GpuUnswizzleSize, VerySmall, tr("Very Small (16 MB)")),
-                              PAIR(GpuUnswizzleSize, Small, tr("Small (32 MB)")),
-                              PAIR(GpuUnswizzleSize, Normal, tr("Normal (128 MB)")),
-                              PAIR(GpuUnswizzleSize, Large, tr("Large (256 MB)")),
-                              PAIR(GpuUnswizzleSize, VeryLarge, tr("Very Large (512 MB)")),
-                          }});
-    translations->insert({Settings::EnumMetadata<Settings::GpuUnswizzle>::Index(),
-                          {
-                              PAIR(GpuUnswizzle, VeryLow, tr("Very Low (4 MB)")),
-                              PAIR(GpuUnswizzle, Low, tr("Low (8 MB)")),
-                              PAIR(GpuUnswizzle, Normal, tr("Normal (16 MB)")),
-                              PAIR(GpuUnswizzle, Medium, tr("Medium (32 MB)")),
-                              PAIR(GpuUnswizzle, High, tr("High (64 MB)")),
-                          }});
-    translations->insert({Settings::EnumMetadata<Settings::GpuUnswizzleChunk>::Index(),
-                          {
-                              PAIR(GpuUnswizzleChunk, VeryLow, tr("Very Low (32)")),
-                              PAIR(GpuUnswizzleChunk, Low, tr("Low (64)")),
-                              PAIR(GpuUnswizzleChunk, Normal, tr("Normal (128)")),
-                              PAIR(GpuUnswizzleChunk, Medium, tr("Medium (256)")),
-                              PAIR(GpuUnswizzleChunk, High, tr("High (512)")),
                           }});
 
     translations->insert({Settings::EnumMetadata<Settings::ExtendedDynamicState>::Index(),

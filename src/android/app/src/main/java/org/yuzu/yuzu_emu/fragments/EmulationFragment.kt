@@ -238,6 +238,8 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         if (intent.action == CustomSettingsHandler.CUSTOM_CONFIG_ACTION) {
             handleEmuReadyIntent(intent)
             return
+        } else if (intent.hasExtra(EXTRA_EXEFS_PATH)) {
+            intentGame = GameHelper.getExeFSGame(File(intent.getStringExtra(EXTRA_EXEFS_PATH)!!))
         } else if (intentUri != null) {
             intentGame = if (Game.extensions.contains(FileUtil.getExtension(intentUri))) {
                 GameHelper.getGame(requireActivity().intent.data!!, false)
@@ -734,6 +736,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
 
         binding.inGameMenu.menu.findItem(R.id.menu_quick_settings)?.isVisible =
             BooleanSetting.ENABLE_QUICK_SETTINGS.getBoolean()
+        binding.inGameMenu.menu.findItem(R.id.menu_cheats)?.isVisible = false
 
         binding.pausedIcon.setOnClickListener {
             if (this::emulationState.isInitialized && emulationState.isPaused) {
@@ -816,6 +819,12 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                 }
 
                 R.id.menu_load_amiibo -> handleLoadAmiiboSelection()
+
+                R.id.menu_cheats -> {
+                    binding.drawerLayout.closeDrawer(binding.inGameMenu)
+                    showRuntimeCheatDialog()
+                    true
+                }
 
                 R.id.menu_controls -> {
                     val action = HomeNavigationDirections.actionGlobalSettingsActivity(
@@ -962,6 +971,8 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
 
                 emulationState.updateSurface()
 
+                binding.inGameMenu.menu.findItem(R.id.menu_cheats)?.isVisible =
+                    NativeLibrary.getRuntimeCheats().isNotEmpty()
                 updateShowStatsOverlay()
                 updateSocOverlay()
 
@@ -987,6 +998,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         }
         emulationViewModel.isEmulationStopping.collect(viewLifecycleOwner) {
             if (it) {
+                binding.inGameMenu.menu.findItem(R.id.menu_cheats)?.isVisible = false
                 binding.loadingText.setText(R.string.shutting_down)
                 ViewUtils.showView(binding.loadingIndicator)
                 ViewUtils.hideView(binding.inputContainer)
@@ -1117,6 +1129,45 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
     fun editPostProcessing(action: () -> Unit) = withPerGameConfig(true) {
         action()
         NativePostProcessing.persist()
+    }
+
+    private fun showRuntimeCheatDialog() {
+        val cheats = NativeLibrary.getRuntimeCheats()
+        if (cheats.isEmpty()) return
+
+        val names = cheats.map { it.name.ifEmpty { getString(R.string.unnamed_cheat) } }.toTypedArray()
+        lateinit var dialog: androidx.appcompat.app.AlertDialog
+        dialog = MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.cheats)
+            .setMultiChoiceItems(names, cheats.map { it.enabled }.toBooleanArray()) { _, which, enabled ->
+                if (cheats[which].isMaster) {
+                    dialog.listView.setItemChecked(which, true)
+                } else if (!NativeLibrary.setRuntimeCheatEnabled(cheats[which].id, enabled)) {
+                    dialog.listView.setItemChecked(which, !enabled)
+                }
+            }
+            .setNegativeButton(R.string.disable_all_cheats) { _, _ ->
+                cheats.forEach {
+                    if (!it.isMaster) NativeLibrary.setRuntimeCheatEnabled(it.id, false)
+                }
+            }
+            .setNeutralButton(R.string.enable_all_cheats) { _, _ ->
+                cheats.forEach {
+                    if (!it.isMaster) NativeLibrary.setRuntimeCheatEnabled(it.id, true)
+                }
+            }
+            .setPositiveButton(R.string.done, null)
+            .create()
+        dialog.setOnShowListener {
+            val listView = dialog.listView
+            fun updateMasterVisuals() = repeat(listView.childCount) { index ->
+                listView.getChildAt(index).alpha =
+                    if (cheats[listView.firstVisiblePosition + index].isMaster) 0.38f else 1f
+            }
+            listView.setOnScrollChangeListener { _, _, _, _, _ -> updateMasterVisuals() }
+            updateMasterVisuals()
+        }
+        dialog.show()
     }
 
     private fun addQuickSettings() {
@@ -1529,7 +1580,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             setTextColor(
                 MaterialColors.getColor(
                     this,
-                    com.google.android.material.R.attr.colorPrimary
+                    androidx.appcompat.R.attr.colorPrimary
                 )
             )
         }
@@ -1716,7 +1767,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             setTextColor(
                 MaterialColors.getColor(
                     this,
-                    com.google.android.material.R.attr.colorPrimary
+                    androidx.appcompat.R.attr.colorPrimary
                 )
             )
         }
@@ -2481,6 +2532,10 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
     }
 
     companion object {
+        // Debug launches over adb: am start -n <package>/org.yuzu.yuzu_emu.activities.EmulationActivity
+        // --es exefs_path /sdcard/<game folder>
+        const val EXTRA_EXEFS_PATH = "exefs_path"
+
         private val AMIIBO_MIME_TYPES =
             arrayOf("application/octet-stream", "application/x-binary", "*/*")
         private val perfStatsUpdateHandler = Handler(Looper.myLooper()!!)

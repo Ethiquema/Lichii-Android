@@ -243,6 +243,14 @@ void PhysicalCore::Idle(KernelCore& kernel) {
 #endif
     }
     const auto spin = std::chrono::microseconds{spin_us};
+    // host's thread wake-up latency to every handoff. EDEN_NX2_IDLE_SPIN_US=<n> (any title) or
+    // nx2_idle_spin_us (Switch 2 titles): poll for that many microseconds before blocking.
+    static const char* const forced_spin = std::getenv("EDEN_NX2_IDLE_SPIN_US");
+    const auto spin = std::chrono::microseconds{
+        forced_spin != nullptr ? std::strtoll(forced_spin, nullptr, 10)
+        : Settings::CurrentProgramIsSwitch2()
+            ? static_cast<long long>(Settings::values.nx2_idle_spin_us.GetValue())
+            : 0LL};
     if (spin.count() > 0) {
         const auto deadline = std::chrono::steady_clock::now() + spin;
         while (!m_is_interrupted.load(std::memory_order_acquire) &&

@@ -33,7 +33,8 @@ std::atomic<bool> pending{};
 std::atomic<bool> any_rejected{};
 
 void UpdatePending() {
-    pending.store(!state.captures.empty() || !state.gpu_reads.empty() || state.reject_pending, std::memory_order_relaxed);
+    pending.store(!state.captures.empty() || !state.gpu_reads.empty() || state.reject_pending,
+                  std::memory_order_relaxed);
 }
 
 } // Anonymous namespace
@@ -83,7 +84,8 @@ void CancelCapture(u64 id) {
 
 std::optional<CaptureResult> WaitCapture(u64 id, std::chrono::milliseconds timeout) {
     std::unique_lock lock{state.mutex};
-    state.changed.wait_for(lock, timeout, [id] { return !state.open || state.finished.contains(id); });
+    state.changed.wait_for(lock, timeout,
+                           [id] { return !state.open || state.finished.contains(id); });
     const auto it = state.finished.find(id);
     if (it == state.finished.end()) {
         return std::nullopt;
@@ -123,7 +125,8 @@ void RequestGpuRead(GpuReadRequest request) {
 
 void CancelGpuRead(u64 id) {
     std::scoped_lock lock{state.mutex};
-    std::erase_if(state.gpu_reads, [id](const GpuReadRequest& request) { return request.id == id; });
+    std::erase_if(state.gpu_reads,
+                  [id](const GpuReadRequest& request) { return request.id == id; });
     state.gpu_read_results.erase(id);
     UpdatePending();
 }

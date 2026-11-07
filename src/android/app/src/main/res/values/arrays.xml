@@ -25,12 +25,16 @@
         <item>@string/memory_4gb</item>
         <item>@string/memory_6gb</item>
         <item>@string/memory_8gb</item>
+        <item>@string/memory_10gb</item>
+        <item>@string/memory_12gb</item>
     </string-array>
 
     <integer-array name="memoryValues">
         <item>0</item>
         <item>1</item>
         <item>2</item>
+        <item>3</item>
+        <item>4</item>
     </integer-array>
 
     <string-array name="clockNames">
@@ -175,6 +179,8 @@
         <item>@string/frame_gen_target_rate_60</item>
         <item>@string/frame_gen_target_rate_90</item>
         <item>@string/frame_gen_target_rate_120</item>
+        <item>@string/frame_gen_target_rate_144</item>
+        <item>@string/frame_gen_target_rate_165</item>
     </string-array>
 
     <integer-array name="frameGenTargetRateValues">
@@ -182,12 +188,8 @@
         <item>60</item>
         <item>90</item>
         <item>120</item>
-    </integer-array>
-
-    <integer-array name="frameGenFlowScaleValues">
-        <item>50</item>
-        <item>75</item>
-        <item>100</item>
+        <item>144</item>
+        <item>165</item>
     </integer-array>
 
     <string-array name="frameGenQueueTargetNames">
@@ -306,6 +308,7 @@
         <item>@string/anti_aliasing_none</item>
         <item>@string/anti_aliasing_fxaa</item>
         <item>@string/anti_aliasing_smaa</item>
+        <item>@string/anti_aliasing_ssaa</item>
     </string-array>
 
     <integer-array name="rendererAntiAliasingValues">
@@ -412,73 +415,14 @@
         <item>2</item>
     </integer-array>
 
-    <string-array name="appLanguageNames">
-        <item>@string/app_language_system</item>
-        <item>@string/app_language_english</item>
-        <item>@string/app_language_spanish</item>
-        <item>@string/app_language_french</item>
-        <item>@string/app_language_german</item>
-        <item>@string/app_language_italian</item>
-        <item>@string/app_language_portuguese</item>
-        <item>@string/app_language_brazilian_portuguese</item>
-        <item>@string/app_language_russian</item>
-        <item>@string/app_language_japanese</item>
-        <item>@string/app_language_korean</item>
-        <item>@string/app_language_simplified_chinese</item>
-        <item>@string/app_language_traditional_chinese</item>
-        <item>@string/app_language_polish</item>
-        <item>@string/app_language_czech</item>
-        <item>@string/app_language_norwegian</item>
-        <item>@string/app_language_hungarian</item>
-        <item>@string/app_language_ukrainian</item>
-        <item>@string/app_language_vietnamese</item>
-        <item>@string/app_language_indonesian</item>
-        <item>@string/app_language_arabic</item>
-        <item>@string/app_language_central_kurdish</item>
-        <item>@string/app_language_persian</item>
-        <item>@string/app_language_hebrew</item>
-        <item>@string/app_language_serbian</item>
-        <item>@string/app_language_thai</item>
-    </string-array>
-    <integer-array name="appLanguageValues">
-        <item>0</item>
-        <item>1</item>
-        <item>2</item>
-        <item>3</item>
-        <item>4</item>
-        <item>5</item>
-        <item>6</item>
-        <item>7</item>
-        <item>8</item>
-        <item>9</item>
-        <item>10</item>
-        <item>11</item>
-        <item>12</item>
-        <item>13</item>
-        <item>14</item>
-        <item>15</item>
-        <item>15</item>
-        <item>16</item>
-        <item>17</item>
-        <item>18</item>
-        <item>19</item>
-        <item>20</item>
-        <item>21</item>
-        <item>22</item>
-        <item>23</item>
-        <item>24</item>
-    </integer-array>
-
     <string-array name="outputEngineEntries">
         <item>@string/auto</item>
         <item>@string/sdl3</item>
-        <item>@string/cubeb</item>
         <item>@string/string_null</item>
     </string-array>
     <integer-array name="outputEngineValues">
         <item>0</item>
         <item>2</item>
-        <item>1</item>
         <item>3</item>
     </integer-array>
 
@@ -594,54 +538,6 @@
         <item>2</item>
     </integer-array>
 
-    <string-array name="gpuTextureSizeSwizzleEntries">
-        <item>@string/gpu_texturesizeswizzle_verysmall</item>
-        <item>@string/gpu_texturesizeswizzle_small</item>
-        <item>@string/gpu_texturesizeswizzle_normal</item>
-        <item>@string/gpu_texturesizeswizzle_large</item>
-        <item>@string/gpu_texturesizeswizzle_verylarge</item>
-    </string-array>
-
-    <integer-array name="gpuTextureSizeSwizzleValues">
-        <item>0</item>
-        <item>1</item>
-        <item>2</item>
-        <item>3</item>
-        <item>4</item>
-    </integer-array>
-
-    <string-array name="gpuSwizzleEntries">
-        <item>@string/gpu_swizzle_verylow</item>
-        <item>@string/gpu_swizzle_low</item>
-        <item>@string/gpu_swizzle_normal</item>
-        <item>@string/gpu_swizzle_medium</item>
-        <item>@string/gpu_swizzle_high</item>
-    </string-array>
-
-    <integer-array name="gpuSwizzleValues">
-        <item>0</item>
-        <item>1</item>
-        <item>2</item>
-        <item>3</item>
-        <item>4</item>
-    </integer-array>
-    
-    <string-array name="gpuSwizzleChunkEntries">
-        <item>@string/gpu_swizzlechunk_verylow</item>
-        <item>@string/gpu_swizzlechunk_low</item>
-        <item>@string/gpu_swizzlechunk_normal</item>
-        <item>@string/gpu_swizzlechunk_medium</item>
-        <item>@string/gpu_swizzlechunk_high</item>
-    </string-array>
-
-    <integer-array name="gpuSwizzleChunkValues">
-        <item>0</item>
-        <item>1</item>
-        <item>2</item>
-        <item>3</item>
-        <item>4</item>
-    </integer-array>
-
     <string-array name="temperatureUnitEntries">
         <item>@string/temperature_celsius</item>
         <item>@string/temperature_fahrenheit</item>
@@ -664,6 +560,16 @@
         <item>1</item>
         <item>2</item>
         <item>3</item>
+    </integer-array>
+
+    <string-array name="nxlinkServerModeEntries">
+        <item>Disabled</item>
+        <item>Eden Log</item>
+    </string-array>
+
+    <integer-array name="nxlinkServerModeValues">
+        <item>0</item>
+        <item>1</item>
     </integer-array>
 
     <string-array name="installKeysResults">

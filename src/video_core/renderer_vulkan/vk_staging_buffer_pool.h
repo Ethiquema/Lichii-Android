@@ -7,6 +7,7 @@
 #pragma once
 
 #include <climits>
+#include <optional>
 #include <vector>
 
 #include "common/common_types.h"
@@ -25,7 +26,7 @@ struct StagingBufferRef {
     VkDeviceSize offset;
     std::span<u8> mapped_span;
     MemoryUsage usage;
-    u32 log2_level;
+    u32 size_class;
     u64 index;
 };
 
@@ -33,11 +34,10 @@ class StagingBufferPool {
 public:
     static constexpr size_t NUM_SYNCS = 16;
 
-    explicit StagingBufferPool(const Device& device, MemoryAllocator& memory_allocator,
-                               Scheduler& scheduler);
+    explicit StagingBufferPool(const Device& device, MemoryAllocator& memory_allocator, Scheduler& scheduler);
     ~StagingBufferPool();
 
-    StagingBufferRef Request(size_t size, MemoryUsage usage, bool deferred = false);
+    StagingBufferRef Request(const Device& device, size_t size, MemoryUsage usage, bool deferred = false);
     void FreeDeferred(StagingBufferRef& ref);
 
     [[nodiscard]] VkBuffer StreamBuf() const noexcept {
@@ -45,6 +45,8 @@ public:
     }
 
     void TickFrame();
+
+    u64 ReclaimMemory(u64 target_bytes);
 
 private:
     struct StreamBufferCommit {
@@ -57,9 +59,10 @@ private:
         VkDeviceAddress device_address;
         std::span<u8> mapped_span;
         MemoryUsage usage;
-        u32 log2_level;
+        u32 size_class;
         u64 index;
         u64 tick = 0;
+        u64 frame = 0; ///< Last frame a request got this buffer.
         bool deferred{};
 
         StagingBufferRef Ref() const noexcept {
@@ -69,7 +72,7 @@ private:
                 .offset = 0,
                 .mapped_span = mapped_span,
                 .usage = usage,
-                .log2_level = log2_level,
+                .size_class = size_class,
                 .index = index,
             };
         }
@@ -77,34 +80,42 @@ private:
 
     struct StagingBuffers {
         std::vector<StagingBuffer> entries;
-        size_t delete_index = 0;
         size_t iterate_index = 0;
     };
 
-    static constexpr size_t NUM_LEVELS = sizeof(size_t) * CHAR_BIT;
+    /// Size classes up to this power of two are powers of two; above it there are four per
+    /// doubling.
+    static constexpr u32 FINE_SIZE_CLASSES_FROM_LOG2 = 20;
+    static constexpr size_t NUM_LEVELS =
+        FINE_SIZE_CLASSES_FROM_LOG2 + (sizeof(size_t) * CHAR_BIT - FINE_SIZE_CLASSES_FROM_LOG2) * 4 + 1;
     using StagingBuffersCache = std::array<StagingBuffers, NUM_LEVELS>;
+
+    static u32 SizeClass(size_t size);
+    static size_t ClassSize(u32 size_class);
 
     StagingBufferRef GetStreamBuffer(size_t size);
 
     bool AreRegionsActive(size_t region_begin, size_t region_end) const;
 
+    u64 MaxRegionTick(size_t region_begin, size_t region_end) const;
+
+    std::optional<StagingBufferRef> OverflowStreamBuffer(size_t size, size_t region_begin,
+                                                         size_t region_end);
+
     StagingBufferRef GetStagingBuffer(size_t size, MemoryUsage usage, bool deferred = false);
 
-    std::optional<StagingBufferRef> TryGetReservedBuffer(size_t size, MemoryUsage usage,
+    std::optional<StagingBufferRef> TryGetReservedBuffer(u32 size_class, MemoryUsage usage,
                                                          bool deferred);
 
     StagingBufferRef CreateStagingBuffer(size_t size, MemoryUsage usage, bool deferred);
 
     StagingBuffersCache& GetCache(MemoryUsage usage);
 
-    void ReleaseCache(MemoryUsage usage);
-
-    void ReleaseLevel(StagingBuffersCache& cache, size_t log2);
+    void ReleaseCache(StagingBuffersCache& cache, size_t& deletions_left);
     size_t Region(size_t iter) const noexcept {
         return iter / region_size;
     }
 
-    const Device& device;
     MemoryAllocator& memory_allocator;
     Scheduler& scheduler;
 
@@ -119,11 +130,13 @@ private:
     size_t free_iterator = 0;
     std::array<u64, NUM_SYNCS> sync_ticks{};
 
+    std::array<size_t, 4> cache_bytes{};
+
     StagingBuffersCache device_local_cache;
     StagingBuffersCache upload_cache;
     StagingBuffersCache download_cache;
 
-    size_t current_delete_level = 0;
+    u64 frame = 0;
     u64 buffer_index = 0;
     u64 unique_ids{};
 };

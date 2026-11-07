@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # SPDX-FileCopyrightText: 2020 yuzu Emulator Project
 # SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -28,5 +31,5 @@ endforeach()
 STRING(REGEX REPLACE "{{SEMICOLON}}" ";" CONTENTS "${CONTENTS}")
 
 get_filename_component(OUTPUT_DIR ${HEADER_FILE} DIRECTORY)
-make_directory(${OUTPUT_DIR})
+file(MAKE_DIRECTORY ${OUTPUT_DIR})
 configure_file(${INPUT_FILE} ${HEADER_FILE} @ONLY)

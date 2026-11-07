@@ -60,34 +60,6 @@ namespace {
 
 constexpr size_t CONSTANT_POOL_SIZE = 2 * 1024 * 1024;
 constexpr size_t PRELUDE_COMMIT_SIZE = 16 * 1024 * 1024;
-#ifdef _WIN32
-constexpr size_t COMMIT_STEP = 4 * 1024 * 1024;
-
-// Reserves the code space; EnsureMemoryCommitted commits it as code is emitted. Xbyak's default
-// allocator commits all of it up front: 512 MiB per core, 3 GiB of commit charge for six cores
-// of which a game fills a fraction.
-struct ReservingAllocator final : Xbyak::Allocator {
-    uint8_t* alloc(size_t size) override {
-        return static_cast<uint8_t*>(VirtualAlloc(nullptr, size, MEM_RESERVE, PAGE_NOACCESS));
-    }
-    void free(uint8_t* p) override {
-        VirtualFree(p, 0, MEM_RELEASE);
-    }
-    bool useProtect() const override {
-        return false;
-    }
-};
-
-Xbyak::Allocator* CodeAllocator() {
-    // Never destroyed: code blocks may outlive static destruction.
-    static auto* const allocator = new ReservingAllocator;
-    return allocator;
-}
-#else
-Xbyak::Allocator* CodeAllocator() {
-    return nullptr;
-}
-#endif
 
 #ifdef DYNARMIC_ENABLE_NO_EXECUTE_SUPPORT
 void ProtectMemory(const void* base, size_t size, bool is_executable) {
@@ -106,7 +78,6 @@ void ProtectMemory(const void* base, size_t size, bool is_executable) {
 
 static const HostFeature features = []() {
     HostFeature f{};
-#ifdef DYNARMIC_ENABLE_CPU_FEATURE_DETECTION
     using Cpu = Xbyak::util::Cpu;
     Xbyak::util::Cpu cpu_info{};
     if (cpu_info.has(Cpu::tSSSE3)) f |= HostFeature::SSSE3;
@@ -149,7 +120,6 @@ static const HostFeature features = []() {
         }
     }
     return f;
-#endif
 }();
 HostFeature GetHostFeatures() {
     return features;
@@ -219,12 +189,12 @@ void BlockOfCode::DisableWriting() {
 }
 
 void BlockOfCode::ClearCache() {
-    ASSERT(prelude_complete);
+    DEBUG_ASSERT(prelude_complete);
     SetCodePtr(code_begin);
 }
 
 size_t BlockOfCode::SpaceRemaining() const {
-    ASSERT(prelude_complete);
+    DEBUG_ASSERT(prelude_complete);
     const u8* current_ptr = getCurr<const u8*>();
     if (current_ptr >= &top_[maxSize_])
         return 0;
@@ -481,7 +451,6 @@ void* BlockOfCode::AllocateFromCodeSpace(size_t alloc_size) {
     }
 
     EnsureMemoryCommitted(alloc_size);
-
     void* ret = getCurr<void*>();
     size_ += alloc_size;
     memset(ret, 0, alloc_size);
@@ -496,7 +465,7 @@ void BlockOfCode::SetCodePtr(CodePtr code_ptr) {
 
 void BlockOfCode::EnsurePatchLocationSize(CodePtr begin, size_t size) {
     size_t current_size = getCurr<const u8*>() - reinterpret_cast<const u8*>(begin);
-    ASSERT(current_size <= size);
+    DEBUG_ASSERT(current_size <= size);
     nop(size - current_size);
 }
 

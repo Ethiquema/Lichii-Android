@@ -48,26 +48,32 @@ namespace {
     switch (window_type) {
     case Core::Frontend::WindowSystemType::Headless:
         break;
-#ifdef _WIN32
+#if defined(VK_USE_PLATFORM_WIN32_KHR)
     case Core::Frontend::WindowSystemType::Windows:
         extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
         break;
-#elif defined(__APPLE__)
+#endif
+#if defined(VK_USE_PLATFORM_METAL_EXT)
     case Core::Frontend::WindowSystemType::Cocoa:
         extensions.push_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
         break;
-#elif defined(__ANDROID__)
+#endif
+#if defined(VK_USE_PLATFORM_ANDROID_KHR)
     case Core::Frontend::WindowSystemType::Android:
         extensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
         break;
-#elif defined(__HAIKU__)
+#endif
+#if defined(VK_USE_PLATFORM_XCB_KHR)
     case Core::Frontend::WindowSystemType::Xcb:
         extensions.push_back(VK_KHR_XCB_SURFACE_EXTENSION_NAME);
         break;
-#else
+#endif
+#if defined(VK_USE_PLATFORM_XLIB_KHR)
     case Core::Frontend::WindowSystemType::X11:
         extensions.push_back(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
         break;
+#endif
+#if defined(VK_USE_PLATFORM_WAYLAND_KHR)
     case Core::Frontend::WindowSystemType::Wayland:
         extensions.push_back(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
         break;
@@ -133,9 +139,19 @@ void RemoveUnavailableLayers(const vk::InstanceDispatch& dld, std::vector<const 
 }
 } // Anonymous namespace
 
+#ifdef __OPENORBIS__
+extern "C" {
+    extern PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance, const char *pName);
+}
+#endif
+
 vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceDispatch& dld,
                             u32 required_version, Core::Frontend::WindowSystemType window_type,
                             bool enable_validation) {
+    // ps4 doesn't have dlopen() or equivalent, Vulkan is directly shipped with the emu
+#ifdef __OPENORBIS__
+    dld.vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)vk_icdGetInstanceProcAddr;
+#else
     if (!library.IsOpen()) {
         LOG_ERROR(Render_Vulkan, "Vulkan library not available");
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
@@ -144,6 +160,7 @@ vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceD
         LOG_ERROR(Render_Vulkan, "vkGetInstanceProcAddr not present in Vulkan");
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
     }
+#endif
     if (!vk::Load(dld)) {
         LOG_ERROR(Render_Vulkan, "Failed to load Vulkan function pointers");
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);

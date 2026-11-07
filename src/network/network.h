@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: Copyright 2017 Citra Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
@@ -19,6 +19,8 @@ std::weak_ptr<Room> GetRoom();
 
 /// Returns a pointer to the room member handle
 std::weak_ptr<RoomMember> GetRoomMember();
+
+bool IsConnectedToAnyRoom();
 
 /// Unregisters the network device, the room, and the room member and shut them down.
 void Shutdown();

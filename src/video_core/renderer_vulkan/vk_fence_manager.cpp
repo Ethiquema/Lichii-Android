@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -23,11 +26,7 @@ void InnerFence::Queue() {
     if (is_stubbed) {
         return;
     }
-    // Get the current tick so we can wait for it
-    wait_tick = scheduler.CurrentTick();
-    if (!scheduler.DeferFlush()) {
-        scheduler.Flush();
-    }
+    wait_tick = scheduler.Flush();
 }
 
 bool InnerFence::IsSignaled() const {
@@ -41,15 +40,7 @@ void InnerFence::Wait() {
     if (is_stubbed) {
         return;
     }
-    // A deferred fence flush (Scheduler::DeferFlush) may not be submitted yet. Only the
-    // split's back may submit; other threads (the fencing thread) ask it to and wait. If the back
-    // has stopped, nothing else uses the scheduler and Wait below submits it.
-    if (!scheduler.IsSubmitted(wait_tick) && VideoCommon::GpuSplit::Get().Active() &&
-        !VideoCommon::GpuSplit::OnBackThread() && scheduler.WaitSubmitted(wait_tick)) {
-        scheduler.GetMasterSemaphore().Wait(wait_tick);
-        return;
-    }
-    scheduler.Wait(wait_tick);
+    scheduler.WaitSubmitted(wait_tick);
 }
 
 FenceManager::FenceManager(VideoCore::RasterizerInterface& rasterizer_, Tegra::GPU& gpu_,
@@ -74,10 +65,8 @@ void FenceManager::WaitFence(Fence& fence) {
     fence->Wait();
 }
 
-void FenceManager::SubmitDeferredWork() {
-    if (VideoCommon::GpuSplit::OnBackThread()) {
-        scheduler.FlushDeferred();
-    }
+void FenceManager::SubmitDeferred() {
+    scheduler.FlushDeferred();
 }
 
 } // namespace Vulkan

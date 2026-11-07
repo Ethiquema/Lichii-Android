@@ -18,7 +18,11 @@
 #include "common/common_types.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
+<<<<<<<< HEAD:src/qt_common/config/uisettings.h
 #include "qt_common/config/qt_config.h"
+========
+#include "qt_common/qt_config.h"
+>>>>>>>> 5a8929cdd1 ([qt] refactor: qt_common lib (#94)):src/qt_common/uisettings.h
 
 using Settings::Category;
 using Settings::ConfirmStop;
@@ -140,6 +144,10 @@ struct Values {
 
     Setting<bool> check_for_updates{linkage, true, "check_for_updates", Category::UiGeneral};
 
+    Setting<bool> enable_global_overrides{linkage, true, "enable_global_overrides", Category::UiGeneral};
+    Setting<bool> auto_update_overrides{linkage, false, "auto_update_overrides", Category::UiGeneral};
+    Setting<bool> overrides_consent_given{linkage, false, "overrides_consent_given", Category::UiGeneral};
+
     // Linux/MinGW may support (requires libdl support)
     SwitchableSetting<bool> enable_gamemode{linkage,
 #ifndef _MSC_VER
@@ -158,7 +166,13 @@ struct Values {
     Setting<bool> enable_discord_presence{linkage, false, "enable_discord_presence", Category::Ui};
 
     // logging
-    Setting<bool> show_console{linkage, false, "showConsole", Category::Ui};
+    Setting<bool> show_console{linkage,
+#ifdef __OPENORBIS__
+        true,
+#else
+        false,
+#endif
+        "showConsole", Category::Ui};
 
     // Screenshots
     Setting<bool> enable_screenshot_save_as{linkage, true, "enable_screenshot_save_as",
@@ -185,14 +199,10 @@ struct Values {
     // multiplayer settings
     Setting<std::string> multiplayer_nickname{linkage, {}, "nickname", Category::Multiplayer};
     Setting<std::string> multiplayer_filter_text{linkage, {}, "filter_text", Category::Multiplayer};
-    Setting<bool> multiplayer_filter_games_owned{linkage, false, "filter_games_owned",
-                                                 Category::Multiplayer};
-    Setting<bool> multiplayer_filter_hide_empty{linkage, false, "filter_games_hide_empty",
-                                                Category::Multiplayer};
-    Setting<bool> multiplayer_filter_hide_full{linkage, false, "filter_games_hide_full",
-                                               Category::Multiplayer};
+    Setting<bool> multiplayer_filter_games_owned{linkage, true, "filter_games_owned", Category::Multiplayer};
+    Setting<bool> multiplayer_filter_public_rooms{linkage, true, "filter_games_public_room", Category::Multiplayer};
     Setting<std::string> multiplayer_ip{linkage, {}, "ip", Category::Multiplayer};
-    Setting<u16, true> multiplayer_port{linkage,    24872,  0,
+    Setting<u16, true> multiplayer_port{linkage, 24872,  0,
                                         UINT16_MAX, "port", Category::Multiplayer};
     Setting<std::string> multiplayer_room_nickname{
         linkage, {}, "room_nickname", Category::Multiplayer};
@@ -263,6 +273,5 @@ Q_DECLARE_METATYPE(Settings::ResolutionSetup);
 Q_DECLARE_METATYPE(Settings::ScalingFilter);
 Q_DECLARE_METATYPE(Settings::AntiAliasing);
 Q_DECLARE_METATYPE(Settings::RendererBackend);
-Q_DECLARE_METATYPE(Settings::AstcRecompression);
 Q_DECLARE_METATYPE(Settings::AstcDecodeMode);
 Q_DECLARE_METATYPE(Settings::SpirvOptimizeMode);

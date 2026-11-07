@@ -16,16 +16,17 @@ set(GLSL_INCLUDES
 set(SHADER_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_vertex_repack.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/astc_decoder.comp
-    ${CMAKE_CURRENT_SOURCE_DIR}/bc_encoder.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/astc_decoder.frag
+    ${CMAKE_CURRENT_SOURCE_DIR}/astc_decoder.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/blit_color_float.frag
-    ${CMAKE_CURRENT_SOURCE_DIR}/blit_color_srgb_to_linear.frag
+    ${CMAKE_CURRENT_SOURCE_DIR}/block_linear_swizzle_2d_buffer.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/block_linear_unswizzle_2d.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/block_linear_unswizzle_2d_buffer.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/blit_color_msaa.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/blit_depth.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/blit_depth_msaa.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/blit_depth_stencil_msaa.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/block_linear_unswizzle_3d.comp
-    ${CMAKE_CURRENT_SOURCE_DIR}/block_linear_unswizzle_3d_bcn.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/convert_abgr8_to_d24s8.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/convert_abgr8_to_x8d24.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/convert_x8d24_to_abgr8.frag
@@ -75,8 +76,8 @@ set(SHADER_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/smaa_blending_weight_calculation.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/smaa_neighborhood_blending.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/smaa_neighborhood_blending.frag
-    ${CMAKE_CURRENT_SOURCE_DIR}/temporal_sharpen.frag
-    ${CMAKE_CURRENT_SOURCE_DIR}/temporal_upscale.frag
+    ${CMAKE_CURRENT_SOURCE_DIR}/ssaa.frag
+    ${CMAKE_CURRENT_SOURCE_DIR}/ssaa.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_blit_depth_stencil.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_color_clear.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_color_clear.vert
@@ -86,10 +87,12 @@ set(SHADER_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_fidelityfx_fsr_easu_fp32.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_fidelityfx_fsr_rcas_fp16.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_fidelityfx_fsr_rcas_fp32.frag
+    ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_indirect_quads.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_present.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_present.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_present_scaleforce_fp16.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_present_scaleforce_fp32.frag
+    ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_block_linear_unswizzle_2d_buffer.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_quad_indexed.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_turbo_mode.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_uint8.comp
@@ -100,7 +103,6 @@ set(SHADER_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/sgsr1_shader_mobile_edge_direction.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/fsr3_optical_flow.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/fsr3_frame_interpolation.comp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dlss_network_probe.comp
 )
 
 if (HAIKUOS)
@@ -225,69 +227,38 @@ foreach(VARIANT IN ITEMS ${SHADER_TYPE_VARIANTS})
     set(SHADER_HEADERS ${SHADER_HEADERS} ${VARIANT_HEADER_FILE})
 endforeach()
 
-# AMD FidelityFX Super Resolution 3.1 upscaler (externals/FidelityFX-SDK, unmodified): the SDK's
-# Vulkan pass files, compiled with one set of options (render-size motion vectors, reversed depth,
-# HDR colour, reference Lanczos), plus the sharpening and the no-wave-operation SPD variants.
-set(FSR3_GPU_DIR ${CMAKE_SOURCE_DIR}/externals/FidelityFX-SDK/include/FidelityFX/gpu)
-set(FSR3_PASS_DIR ${CMAKE_SOURCE_DIR}/externals/FidelityFX-SDK/shaders/fsr3upscaler)
-file(GLOB FSR3_GPU_FILES ${FSR3_GPU_DIR}/*.h ${FSR3_GPU_DIR}/fsr1/*.h ${FSR3_GPU_DIR}/spd/*.h
-     ${FSR3_GPU_DIR}/fsr3upscaler/*.h)
-set(FSR3_FLAGS
-    -DFFX_GPU=1
-    -DFFX_GLSL=1
-    -DFFX_FSR3UPSCALER_OPTION_UPSAMPLE_SAMPLERS_USE_DATA_HALF=0
-    -DFFX_FSR3UPSCALER_OPTION_ACCUMULATE_SAMPLERS_USE_DATA_HALF=0
-    -DFFX_FSR3UPSCALER_OPTION_REPROJECT_SAMPLERS_USE_DATA_HALF=1
-    -DFFX_FSR3UPSCALER_OPTION_POSTPROCESSLOCKSTATUS_SAMPLERS_USE_DATA_HALF=0
-    -DFFX_FSR3UPSCALER_OPTION_UPSAMPLE_USE_LANCZOS_TYPE=2
-    -DFFX_FSR3UPSCALER_OPTION_REPROJECT_USE_LANCZOS_TYPE=0
-    -DFFX_FSR3UPSCALER_OPTION_HDR_COLOR_INPUT=1
-    -DFFX_FSR3UPSCALER_OPTION_LOW_RESOLUTION_MOTION_VECTORS=1
-    -DFFX_FSR3UPSCALER_OPTION_JITTERED_MOTION_VECTORS=0
-    -DFFX_FSR3UPSCALER_OPTION_INVERTED_DEPTH=1
-)
-set(FSR3_VARIANTS
-    "prepare_inputs|prepare_inputs|none"
-    "luma_pyramid|luma_pyramid|none"
-    "luma_pyramid_nowave|luma_pyramid|-DFFX_SPD_NO_WAVE_OPERATIONS=1"
-    "shading_change_pyramid|shading_change_pyramid|none"
-    "shading_change_pyramid_nowave|shading_change_pyramid|-DFFX_SPD_NO_WAVE_OPERATIONS=1"
-    "shading_change|shading_change|none"
-    "prepare_reactivity|prepare_reactivity|none"
-    "luma_instability|luma_instability|none"
-    "accumulate|accumulate|none"
-    "accumulate_sharpen|accumulate|-DFFX_FSR3UPSCALER_OPTION_APPLY_SHARPENING=1"
-    "rcas|rcas|none"
+set(SHADER_DEFINE_VARIANTS
+    "block_linear_unswizzle_2d.comp|nonarrow|HAS_EXTENDED_TYPES=0"
+    "pitch_unswizzle.comp|nonarrow|HAS_EXTENDED_TYPES=0"
+    "block_linear_unswizzle_3d.comp|nonarrow|HAS_EXTENDED_TYPES=0"
 )
 
-foreach(VARIANT IN ITEMS ${FSR3_VARIANTS})
-    string(REPLACE "|" ";" VARIANT_PARTS "${VARIANT}")
-    list(GET VARIANT_PARTS 0 FSR3_NAME)
-    list(GET VARIANT_PARTS 1 FSR3_PASS)
-    list(GET VARIANT_PARTS 2 FSR3_DEFINE)
-    if (FSR3_DEFINE STREQUAL "none")
-        set(FSR3_DEFINE "")
-    endif()
-    if (NOT FSR3_DEFINE MATCHES "APPLY_SHARPENING")
-        list(APPEND FSR3_DEFINE -DFFX_FSR3UPSCALER_OPTION_APPLY_SHARPENING=0)
-    endif()
-    set(FSR3_SOURCE ${FSR3_PASS_DIR}/ffx_fsr3upscaler_${FSR3_PASS}_pass.glsl)
-    string(TOUPPER fsr3_upscaler_${FSR3_NAME}_comp_spv FSR3_VARIABLE_NAME)
-    set(FSR3_HEADER_FILE ${SHADER_DIR}/fsr3_upscaler_${FSR3_NAME}_comp_spv.h)
+foreach(VARIANT IN ITEMS ${SHADER_DEFINE_VARIANTS})
+    string(REPLACE "|" ";" VARIANT_PARTS ${VARIANT})
+    list(GET VARIANT_PARTS 0 VARIANT_FILENAME)
+    list(GET VARIANT_PARTS 1 VARIANT_SUFFIX)
+    list(GET VARIANT_PARTS 2 VARIANT_DEFINE)
+
+    set(VARIANT_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/${VARIANT_FILENAME})
+    get_filename_component(VARIANT_STEM ${VARIANT_FILENAME} NAME_WE)
+    get_filename_component(VARIANT_EXT ${VARIANT_FILENAME} EXT)
+    string(REPLACE "." "" VARIANT_EXT ${VARIANT_EXT})
+    set(VARIANT_NAME ${VARIANT_STEM}_${VARIANT_SUFFIX}_${VARIANT_EXT})
+
+    string(TOUPPER ${VARIANT_NAME}_SPV VARIANT_VARIABLE_NAME)
+    set(VARIANT_HEADER_FILE ${SHADER_DIR}/${VARIANT_NAME}_spv.h)
     add_custom_command(
         OUTPUT
-            ${FSR3_HEADER_FILE}
+            ${VARIANT_HEADER_FILE}
         COMMAND
-            ${GLSLANGVALIDATOR} -V ${QUIET_FLAG} -S comp -I"${FSR3_GPU_DIR}"
-            -I"${FSR3_GPU_DIR}/fsr3upscaler" ${FSR3_FLAGS} ${FSR3_DEFINE}
-            --variable-name ${FSR3_VARIABLE_NAME} -o ${FSR3_HEADER_FILE} ${FSR3_SOURCE}
+            ${GLSLANGVALIDATOR} -V ${QUIET_FLAG} -I"${FIDELITYFX_INCLUDE_DIR}" ${GLSL_FLAGS}
+            -D${VARIANT_DEFINE}
+            --variable-name ${VARIANT_VARIABLE_NAME} -o ${VARIANT_HEADER_FILE} ${VARIANT_SOURCE}
             --target-env ${SPIR_V_VERSION}
         MAIN_DEPENDENCY
-            ${FSR3_SOURCE}
-        DEPENDS
-            ${FSR3_GPU_FILES}
+            ${VARIANT_SOURCE}
     )
-    set(SHADER_HEADERS ${SHADER_HEADERS} ${FSR3_HEADER_FILE})
+    set(SHADER_HEADERS ${SHADER_HEADERS} ${VARIANT_HEADER_FILE})
 endforeach()
 
 foreach(FILEPATH IN ITEMS ${FIDELITYFX_FILES})

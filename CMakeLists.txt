@@ -23,21 +23,33 @@ include(UseCcache)
 include(CMakeDependentOption)
 include(CTest)
 include(CPMUtil)
+include(OpenOrbis)
 
-if (NOT DEFINED ARCHITECTURE)
-    message(FATAL_ERROR "Architecture didn't make it out of scope, did you delete DetectArchitecture.cmake?")
+# TODO(crueter): Make this more automatic.
+if (IOS)
+    list(APPEND CMAKE_FIND_ROOT_PATH "${CMAKE_OSX_SYSROOT_INT}" CACHE INTERNAL "")
+    list(APPEND CMAKE_PROGRAM_PATH "/opt/homebrew/bin" CACHE INTERNAL "")
+
+    set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM BOTH CACHE INTERNAL "")
+    set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH CACHE INTERNAL "")
+    set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH CACHE INTERNAL "")
+    set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH CACHE INTERNAL "")
+
+    list(LENGTH CMAKE_OSX_ARCHITECTURES _arch_len)
+    if (NOT _arch_len EQUAL 1)
+        message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES must contain exactly one architecture.")
+    endif()
+
+    # TODO(crueter): Proper handling for this.
+    if (CMAKE_OSX_ARCHITECTURES STREQUAL arm64)
+        set(CMAKE_SYSTEM_PROCESSOR aarch64)
+    else()
+        set(CMAKE_SYSTEM_PROCESSOR ${CMAKE_OSX_ARCHITECTURES})
+    endif()
 endif()
 
-# Needed for FFmpeg w/ VAAPI and DRM
-if (OPENBSD)
-    # OpenBSD 7.8 broke libcxx when upgrading, so we must define the PSTL backend manually
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -I${CMAKE_SYSROOT}/usr/X11R6/include -D_LIBCPP_PSTL_BACKEND_SERIAL=1")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -I${CMAKE_SYSROOT}/usr/X11R6/include -D_LIBCPP_PSTL_BACKEND_SERIAL=1")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -L${CMAKE_SYSROOT}/usr/X11R6/lib")
-elseif (NETBSD)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -I${CMAKE_SYSROOT}/usr/X11R7/include -I${CMAKE_SYSROOT}/usr/pkg/include/c++/v1")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -I${CMAKE_SYSROOT}/usr/X11R7/include -I${CMAKE_SYSROOT}/usr/pkg/include/c++/v1")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -L${CMAKE_SYSROOT}/usr/X11R7/lib")
+if (CXX_GCC AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "14.0")
+    message(FATAL_ERROR "GCC versions older than 14.0 are not supported. Update your system, or use clang/clang++ instead.")
 endif()
 
 # NetBSD: Fun for the whole family!
@@ -45,7 +57,7 @@ if (NETBSD)
     set(ENV{PKG_CONFIG_PATH} "${PKG_CONFIG_PATH}:${CMAKE_SYSROOT}/usr/pkg/lib/ffmpeg7/pkgconfig")
 endif()
 
-cmake_dependent_option(YUZU_STATIC_ROOM "Build a static room executable only (CI only)" OFF "LINUX" OFF)
+cmake_dependent_option(YUZU_STATIC_ROOM "Build a static room executable only (CI only)" OFF "LINUX OR (APPLE AND NOT IOS)" OFF)
 if (YUZU_STATIC_ROOM)
     set(YUZU_ROOM ON)
     set(YUZU_ROOM_STANDALONE ON)
@@ -53,7 +65,6 @@ if (YUZU_STATIC_ROOM)
     # disable e v e r y t h i n g
     set(ENABLE_QT OFF)
     set(YUZU_CMD OFF)
-    set(ENABLE_CUBEB OFF)
     set(ENABLE_UPDATE_CHECKER OFF)
     set(USE_DISCORD_PRESENCE OFF)
     set(BUILD_TESTING OFF)
@@ -71,11 +82,15 @@ if (YUZU_STATIC_ROOM)
 endif()
 
 # qt stuff
-option(ENABLE_QT "Enable the Qt frontend" ON)
+if (IOS OR ANDROID)
+    set(_default_qt OFF)
+else()
+    set(_default_qt ON)
+endif()
+
+option(ENABLE_QT "Enable the Qt frontend" ${_default_qt})
 option(ENABLE_QT_TRANSLATION "Enable translations for the Qt frontend" OFF)
-option(ENABLE_UPDATE_CHECKER "Enable update checker (for Qt and Android)" OFF)
-set(LICHII_BUILD_TAG "" CACHE STRING "Published build-N release tag; empty for local builds")
-set(LICHII_BUILD_PLATFORM "" CACHE STRING "Release asset platform and variant, such as linux-x86_64-pgo")
+cmake_dependent_option(ENABLE_UPDATE_CHECKER "Enable update checker (for Qt and Android)" OFF "ENABLE_QT OR ANDROID" OFF)
 cmake_dependent_option(YUZU_USE_QT_MULTIMEDIA "Use QtMultimedia for Camera"  OFF "NOT YUZU_USE_BUNDLED_QT" OFF)
 cmake_dependent_option(YUZU_USE_QT_WEB_ENGINE "Use QtWebEngine for web applet implementation" OFF "NOT YUZU_USE_BUNDLED_QT" OFF)
 set(YUZU_QT_MIRROR "" CACHE STRING "What mirror to use for downloading the bundled Qt libraries")
@@ -84,30 +99,10 @@ cmake_dependent_option(YUZU_USE_BUNDLED_QT "Download bundled Qt binaries" "${MSV
 option(ENABLE_DEBUG_TOOLS "Enable debugging tools (maxwell disassembler, SPIRV translator, etc)" OFF)
 option(ENABLE_WERROR "Enable -Werror diagnostics" ON)
 
-# Handle specific -Werror downgrades safely across platforms
-if(ENABLE_WERROR)
-    if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        if(CMAKE_C_FLAGS MATCHES "-Werror=unused")
-            string(REPLACE "-Werror=unused" "-Wno-error=unused" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
-        endif()
-        if(CMAKE_CXX_FLAGS MATCHES "-Werror=unused")
-            string(REPLACE "-Werror=unused" "-Wno-error=unused" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-        endif()
+# Lossless Scaling frame generation.
+option(ENABLE_LSFG "Enable Lossless Scaling frame generation" ON)
 
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-error=unused -Wno-error=unused-function")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=unused -Wno-error=unused-function")
-    elseif(MSVC)
-        # Windows Specifically
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /wd4100 /wd4101")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4100 /wd4101")
-    endif()
-endif()
-
-
-# Lossless Scaling frame generation. Only Android.
-option(ENABLE_LSFG "Enable frame generation (LSFG and FSR 3 Fluid Motion)" ON)
-
-option(ENABLE_RESHADE "Enable ReShade FX post-processing effects" ON)
+cmake_dependent_option(ENABLE_RESHADE "Enable ReShade FX post-processing effects" ON "WIN32 OR ANDROID OR APPLE OR LINUX OR FREEBSD" OFF)
 
 # non-linux bundled qt are static
 if (YUZU_USE_BUNDLED_QT AND (APPLE OR NOT UNIX))
@@ -186,24 +181,12 @@ if (CXX_CLANG_CL)
         $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-reserved-identifier>
         $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-deprecated-declarations>
         $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-cast-function-type-mismatch>
-        $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-c99-extensions>
-        $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-c++17-compat>
-        $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-c++11-compat-reserved-user-defined-literal>
-        $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-c++11-compat-deprecated-writable-strings>
-        $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-c++11-compat-pedantic>
-        $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-c++11-compat>
-        $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-c++0x-compat>
-        $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-c++98-c++11-compat-binary-literal>
-        $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-c++98-compat-pedantic>
-        $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-c++98-compat>
-        $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-c99-compat>
         $<$<COMPILE_LANGUAGE:C,CXX>:/EHsc>)
     # REQUIRED CPU features IN Windows-amd64
     if (ARCHITECTURE_x86_64)
         add_compile_options(
             $<$<COMPILE_LANGUAGE:C,CXX>:-msse4.1>
-            $<$<COMPILE_LANGUAGE:C,CXX>:-mcx16>
-        )
+            $<$<COMPILE_LANGUAGE:C,CXX>:-mcx16>)
     endif()
 endif()
 
@@ -239,10 +222,8 @@ if(MSVC)
 endif()
 
 # TODO(crueter): Cleanup, each dep that has a bundled option should allow to choose between bundled, external, system
-option(ENABLE_CUBEB "Enables the cubeb audio backend" ON)
-
 set(EXT_DEFAULT OFF)
-if (MSVC OR ANDROID)
+if (MSVC OR ANDROID OR IOS)
     set(EXT_DEFAULT ON)
 endif()
 
@@ -254,14 +235,14 @@ cmake_dependent_option(YUZU_USE_EXTERNAL_FFMPEG "Build FFmpeg from external sour
 
 # sirit
 set(BUNDLED_SIRIT_DEFAULT OFF)
-if (MSVC AND NOT (CMAKE_BUILD_TYPE MATCHES "Deb") OR ANDROID)
+if ((MSVC AND NOT (CMAKE_BUILD_TYPE MATCHES "Deb")) OR ANDROID OR IOS)
     set(BUNDLED_SIRIT_DEFAULT ON)
 endif()
 
 option(YUZU_USE_BUNDLED_SIRIT "Download bundled sirit" ${BUNDLED_SIRIT_DEFAULT})
 
 # FreeBSD 15+ has libusb, versions below should disable it
-cmake_dependent_option(ENABLE_LIBUSB "Enable the use of LibUSB" ON "WIN32 OR LINUX OR FREEBSD OR APPLE" OFF)
+cmake_dependent_option(ENABLE_LIBUSB "Enable the use of LibUSB" ON "WIN32 OR LINUX OR FREEBSD OR (APPLE AND NOT IOS)" OFF)
 
 cmake_dependent_option(ENABLE_OPENGL "Enable OpenGL" ON "NOT (WIN32 AND ARCHITECTURE_arm64) AND NOT APPLE AND NOT ANDROID" OFF)
 mark_as_advanced(FORCE ENABLE_OPENGL)
@@ -283,10 +264,10 @@ option(YUZU_LEGACY "Apply patches that improve compatibility with older GPUs (e.
 
 option(NIGHTLY_BUILD "Use Nightly qualifiers in the update checker and build metadata" OFF)
 
-cmake_dependent_option(YUZU_ROOM "Enable dedicated room functionality" ON "NOT ANDROID" OFF)
+cmake_dependent_option(YUZU_ROOM "Enable dedicated room functionality" ON "NOT ANDROID AND NOT IOS" OFF)
 cmake_dependent_option(YUZU_ROOM_STANDALONE "Enable standalone room executable" ON "YUZU_ROOM" OFF)
 
-cmake_dependent_option(YUZU_CMD "Compile the eden-cli executable" ON "NOT ANDROID" OFF)
+cmake_dependent_option(YUZU_CMD "Compile the eden-cli executable" ON "NOT ANDROID AND NOT IOS" OFF)
 
 cmake_dependent_option(YUZU_CRASH_DUMPS "Compile crash dump (Minidump) support" OFF "WIN32 OR LINUX" OFF)
 
@@ -298,7 +279,7 @@ cmake_dependent_option(YUZU_USE_BUNDLED_MOLTENVK "Download bundled MoltenVK lib"
 option(YUZU_DISABLE_LLVM "Disable LLVM (useful for CI)" OFF)
 
 set(DEFAULT_YUZU_USE_BUNDLED_OPENSSL OFF)
-if (EXT_DEFAULT OR SOLARIS OR OPENBSD)
+if (EXT_DEFAULT)
     set(DEFAULT_YUZU_USE_BUNDLED_OPENSSL ON)
 endif()
 
@@ -326,15 +307,27 @@ if (ARCHITECTURE_arm64 AND (ANDROID OR LINUX))
     add_compile_definitions(HAS_NCE=1)
 endif()
 
+set(ENABLE_SCARLETNX_DEFAULT ON)
+if ((NOT LINUX AND NOT FREEBSD) OR (NOT CMAKE_C_COMPILER_ID MATCHES "Clang" OR NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
+    set(ENABLE_SCARLETNX_DEFAULT OFF)
+endif()
+option(ENABLE_SCARLETNX "Enable the ScarletNX recompiler CPU backend (requires Clang and LLVM)" "${ENABLE_SCARLETNX_DEFAULT}")
+if (ENABLE_SCARLETNX)
+    set(HAS_SCARLETNX 1)
+    add_compile_definitions(HAS_SCARLETNX=1)
+endif()
+
 if (YUZU_ROOM)
     add_compile_definitions(YUZU_ROOM)
 endif()
 
 if (UNIX AND NOT (LINUX OR WIN32))
-    if(CXX_APPLE OR CXX_CLANG)
+    if(CXX_APPLE OR (CXX_CLANG AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "20.0"))
         # libc++ has stop_token and jthread as experimental
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fexperimental-library")
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fexperimental-library")
+    elseif(CXX_CLANG)
+        # New clang >=20.0, so do nothing
     else()
         # Uses glibc, mostly?
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_LIBCPP_ENABLE_EXPERIMENTAL=1")
@@ -344,7 +337,12 @@ endif()
 
 # Build/optimization presets
 if (CXX_GCC OR CXX_CLANG)
-    if (ARCHITECTURE_x86_64)
+    # GCC/clang will -mtune=generic by default
+    if ("${YUZU_BUILD_PRESET}" STREQUAL "native" AND NOT ANDROID)
+        add_compile_options(
+            $<$<COMPILE_LANGUAGE:C,CXX>:-march=native>
+            $<$<COMPILE_LANGUAGE:C,CXX>:-mtune=native>)
+    elseif (ARCHITECTURE_x86_64)
         # See https://gcc.gnu.org/onlinedocs/gcc/x86-Options.html
         # Generic supports Pentium Pro instruction set and above
         # TODO: if a value is unknown, pass that as march and mtune
@@ -459,8 +457,20 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
 # Prefer the -pthread flag on Linux.
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
+# It is absolutely promordial to enable on Emscripten
+# Not only this allows to use std::thread and std::jthread without exceptions
+# but it also fixes several issues related to MT operations.
+# ...and CMake doesn't include it by default even when we specify
+# that we prefer the pthread flag; why is that? I don't know.
+if (EMSCRIPTEN)
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-pthread>)
+    add_link_options($<$<COMPILE_LANGUAGE:C,CXX>:-pthread>)
+endif()
 
-find_package(RenderDoc MODULE)
+find_package(RenderDoc MODULE QUIET)
+if (NOT RenderDoc_FOUND)
+    message(WARNING "RenderDoc not found. Some debugging features may be disabled.")
+endif()
 
 # openssl funniness
 if (YUZU_USE_BUNDLED_OPENSSL)
@@ -487,7 +497,12 @@ set(BUILD_TESTING OFF)
 set(ENABLE_TESTING OFF)
 
 # boost
-set(BOOST_INCLUDE_LIBRARIES algorithm icl pool container heap asio headers process filesystem crc variant)
+if (EMSCRIPTEN)
+    set(BOOST_INCLUDE_LIBRARIES algorithm icl pool container heap headers filesystem crc variant)
+    set(BOOST_CONTAINER_HEADER_ONLY ON)
+else()
+    set(BOOST_INCLUDE_LIBRARIES algorithm icl pool container heap asio headers process filesystem crc variant)
+endif()
 
 AddJsonPackage(boost)
 
@@ -498,16 +513,19 @@ set(BOOST_NO_HEADERS ${Boost_ADDED})
 if (Boost_ADDED)
     add_compile_definitions(YUZU_BOOST_v1)
     if (NOT MSVC OR CXX_CLANG)
-        # solaris sucks
-        if (SOLARIS)
+        # boost sucks
+        if (PLATFORM_SUN)
             add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-pthreads>)
         endif()
 
         target_compile_options(boost_heap INTERFACE $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-shadow>)
         target_compile_options(boost_icl INTERFACE $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-shadow>)
-        target_compile_options(boost_asio INTERFACE
-            $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-conversion>
-            $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-implicit-fallthrough>)
+        # May not exist (i.e emscripten)
+        if (TARGET boost_asio)
+            target_compile_options(boost_asio INTERFACE
+                $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-conversion>
+                $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-implicit-fallthrough>)
+        endif()
     endif()
 endif()
 
@@ -541,21 +559,6 @@ if (NOT YUZU_STATIC_ROOM)
 
     if (ZLIB_ADDED)
         add_library(ZLIB::ZLIB ALIAS zlibstatic)
-    endif()
-
-    # Opus
-    AddJsonPackage(opus)
-
-    if (Opus_ADDED)
-        if (MSVC AND CXX_CLANG)
-            target_compile_options(opus PRIVATE
-                $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-implicit-function-declaration>
-            )
-        endif()
-    endif()
-
-    if (NOT TARGET Opus::opus)
-        add_library(Opus::opus ALIAS opus)
     endif()
 endif()
 
@@ -591,9 +594,13 @@ endfunction()
 # Platform-specific library requirements
 # Put these BEFORE EXTERNALS or Boost WILL die
 # =============================================
-
 if (APPLE)
-    foreach(fw Carbon Metal Cocoa IOKit CoreVideo CoreMedia Security UniformTypeIdentifiers Foundation)
+    if (IOS)
+        set(_libs Carbon Metal IOKit CoreVideo CoreMedia Security UniformTypeIdentifiers Foundation)
+    else()
+        set(_libs Carbon Metal Cocoa IOKit CoreVideo CoreMedia Security UniformTypeIdentifiers Foundation)
+    endif()
+    foreach(fw ${_libs})
         find_library(${fw}_LIBRARY ${fw} REQUIRED)
         list(APPEND PLATFORM_LIBRARIES ${${fw}_LIBRARY})
     endforeach()
@@ -655,10 +662,6 @@ if (NOT YUZU_STATIC_ROOM)
         find_package(DiscordRPC)
     endif()
 
-    if (ENABLE_CUBEB)
-        find_package(cubeb)
-    endif()
-
     if (YUZU_TESTS OR DYNARMIC_TESTS)
         find_package(Catch2)
     endif()
@@ -699,8 +702,8 @@ if (ENABLE_QT)
     ## Components ##
 
     # Best practice is to ask for all components at once, so they are from the same version
-    set(YUZU_QT_COMPONENTS Core Widgets Charts Concurrent Gui Network)
-    if (LINUX OR FREEBSD)
+    set(YUZU_QT_COMPONENTS Core Widgets Charts Concurrent Gui)
+    if (NOT WIN32 AND NOT APPLE)
         list(APPEND YUZU_QT_COMPONENTS DBus)
         # yes Qt, we get it
         set(QT_NO_PRIVATE_MODULE_WARNING ON)
@@ -812,16 +815,15 @@ endif()
 
 # TODO: Icon/install handling n such should be put into dist/CMakeLists.txt
 if(ENABLE_QT AND UNIX AND NOT APPLE)
-    install(FILES "dist/io.github.zortos293.lichii.desktop"
+    install(FILES "dist/dev.eden_emu.eden.desktop"
         DESTINATION "share/applications")
-    install(FILES "dist/lichii.png"
-        DESTINATION "share/icons/hicolor/256x256/apps"
-        RENAME "io.github.zortos293.lichii.png")
+    install(FILES "dist/dev.eden_emu.eden.svg"
+        DESTINATION "share/icons/hicolor/scalable/apps")
 
     # TODO: these files need to be updated.
     install(FILES "dist/dev.eden_emu.eden.xml"
         DESTINATION "share/mime/packages")
-    install(FILES "dist/io.github.zortos293.lichii.metainfo.xml"
+    install(FILES "dist/dev.eden_emu.eden.metainfo.xml"
         DESTINATION "share/metainfo")
 endif()
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2014 Citra Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
@@ -120,10 +120,6 @@ namespace VideoCore::Surface {
     PIXEL_FORMAT_ELEM(ETC2_RGB_SRGB, 4, 4, 64) \
     PIXEL_FORMAT_ELEM(ETC2_RGBA_SRGB, 4, 4, 128) \
     PIXEL_FORMAT_ELEM(ETC2_RGB_PTA_SRGB, 4, 4, 64) \
-    PIXEL_FORMAT_ELEM(EAC_R11_UNORM, 4, 4, 64) \
-    PIXEL_FORMAT_ELEM(EAC_R11_SNORM, 4, 4, 64) \
-    PIXEL_FORMAT_ELEM(EAC_R11G11_UNORM, 4, 4, 128) \
-    PIXEL_FORMAT_ELEM(EAC_R11G11_SNORM, 4, 4, 128) \
     /* Depth formats */ \
     PIXEL_FORMAT_ELEM(D32_FLOAT, 1, 1, 32) \
     PIXEL_FORMAT_ELEM(D16_UNORM, 1, 1, 16) \
@@ -135,7 +131,7 @@ namespace VideoCore::Surface {
     PIXEL_FORMAT_ELEM(S8_UINT_D24_UNORM, 1, 1, 32) \
     PIXEL_FORMAT_ELEM(D32_FLOAT_S8_UINT, 1, 1, 64)
 
-enum class PixelFormat : u32 {
+enum class PixelFormat {
 #define PIXEL_FORMAT_ELEM(name, ...) name,
     PIXEL_FORMAT_LIST
 #undef PIXEL_FORMAT_ELEM
@@ -194,34 +190,23 @@ constexpr u32 BitsPerBlock(PixelFormat format) noexcept {
     }
 }
 
+#undef PIXEL_FORMAT_LIST
+
 /// Returns the sizer in bytes of the specified pixel format
 constexpr u32 BytesPerBlock(PixelFormat pixel_format) {
     return BitsPerBlock(pixel_format) / CHAR_BIT;
 }
 
-}
-
-#include "video_core/gpu.h"
-#include "video_core/textures/texture.h"
-
-namespace VideoCore::Surface {
-
 SurfaceTarget SurfaceTargetFromTextureType(Tegra::Texture::TextureType texture_type);
 bool SurfaceTargetIsLayered(SurfaceTarget target);
 bool SurfaceTargetIsArray(SurfaceTarget target);
 PixelFormat PixelFormatFromDepthFormat(Tegra::DepthFormat format);
-// Returns nullopt when the format is not decoded. Callers that compute a byte size from the
-// result must use this and skip the work, because the fallback below guesses 4 bytes per
-// pixel and a wrong guess makes a pitch linear copy read past the end of the source.
-[[nodiscard]] std::optional<PixelFormat> TryPixelFormatFromRenderTargetFormat(
-    Tegra::RenderTargetFormat format);
 PixelFormat PixelFormatFromRenderTargetFormat(Tegra::RenderTargetFormat format);
 PixelFormat PixelFormatFromGPUPixelFormat(Service::android::PixelFormat format);
 SurfaceType GetFormatType(PixelFormat pixel_format);
 bool HasAlpha(PixelFormat pixel_format);
 bool IsPixelFormatASTC(PixelFormat format);
 bool IsPixelFormatBCn(PixelFormat format);
-bool IsPixelFormatETC2(PixelFormat format);
 bool IsPixelFormatSRGB(PixelFormat format);
 bool IsPixelFormatInteger(PixelFormat format);
 bool IsPixelFormatSignedInteger(PixelFormat format);

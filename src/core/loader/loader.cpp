@@ -10,6 +10,7 @@
 #include <string>
 #include <concepts>
 #include <algorithm>
+#include <boost/algorithm/string/case_conv.hpp>
 #include "common/concepts.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
@@ -127,6 +128,10 @@ bool HasApplicationProgramContent(const std::shared_ptr<FileSys::NSP>& nsp) {
 } // namespace
 
 FileType IdentifyFile(FileSys::VirtualFile file) {
+    if (const auto romdir_type =
+            IdentifyFileLoader<AppLoader_DeconstructedRomDirectory>(file)) {
+        return *romdir_type;
+    }
     if (const auto nsp_type = IdentifyFileLoader<AppLoader_NSP>(file)) {
         return *nsp_type;
     } else if (const auto xci_type = IdentifyFileLoader<AppLoader_XCI>(file)) {
@@ -143,9 +148,6 @@ FileType IdentifyFile(FileSys::VirtualFile file) {
         return *kip_type;
     } else if (const auto nso_type = IdentifyFileLoader<AppLoader_NSO>(file)) {
         return *nso_type;
-    } else if (const auto romdir_type =
-                   IdentifyFileLoader<AppLoader_DeconstructedRomDirectory>(file)) {
-        return *romdir_type;
     } else {
         return FileType::Unknown;
     }
@@ -197,8 +199,7 @@ FileType GuessFromFilename(const std::string& name) {
     else if (name == "00")
         return FileType::NCA;
 
-    auto const extension =
-        Common::ToLower(std::string(Common::FS::GetExtensionFromFilename(name)));
+    auto const extension = boost::algorithm::to_lower_copy(std::string(Common::FS::GetExtensionFromFilename(name)));
     if (extension == "nro")
         return FileType::NRO;
     else if (extension == "nso")

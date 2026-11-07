@@ -119,6 +119,7 @@ add_library(shader_recompiler STATIC
     frontend/maxwell/translate/impl/integer_add.cpp
     frontend/maxwell/translate/impl/integer_byte_permute.cpp
     frontend/maxwell/translate/impl/integer_add_three_input.cpp
+    frontend/maxwell/translate/impl/integer_byte_permute.cpp
     frontend/maxwell/translate/impl/integer_compare.cpp
     frontend/maxwell/translate/impl/integer_compare_and_set.cpp
     frontend/maxwell/translate/impl/integer_floating_point_conversion.cpp
@@ -160,6 +161,7 @@ add_library(shader_recompiler STATIC
     frontend/maxwell/translate/impl/texture_gradient.cpp
     frontend/maxwell/translate/impl/texture_load.cpp
     frontend/maxwell/translate/impl/texture_load_swizzled.cpp
+    frontend/maxwell/translate/impl/tensor_mul_add.cpp
     frontend/maxwell/translate/impl/texture_mipmap_level.cpp
     frontend/maxwell/translate/impl/texture_query.cpp
     frontend/maxwell/translate/impl/video_helper.cpp
@@ -194,65 +196,13 @@ add_library(shader_recompiler STATIC
     ir_opt/texture_pass.cpp
     ir_opt/vendor_workaround_pass.cpp
     ir_opt/verification_pass.cpp
-    object_pool.h
     profile.h
     program_header.h
     runtime_info.h
     shader_info.h
-    varying_state.h)
-
-if (ENABLE_OPENGL)
-    target_sources(shader_recompiler PRIVATE
-        backend/glasm/emit_glasm.cpp
-        backend/glasm/emit_glasm.h
-        backend/glasm/emit_glasm_barriers.cpp
-        backend/glasm/emit_glasm_bitwise_conversion.cpp
-        backend/glasm/emit_glasm_composite.cpp
-        backend/glasm/emit_glasm_context_get_set.cpp
-        backend/glasm/emit_glasm_control_flow.cpp
-        backend/glasm/emit_glasm_convert.cpp
-        backend/glasm/emit_glasm_floating_point.cpp
-        backend/glasm/emit_glasm_image.cpp
-        backend/glasm/emit_glasm_instructions.h
-        backend/glasm/emit_glasm_integer.cpp
-        backend/glasm/emit_glasm_logical.cpp
-        backend/glasm/emit_glasm_memory.cpp
-        backend/glasm/emit_glasm_not_implemented.cpp
-        backend/glasm/emit_glasm_select.cpp
-        backend/glasm/emit_glasm_shared_memory.cpp
-        backend/glasm/emit_glasm_special.cpp
-        backend/glasm/emit_glasm_undefined.cpp
-        backend/glasm/emit_glasm_warp.cpp
-        backend/glasm/glasm_emit_context.cpp
-        backend/glasm/glasm_emit_context.h
-        backend/glasm/reg_alloc.cpp
-        backend/glasm/reg_alloc.h
-        backend/glsl/emit_glsl.cpp
-        backend/glsl/emit_glsl.h
-        backend/glsl/emit_glsl_atomic.cpp
-        backend/glsl/emit_glsl_barriers.cpp
-        backend/glsl/emit_glsl_bitwise_conversion.cpp
-        backend/glsl/emit_glsl_composite.cpp
-        backend/glsl/emit_glsl_context_get_set.cpp
-        backend/glsl/emit_glsl_control_flow.cpp
-        backend/glsl/emit_glsl_convert.cpp
-        backend/glsl/emit_glsl_floating_point.cpp
-        backend/glsl/emit_glsl_image.cpp
-        backend/glsl/emit_glsl_instructions.h
-        backend/glsl/emit_glsl_integer.cpp
-        backend/glsl/emit_glsl_logical.cpp
-        backend/glsl/emit_glsl_memory.cpp
-        backend/glsl/emit_glsl_not_implemented.cpp
-        backend/glsl/emit_glsl_select.cpp
-        backend/glsl/emit_glsl_shared_memory.cpp
-        backend/glsl/emit_glsl_special.cpp
-        backend/glsl/emit_glsl_undefined.cpp
-        backend/glsl/emit_glsl_warp.cpp
-        backend/glsl/glsl_emit_context.cpp
-        backend/glsl/glsl_emit_context.h
-        backend/glsl/var_alloc.cpp
-        backend/glsl/var_alloc.h)
-endif()
+    varying_state.h
+    shader_pool.h
+)
 
 target_link_libraries(shader_recompiler PUBLIC common fmt::fmt sirit::sirit)
 
@@ -264,12 +214,11 @@ if (MSVC)
     )
 else()
     target_compile_options(shader_recompiler PRIVATE
-        $<$<COMPILE_LANGUAGE:C,CXX>:-Wconversion>
+        $<$<COMPILE_LANGUAGE:C,CXX>:-Werror=conversion>
         # Bracket depth determines maximum size of a fold expression in Clang since 9c9974c3ccb6.
         # And this in turns limits the size of a std::array.
         $<$<CXX_COMPILER_ID:Clang>:-fbracket-depth=1024>
-        $<$<CXX_COMPILER_ID:AppleClang>:-fbracket-depth=1024>
-    )
+        $<$<CXX_COMPILER_ID:AppleClang>:-fbracket-depth=1024>)
 endif()
 
 create_target_directory_groups(shader_recompiler)

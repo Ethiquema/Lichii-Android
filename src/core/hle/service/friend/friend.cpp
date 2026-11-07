@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <queue>
 #include "common/logging.h"
 #include "common/uuid.h"
@@ -11,137 +12,37 @@
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/service/acc/errors.h"
 #include "core/hle/service/friend/friend.h"
-#include "core/hle/service/friend/friend_interface.h"
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/kernel_helpers.h"
+#include "core/hle/service/nx2_stub_interface.h"
 #include "core/hle/service/server_manager.h"
 
 namespace Service::Friend {
+
+class Friend final : public Module::Interface {
+public:
+    explicit Friend(std::shared_ptr<Module> module_, Core::System& system_, const char* name) : Interface(std::move(module_), system_, name) {}
+    ~Friend() override = default;
+
+    std::optional<FunctionInfoBase> FindRequest(u32 key) override {
+        return HandlerTableGenerateWithFind(key, functions);
+    }
+    static constexpr auto functions = CreateStaticMap(
+        FunctionInfo{0, &Friend::CreateFriendService, "CreateFriendService"},
+        FunctionInfo{1, &Friend::CreateNotificationService, "CreateNotificationService"},
+        FunctionInfo{2, nullptr, "CreateDaemonSuspendSessionService"}
+    );
+};
 
 class IFriendService final : public ServiceFramework<IFriendService> {
 public:
     explicit IFriendService(Core::System& system_)
         : ServiceFramework{system_, "IFriendService"}, service_context{system, "IFriendService"} {
-        // clang-format off
-        static const FunctionInfo functions[] = {
-            {0, &IFriendService::GetCompletionEvent, "GetCompletionEvent"},
-            {1, &IFriendService::Cancel, "Cancel"},
-            {10100, nullptr, "GetFriendListIds"},
-            {10101, &IFriendService::GetFriendList, "GetFriendList"},
-            {10102, nullptr, "UpdateFriendInfo"},
-            {10110, nullptr, "GetFriendProfileImage"},
-            {10111, nullptr, "GetFriendProfileImageWithImageSize"}, // 18.0.0+
-            {10120, &IFriendService::CheckFriendListAvailability, "CheckFriendListAvailability"},
-            {10121, nullptr, "EnsureFriendListAvailable"},
-            {10200, nullptr, "SendFriendRequestForApplication"},
-            {10211, nullptr, "AddFacedFriendRequestForApplication"},
-            {10400, &IFriendService::GetBlockedUserListIds, "GetBlockedUserListIds"},
-            {10420, &IFriendService::CheckBlockedUserListAvailability, "CheckBlockedUserListAvailability"},
-            {10421, nullptr, "EnsureBlockedUserListAvailable"},
-            {10500, nullptr, "GetProfileList"},
-            {10501, nullptr, "GetProfileListV2"}, // 18.0.0+
-            {10600, nullptr, "DeclareOpenOnlinePlaySession"},
-            {10601, &IFriendService::DeclareCloseOnlinePlaySession, "DeclareCloseOnlinePlaySession"},
-            {10610, &IFriendService::UpdateUserPresence, "UpdateUserPresence"},
-            {10700, &IFriendService::GetPlayHistoryRegistrationKey, "GetPlayHistoryRegistrationKey"},
-            {10701, nullptr, "GetPlayHistoryRegistrationKeyWithNetworkServiceAccountId"},
-            {10702, nullptr, "AddPlayHistory"},
-            {11000, nullptr, "GetProfileImageUrl"},
-            {11001, nullptr, "GetProfileImageUrlV2"}, // 18.0.0+
-            {20100, &IFriendService::GetFriendCount, "GetFriendCount"},
-            {20101, &IFriendService::GetNewlyFriendCount, "GetNewlyFriendCount"},
-            {20102, nullptr, "GetFriendDetailedInfo"},
-            {20103, nullptr, "SyncFriendList"},
-            {20104, &IFriendService::RequestSyncFriendList, "RequestSyncFriendList"},
-            {20105, &IFriendService::GetFriendListForViewer, "GetFriendListForViewerV1"},
-            {20106, nullptr, "UpdateFriendInfoForViewerV1"},
-            {20107, nullptr, "GetFriendDetailedInfoV2"}, // 20.0.0+
-            {20108, &IFriendService::GetFriendListForViewer, "GetFriendListForViewerV2"}, // 22.0.0+
-            {20109, nullptr, "UpdateFriendInfoForViewerV2"}, // 22.0.0+
-            {20110, nullptr, "LoadFriendSettingV1"},
-            {20111, nullptr, "LoadFriendSettingV2"}, // 22.0.0+
-            {20200, &IFriendService::GetReceivedFriendRequestCount, "GetReceivedFriendRequestCount"},
-            {20201, nullptr, "GetFriendRequestListV1"},
-            {20202, nullptr, "GetFriendRequestListV2"}, // 20.0.0+
-            {20203, nullptr, "GetFriendRequestReceivedNotificationCount"}, // 22.0.0+
-            {20300, nullptr, "GetFriendCandidateList"},
-            {20301, nullptr, "GetNintendoNetworkIdInfo"},
-            {20302, nullptr, "GetSnsAccountLinkage"}, // 5.0.0-19.0.1
-            {20303, nullptr, "GetSnsAccountProfile"}, // 5.0.0-19.0.1
-            {20304, nullptr, "GetSnsAccountFriendList"}, // 5.0.0-19.0.1
-            {20400, nullptr, "GetBlockedUserListV1"},
-            {20401, nullptr, "SyncBlockedUserList"},
-            {20402, nullptr, "GetBlockedUserListV2"}, // 20.0.0+
-            {20500, nullptr, "GetProfileExtraListV1"},
-            {20501, nullptr, "GetRelationship"},
-            {20502, nullptr, "GetProfileExtraListV2"}, // 19.0.0+
-            {20600, &IFriendService::GetUserPresenceView, "GetUserPresenceViewV1"},
-            {20601, &IFriendService::GetUserPresenceView, "GetUserPresenceViewV2"}, // 19.0.0+
-            {20700, nullptr, "GetPlayHistoryListV1"},
-            {20701, &IFriendService::GetPlayHistoryStatistics, "GetPlayHistoryStatistics"},
-            {20702, nullptr, "GetPlayHistoryListV2"}, // 19.0.0+
-            {20800, &IFriendService::LoadUserSetting, "LoadUserSettingV1"},
-            {20801, nullptr, "SyncUserSetting"},
-            {20802, &IFriendService::LoadUserSetting, "LoadUserSettingV2"}, // 19.0.0+
-            {20900, &IFriendService::RequestListSummaryOverlayNotification, "RequestListSummaryOverlayNotification"},
-            {21000, nullptr, "GetExternalApplicationCatalog"},
-            {22000, nullptr, "GetReceivedFriendInvitationListV1"},
-            {22001, nullptr, "GetReceivedFriendInvitationDetailedInfoV1"},
-            {22002, nullptr, "GetReceivedFriendInvitationListV2"}, // 19.0.0+
-            {22003, nullptr, "GetReceivedFriendInvitationDetailedInfoV2"}, // 19.0.0+
-            {22010, &IFriendService::GetReceivedFriendInvitationCountCache, "GetReceivedFriendInvitationCountCache"},
-            {30100, nullptr, "DropFriendNewlyFlags"},
-            {30101, nullptr, "DeleteFriend"},
-            {30110, nullptr, "DropFriendNewlyFlag"},
-            {30120, nullptr, "ChangeFriendFavoriteFlag"},
-            {30121, nullptr, "ChangeFriendOnlineNotificationFlag"},
-            {30130, nullptr, "SetFriendNote"}, // 22.0.0+
-            {30131, nullptr, "RequestUploadPendingNote"}, // 22.0.0+
-            {30190, nullptr, "RequestSyncLocalUpdates"}, // 22.0.0+
-            {30200, nullptr, "SendFriendRequest"},
-            {30201, nullptr, "SendFriendRequestWithApplicationInfoV1"},
-            {30202, nullptr, "CancelFriendRequest"},
-            {30203, nullptr, "AcceptFriendRequest"},
-            {30204, nullptr, "RejectFriendRequest"},
-            {30205, nullptr, "ReadFriendRequest"},
-            {30210, nullptr, "GetFacedFriendRequestRegistrationKey"},
-            {30211, nullptr, "AddFacedFriendRequest"},
-            {30212, nullptr, "CancelFacedFriendRequest"},
-            {30213, nullptr, "GetFacedFriendRequestProfileImage"},
-            {30214, nullptr, "GetFacedFriendRequestProfileImageFromPath"},
-            {30215, nullptr, "SendFriendRequestWithExternalApplicationCatalogId"},
-            {30216, nullptr, "ResendFacedFriendRequest"},
-            {30217, nullptr, "SendFriendRequestWithNintendoNetworkIdInfo"},
-            {30218, nullptr, "SendFriendRequestWithApplicationInfoV2"}, // 20.0.0+
-            {30300, nullptr, "GetSnsAccountLinkPageUrl"}, // 5.0.0-19.0.1
-            {30301, nullptr, "UnlinkSnsAccount"}, // 5.0.0-19.0.1
-            {30400, nullptr, "BlockUser"},
-            {30401, nullptr, "BlockUserWithApplicationInfoV1"},
-            {30402, nullptr, "UnblockUser"},
-            {30403, nullptr, "BlockUserWithApplicationInfoV2"}, // 20.0.0+
-            {30500, nullptr, "GetProfileExtraFromFriendCodeV1"},
-            {30501, nullptr, "GetProfileExtraFromFriendCodeV2"}, // 19.0.0+
-            {30700, nullptr, "DeletePlayHistory"},
-            {30701, nullptr, "AddPlayHistoryWithApplication"}, // 19.0.0+
-            {30810, nullptr, "ChangePresencePermission"},
-            {30811, nullptr, "ChangeFriendRequestReception"},
-            {30812, nullptr, "ChangePlayLogPermission"},
-            {30820, nullptr, "IssueFriendCode"},
-            {30830, nullptr, "ClearPlayLog"},
-            {30900, nullptr, "SendFriendInvitationV1"},
-            {30901, nullptr, "SendFriendInvitationV2"}, // 19.0.0+
-            {30910, nullptr, "ReadFriendInvitation"},
-            {30911, nullptr, "ReadAllFriendInvitations"},
-            {31000, nullptr, "OpenUser"}, // 19.0.0+
-            {40100, nullptr, "DeleteFriendListCache"},
-            {40400, nullptr, "DeleteBlockedUserListCache"},
-            {49900, nullptr, "DeleteNetworkServiceAccountCache"},
-        };
-        // clang-format on
-
-        RegisterHandlers(functions);
-
         completion_event = service_context.CreateEvent("IFriendService:CompletionEvent");
+    }
+
+    std::optional<FunctionInfoBase> FindRequest(u32 key) override {
+        return HandlerTableGenerateWithFind(key, functions);
     }
 
     ~IFriendService() override {
@@ -367,27 +268,134 @@ private:
         rb.Push(0);
     }
 
+    static constexpr auto functions = CreateStaticMap(
+        FunctionInfo{0, &IFriendService::GetCompletionEvent, "GetCompletionEvent"},
+        FunctionInfo{1, &IFriendService::Cancel, "Cancel"},
+        FunctionInfo{10100, nullptr, "GetFriendListIds"},
+        FunctionInfo{10101, &IFriendService::GetFriendList, "GetFriendList"},
+        FunctionInfo{10102, nullptr, "UpdateFriendInfo"},
+        FunctionInfo{10110, nullptr, "GetFriendProfileImage"},
+        FunctionInfo{10111, nullptr, "GetFriendProfileImageWithImageSize", MakeVersionGate({18,0,0})},
+        FunctionInfo{10120, &IFriendService::CheckFriendListAvailability, "CheckFriendListAvailability"},
+        FunctionInfo{10121, nullptr, "EnsureFriendListAvailable"},
+        FunctionInfo{10200, nullptr, "SendFriendRequestForApplication"},
+        FunctionInfo{10211, nullptr, "AddFacedFriendRequestForApplication"},
+        FunctionInfo{10400, &IFriendService::GetBlockedUserListIds, "GetBlockedUserListIds"},
+        FunctionInfo{10420, &IFriendService::CheckBlockedUserListAvailability, "CheckBlockedUserListAvailability"},
+        FunctionInfo{10421, nullptr, "EnsureBlockedUserListAvailable"},
+        FunctionInfo{10500, nullptr, "GetProfileList"},
+        FunctionInfo{10501, nullptr, "GetProfileListV2", MakeVersionGate({18,0,0})},
+        FunctionInfo{10600, nullptr, "DeclareOpenOnlinePlaySession"},
+        FunctionInfo{10601, &IFriendService::DeclareCloseOnlinePlaySession, "DeclareCloseOnlinePlaySession"},
+        FunctionInfo{10610, &IFriendService::UpdateUserPresence, "UpdateUserPresence"},
+        FunctionInfo{10700, &IFriendService::GetPlayHistoryRegistrationKey, "GetPlayHistoryRegistrationKey"},
+        FunctionInfo{10701, nullptr, "GetPlayHistoryRegistrationKeyWithNetworkServiceAccountId"},
+        FunctionInfo{10702, nullptr, "AddPlayHistory"},
+        FunctionInfo{11000, nullptr, "GetProfileImageUrl"},
+        FunctionInfo{11001, nullptr, "GetProfileImageUrlV2", MakeVersionGate({18,0,0})},
+        FunctionInfo{20100, &IFriendService::GetFriendCount, "GetFriendCount"},
+        FunctionInfo{20101, &IFriendService::GetNewlyFriendCount, "GetNewlyFriendCount"},
+        FunctionInfo{20102, nullptr, "GetFriendDetailedInfo"},
+        FunctionInfo{20103, nullptr, "SyncFriendList"},
+        FunctionInfo{20104, &IFriendService::RequestSyncFriendList, "RequestSyncFriendList"},
+        FunctionInfo{20105, &IFriendService::GetFriendListForViewer, "GetFriendListForViewerV1"},
+        FunctionInfo{20106, nullptr, "UpdateFriendInfoForViewerV1"},
+        FunctionInfo{20107, nullptr, "GetFriendDetailedInfoV2", MakeVersionGate({20,0,0})},
+        FunctionInfo{20108, &IFriendService::GetFriendListForViewer, "GetFriendListForViewerV2", MakeVersionGate({22,0,0})},
+        FunctionInfo{20109, nullptr, "UpdateFriendInfoForViewerV2", MakeVersionGate({22,0,0})},
+        FunctionInfo{20110, nullptr, "LoadFriendSettingV1"},
+        FunctionInfo{20111, nullptr, "LoadFriendSettingV2", MakeVersionGate({22,0,0})},
+        FunctionInfo{20200, &IFriendService::GetReceivedFriendRequestCount, "GetReceivedFriendRequestCount"},
+        FunctionInfo{20201, nullptr, "GetFriendRequestListV1"},
+        FunctionInfo{20202, nullptr, "GetFriendRequestListV2", MakeVersionGate({20,0,0})},
+        FunctionInfo{20203, nullptr, "GetFriendRequestReceivedNotificationCount", MakeVersionGate({22,0,0})},
+        FunctionInfo{20300, nullptr, "GetFriendCandidateList"},
+        FunctionInfo{20301, nullptr, "GetNintendoNetworkIdInfo"},
+        FunctionInfo{20302, nullptr, "GetSnsAccountLinkage", MakeVersionGate({5,0,0}, {19,0,1})},
+        FunctionInfo{20303, nullptr, "GetSnsAccountProfile", MakeVersionGate({5,0,0}, {19,0,1})},
+        FunctionInfo{20304, nullptr, "GetSnsAccountFriendList", MakeVersionGate({5,0,0}, {19,0,1})},
+        FunctionInfo{20400, nullptr, "GetBlockedUserListV1"},
+        FunctionInfo{20401, nullptr, "SyncBlockedUserList"},
+        FunctionInfo{20402, nullptr, "GetBlockedUserListV2", MakeVersionGate({20,0,0})},
+        FunctionInfo{20500, nullptr, "GetProfileExtraListV1"},
+        FunctionInfo{20501, nullptr, "GetRelationship"},
+        FunctionInfo{20502, nullptr, "GetProfileExtraListV2", MakeVersionGate({19,0,0})},
+        FunctionInfo{20600, &IFriendService::GetUserPresenceView, "GetUserPresenceViewV1"},
+        FunctionInfo{20601, &IFriendService::GetUserPresenceView, "GetUserPresenceViewV2", MakeVersionGate({19,0,0})},
+        FunctionInfo{20700, nullptr, "GetPlayHistoryListV1"},
+        FunctionInfo{20701, &IFriendService::GetPlayHistoryStatistics, "GetPlayHistoryStatistics"},
+        FunctionInfo{20702, nullptr, "GetPlayHistoryListV2", MakeVersionGate({19,0,0})},
+        FunctionInfo{20800, &IFriendService::LoadUserSetting, "LoadUserSettingV1"},
+        FunctionInfo{20801, nullptr, "SyncUserSetting"},
+        FunctionInfo{20802, &IFriendService::LoadUserSetting, "LoadUserSettingV2", MakeVersionGate({19,0,0})},
+        FunctionInfo{20900, &IFriendService::RequestListSummaryOverlayNotification, "RequestListSummaryOverlayNotification"},
+        FunctionInfo{21000, nullptr, "GetExternalApplicationCatalog"},
+        FunctionInfo{22000, nullptr, "GetReceivedFriendInvitationListV1"},
+        FunctionInfo{22001, nullptr, "GetReceivedFriendInvitationDetailedInfoV1"},
+        FunctionInfo{22002, nullptr, "GetReceivedFriendInvitationListV2", MakeVersionGate({19,0,0})},
+        FunctionInfo{22003, nullptr, "GetReceivedFriendInvitationDetailedInfoV2", MakeVersionGate({19,0,0})},
+        FunctionInfo{22010, &IFriendService::GetReceivedFriendInvitationCountCache, "GetReceivedFriendInvitationCountCache"},
+        FunctionInfo{30100, nullptr, "DropFriendNewlyFlags"},
+        FunctionInfo{30101, nullptr, "DeleteFriend"},
+        FunctionInfo{30110, nullptr, "DropFriendNewlyFlag"},
+        FunctionInfo{30120, nullptr, "ChangeFriendFavoriteFlag"},
+        FunctionInfo{30121, nullptr, "ChangeFriendOnlineNotificationFlag"},
+        FunctionInfo{30130, nullptr, "SetFriendNote", MakeVersionGate({22,0,0})},
+        FunctionInfo{30131, nullptr, "RequestUploadPendingNote", MakeVersionGate({22,0,0})},
+        FunctionInfo{30190, nullptr, "RequestSyncLocalUpdates", MakeVersionGate({22,0,0})},
+        FunctionInfo{30200, nullptr, "SendFriendRequest"},
+        FunctionInfo{30201, nullptr, "SendFriendRequestWithApplicationInfoV1"},
+        FunctionInfo{30202, nullptr, "CancelFriendRequest"},
+        FunctionInfo{30203, nullptr, "AcceptFriendRequest"},
+        FunctionInfo{30204, nullptr, "RejectFriendRequest"},
+        FunctionInfo{30205, nullptr, "ReadFriendRequest"},
+        FunctionInfo{30210, nullptr, "GetFacedFriendRequestRegistrationKey"},
+        FunctionInfo{30211, nullptr, "AddFacedFriendRequest"},
+        FunctionInfo{30212, nullptr, "CancelFacedFriendRequest"},
+        FunctionInfo{30213, nullptr, "GetFacedFriendRequestProfileImage"},
+        FunctionInfo{30214, nullptr, "GetFacedFriendRequestProfileImageFromPath"},
+        FunctionInfo{30215, nullptr, "SendFriendRequestWithExternalApplicationCatalogId"},
+        FunctionInfo{30216, nullptr, "ResendFacedFriendRequest"},
+        FunctionInfo{30217, nullptr, "SendFriendRequestWithNintendoNetworkIdInfo"},
+        FunctionInfo{30218, nullptr, "SendFriendRequestWithApplicationInfoV2", MakeVersionGate({20,0,0})},
+        FunctionInfo{30300, nullptr, "GetSnsAccountLinkPageUrl", MakeVersionGate({5,0,0}, {19,0,1})},
+        FunctionInfo{30301, nullptr, "UnlinkSnsAccount", MakeVersionGate({5,0,0}, {19,0,1})},
+        FunctionInfo{30400, nullptr, "BlockUser"},
+        FunctionInfo{30401, nullptr, "BlockUserWithApplicationInfoV1"},
+        FunctionInfo{30402, nullptr, "UnblockUser"},
+        FunctionInfo{30403, nullptr, "BlockUserWithApplicationInfoV2", MakeVersionGate({20,0,0})},
+        FunctionInfo{30500, nullptr, "GetProfileExtraFromFriendCodeV1"},
+        FunctionInfo{30501, nullptr, "GetProfileExtraFromFriendCodeV2", MakeVersionGate({19,0,0})},
+        FunctionInfo{30700, nullptr, "DeletePlayHistory"},
+        FunctionInfo{30701, nullptr, "AddPlayHistoryWithApplication", MakeVersionGate({19,0,0})},
+        FunctionInfo{30810, nullptr, "ChangePresencePermission"},
+        FunctionInfo{30811, nullptr, "ChangeFriendRequestReception"},
+        FunctionInfo{30812, nullptr, "ChangePlayLogPermission"},
+        FunctionInfo{30820, nullptr, "IssueFriendCode"},
+        FunctionInfo{30830, nullptr, "ClearPlayLog"},
+        FunctionInfo{30900, nullptr, "SendFriendInvitationV1"},
+        FunctionInfo{30901, nullptr, "SendFriendInvitationV2", MakeVersionGate({19,0,0})},
+        FunctionInfo{30910, nullptr, "ReadFriendInvitation"},
+        FunctionInfo{30911, nullptr, "ReadAllFriendInvitations"},
+        FunctionInfo{31000, nullptr, "OpenUser", MakeVersionGate({19,0,0})},
+        FunctionInfo{40100, nullptr, "DeleteFriendListCache"},
+        FunctionInfo{40400, nullptr, "DeleteBlockedUserListCache"},
+        FunctionInfo{49900, nullptr, "DeleteNetworkServiceAccountCache"}
+    );
     KernelHelpers::ServiceContext service_context;
-
     Kernel::KEvent* completion_event;
 };
 
 class INotificationService final : public ServiceFramework<INotificationService> {
 public:
     explicit INotificationService(Core::System& system_, Common::UUID uuid_)
-        : ServiceFramework{system_, "INotificationService"}, uuid{uuid_},
-          service_context{system_, "INotificationService"} {
-        // clang-format off
-        static const FunctionInfo functions[] = {
-            {0, &INotificationService::GetEvent, "GetEvent"},
-            {1, &INotificationService::Clear, "Clear"},
-            {2, &INotificationService::Pop, "Pop"}
-        };
-        // clang-format on
-
-        RegisterHandlers(functions);
-
+        : ServiceFramework{system_, "INotificationService"}, uuid{uuid_}
+        , service_context{system_, "INotificationService"} {
         notification_event = service_context.CreateEvent("INotificationService:NotifyEvent");
+    }
+
+    std::optional<FunctionInfoBase> FindRequest(u32 key) override {
+        return HandlerTableGenerateWithFind(key, functions);
     }
 
     ~INotificationService() override {
@@ -465,9 +473,13 @@ private:
         bool has_received_friend_request;
     };
 
+    static constexpr auto functions = CreateStaticMap(
+        FunctionInfo{0, &INotificationService::GetEvent, "GetEvent"},
+        FunctionInfo{1, &INotificationService::Clear, "Clear"},
+        FunctionInfo{2, &INotificationService::Pop, "Pop"}
+    );
     Common::UUID uuid;
     KernelHelpers::ServiceContext service_context;
-
     Kernel::KEvent* notification_event;
     std::queue<SizedNotificationInfo> notifications;
     States states{};
@@ -501,109 +513,184 @@ class IServiceForApplication final : public ServiceFramework<IServiceForApplicat
 public:
     explicit IServiceForApplication(Core::System& system_)
         : ServiceFramework{system_, "nd:app"}
-    {
-        static const FunctionInfo functions[] = {
-            {0, nullptr, "GetReceivableNeighborInfoCountMax"},
-            {10, nullptr, "IsNeighborDetectionEnabled"},
-        };
-        RegisterHandlers(functions);
+    {}
+
+    std::optional<FunctionInfoBase> FindRequest(u32 key) override {
+        return HandlerTableGenerateWithFind(key, functions);
     }
+
+    static constexpr auto functions = CreateStaticMap(
+        FunctionInfo{0, nullptr, "GetReceivableNeighborInfoCountMax"},
+        FunctionInfo{10, nullptr, "IsNeighborDetectionEnabled"}
+    );
 };
 
 class IServiceForSystem final : public ServiceFramework<IServiceForSystem> {
 public:
     explicit IServiceForSystem(Core::System& system_)
         : ServiceFramework{system_, "nd:sys"}
-    {
-        static const FunctionInfo functions[] = {
-            {0, nullptr, "GetReceivableNeighborInfoCountMax"},
-            {10, nullptr, "IsNeighborDetectionEnabled"},
-            {200, nullptr, "SetSystemData"},
-            {201, nullptr, "ClearSystemData"},
-            {203, nullptr, "GetReceivableNeighborInfoCountForSystem"},
-            {204, nullptr, "ReceiveNeighborInfoForSystem"},
-            {205, nullptr, "SetSender"},
-            {206, nullptr, "GetSender"},
-            {207, nullptr, "CreateScannerForSystem"},
-            {208, nullptr, "CreateReceiveEventHolderForSystem"},
-            {223, nullptr, "EnableNeighborDetection"},
-            {224, nullptr, "DisableNeighborDetection"},
-            {226, nullptr, "EnablePowerSave"},
-            {227, nullptr, "DisablePowerSave"},
-            {228, nullptr, "IsPowerSaveEnabled"},
-            {232, nullptr, "ClearBlockedUsers"},
-            {233, nullptr, "GetBlockedUserCount"},
-            {234, nullptr, "BlockUserByLocalUserId"},
-            {235, nullptr, "BlockUserByNetworkUserId"},
-            {236, nullptr, "UnblockUserByLocalUserId"},
-            {237, nullptr, "UnblockUserByNetworkUserId"},
-            {240, nullptr, "DeleteApplication"},
-            {250, nullptr, "InitializeApplicationInfo"},
-            {260, nullptr, "CreateAccountSystemSaveDataAccessSuppressor"},
-            {300, nullptr, "AddReceivedNeighborInfoForSystemForDebug"},
-            {301, nullptr, "GetSendDataForDebug"},
-            {302, nullptr, "ClearReceiveCounterForDebug"},
-            {303, nullptr, "GetNextReceiveCounterForDebug"},
-            {304, nullptr, "ListBlockedUsersForDebug"},
-            {305, nullptr, "RefreshSendDataIdForDebug"},
-            {306, nullptr, "ReloadFwdbgSettingsForDebug"},
-            {307, nullptr, "EnableApplicationForDebug"},
-            {308, nullptr, "GetNextReceiveCountersForDebug"},
-            {309, nullptr, "ListApplicationInfoForDebug"},
-            {310, nullptr, "SetApplicationDataForDebug"},
-            {400, nullptr, "GetNetworkUserId"},
-            {401, nullptr, "DeleteNetworkUserId"},
-        };
-        RegisterHandlers(functions);
+    {}
+
+    std::optional<FunctionInfoBase> FindRequest(u32 key) override {
+        return HandlerTableGenerateWithFind(key, functions);
     }
+
+    static constexpr auto functions = CreateStaticMap(
+        FunctionInfo{0, nullptr, "GetReceivableNeighborInfoCountMax"},
+        FunctionInfo{10, nullptr, "IsNeighborDetectionEnabled"},
+        FunctionInfo{200, nullptr, "SetSystemData"},
+        FunctionInfo{201, nullptr, "ClearSystemData"},
+        FunctionInfo{203, nullptr, "GetReceivableNeighborInfoCountForSystem"},
+        FunctionInfo{204, nullptr, "ReceiveNeighborInfoForSystem"},
+        FunctionInfo{205, nullptr, "SetSender"},
+        FunctionInfo{206, nullptr, "GetSender"},
+        FunctionInfo{207, nullptr, "CreateScannerForSystem"},
+        FunctionInfo{208, nullptr, "CreateReceiveEventHolderForSystem"},
+        FunctionInfo{223, nullptr, "EnableNeighborDetection"},
+        FunctionInfo{224, nullptr, "DisableNeighborDetection"},
+        FunctionInfo{226, nullptr, "EnablePowerSave"},
+        FunctionInfo{227, nullptr, "DisablePowerSave"},
+        FunctionInfo{228, nullptr, "IsPowerSaveEnabled"},
+        FunctionInfo{232, nullptr, "ClearBlockedUsers"},
+        FunctionInfo{233, nullptr, "GetBlockedUserCount"},
+        FunctionInfo{234, nullptr, "BlockUserByLocalUserId"},
+        FunctionInfo{235, nullptr, "BlockUserByNetworkUserId"},
+        FunctionInfo{236, nullptr, "UnblockUserByLocalUserId"},
+        FunctionInfo{237, nullptr, "UnblockUserByNetworkUserId"},
+        FunctionInfo{240, nullptr, "DeleteApplication"},
+        FunctionInfo{250, nullptr, "InitializeApplicationInfo"},
+        FunctionInfo{260, nullptr, "CreateAccountSystemSaveDataAccessSuppressor"},
+        FunctionInfo{300, nullptr, "AddReceivedNeighborInfoForSystemForDebug"},
+        FunctionInfo{301, nullptr, "GetSendDataForDebug"},
+        FunctionInfo{302, nullptr, "ClearReceiveCounterForDebug"},
+        FunctionInfo{303, nullptr, "GetNextReceiveCounterForDebug"},
+        FunctionInfo{304, nullptr, "ListBlockedUsersForDebug"},
+        FunctionInfo{305, nullptr, "RefreshSendDataIdForDebug"},
+        FunctionInfo{306, nullptr, "ReloadFwdbgSettingsForDebug"},
+        FunctionInfo{307, nullptr, "EnableApplicationForDebug"},
+        FunctionInfo{308, nullptr, "GetNextReceiveCountersForDebug"},
+        FunctionInfo{309, nullptr, "ListApplicationInfoForDebug"},
+        FunctionInfo{310, nullptr, "SetApplicationDataForDebug"},
+        FunctionInfo{400, nullptr, "GetNetworkUserId"},
+        FunctionInfo{401, nullptr, "DeleteNetworkUserId"}
+    );
 };
 
-// Session returned by chat:u 0. Command 1 hands back a handle the title waits on, so it gets an
-// event that is never signalled; everything else falls through to the nx2 auto stub.
+// Session returned by chat:u 0 and 1 (nn::chat::IUserShimScopedObject). Command 1 hands back a
+// handle the title waits on; 2-4 attach to the room info, local camera image processing mode and
+// local camera zoom change events (Switchbrew: no input, an event out). None of them fires outside
+// a GameChat room, so each gets the never-signalled stub event. The other named commands answer 0;
+// everything else falls through to the nx2 auto stub.
 class IChatSession final : public ServiceFramework<IChatSession> {
 public:
-    explicit IChatSession(Core::System& system_)
-        : ServiceFramework{system_, "nx2:chat:u::0"}, service_context{system_, "IChatSession"} {
+    explicit IChatSession(Core::System& system_) : ServiceFramework{system_, "nx2:chat:u::0"} {
         static const FunctionInfo functions[] = {
-            {1, &IChatSession::GetEvent, "GetEvent (guessed)"},
+            {1, &IChatSession::StubReplyEvent, "GetEvent (guessed)"},
+            {2, &IChatSession::StubReplyEvent, "AttachToRoomInfoChangedEvent"},
+            {3, &IChatSession::StubReplyEvent, "AttachToLocalCameraImageProcessingModeChangedEvent"},
+            {4, &IChatSession::StubReplyEvent, "AttachToLocalCameraZoomMagnificationChangedEvent"},
+            {10, &IChatSession::StubReplyZeroed, "StartLocalCameraStreaming"},
+            {11, &IChatSession::StubReplyZeroed, "StopLocalCameraStreaming"},
+            {20, &IChatSession::StubReplyZeroed, "StartRemoteCameraStreaming"},
+            {21, &IChatSession::StubReplyZeroed, "StopRemoteCameraStreaming"},
+            {30, &IChatSession::StubReplyZeroed, "CreateAudioStreamWorkBuffer"},
+            {31, &IChatSession::StubReplyZeroed, "DestroyAudioStreamWorkBuffer"},
+            {32, &IChatSession::StubReplyZeroed, "GetAudioStreamCapacityFrameCount"},
+            {33, &IChatSession::StubReplyZeroed, "StartAudioStreamRecording"},
+            {34, &IChatSession::StubReplyZeroed, "StopAudioStreamRecording"},
+            {35, &IChatSession::StubReplyZeroed, "GetAudioStreamFreeFrameCount"},
+            {36, &IChatSession::StubReplyZeroed, "GetAudioStreamFilledFrameCount"},
+            {37, &IChatSession::StubReplyZeroed, "ReadAudioStream"},
         };
         RegisterHandlers(functions);
-        event = service_context.CreateEvent("IChatSession:Event");
     }
-
-    ~IChatSession() override {
-        service_context.CloseEvent(event);
-    }
-
-private:
-    void GetEvent(HLERequestContext& ctx) {
-        LOG_WARNING(Service_Friend, "(STUBBED) chat:u::0 1 [5]={:#x}", ctx.CommandBuffer()[5]);
-        IPC::ResponseBuilder rb{ctx, 2, 1};
-        rb.Push(ResultSuccess);
-        rb.PushCopyObjects(ctx, event->GetReadableEvent());
-    }
-
-    KernelHelpers::ServiceContext service_context;
-    Kernel::KEvent* event;
 };
 
-// Switch 2 GameChat (chat:u). Command 0 opens a session the title keeps using, so it has to
-// return an interface; everything else falls through to the nx2 auto stub.
+// nn::chat::IUserLayoutCustomizationShimScopedObject, returned by chat:u 2. Per Switchbrew:
+// 0 Initialize(pid, u64), then 1 hands back an event official software takes right after it;
+// 10, 11 (u64 out), 13 (u8 and 16 bytes out) and 20 (u8 out) are unnamed, 12 ends the full-screen
+// section. Outside a GameChat room the layout never changes: the event never fires and the rest
+// answer 0.
+class IUserLayoutCustomizationShimScopedObject final
+    : public ServiceFramework<IUserLayoutCustomizationShimScopedObject> {
+public:
+    explicit IUserLayoutCustomizationShimScopedObject(Core::System& system_)
+        : ServiceFramework{system_, "nx2:chat:IUserLayoutCustomizationShimScopedObject"} {
+        static const FunctionInfo functions[] = {
+            {0, &IUserLayoutCustomizationShimScopedObject::StubReplyZeroed, "Initialize"},
+            {1, &IUserLayoutCustomizationShimScopedObject::StubReplyEvent, "GetEvent (guessed)"},
+            {12, &IUserLayoutCustomizationShimScopedObject::StubReplyZeroed, "EndFullScreenWithLocalCameraAvailableSection"},
+        };
+        RegisterHandlers(functions);
+    }
+};
+
+// Switch 2 GameChat (chat:u, nn::chat::IUserService). 0 and 1 open the session the title keeps
+// using, 2 the layout customization object. 3 and 4 return objects nothing here implements yet
+// (virtual camera, selective talk), so each gets an nx2 stub whose commands all succeed empty; MKW
+// calls 3 at boot. Switchbrew leaves 0-4 unnamed: 2-4 are named after what they return. The named
+// settings commands answer 0, which is what a console outside a GameChat room reports; everything
+// else falls through to the nx2 auto stub.
 class IChatService final : public ServiceFramework<IChatService> {
 public:
     explicit IChatService(Core::System& system_) : ServiceFramework{system_, "nx2:chat:u"} {
         static const FunctionInfo functions[] = {
             {0, &IChatService::OpenSession, "OpenSession"},
+            {1, &IChatService::OpenSession, "OpenSession (u32)"},
+            {2, &IChatService::OpenUserLayoutCustomizationShimScopedObject, "OpenUserLayoutCustomizationShimScopedObject"},
+            {3, &IChatService::OpenStubObject, "OpenVirtualCameraShimScopedObject"},
+            {4, &IChatService::OpenStubObject, "OpenUserSelectiveTalkShimScopedObject"},
+            {11, &IChatService::GetRoomInfo, "GetRoomInfo"},
+            {14, &IChatService::StubReplyZeroed, "GetLocalCameraImageProcessingMode"},
+            {15, &IChatService::StubReplyZeroed, "SetLocalCameraZoomMagnification"},
+            {16, &IChatService::StubReplyZeroed, "GetLocalCameraZoomMagnification"},
+            {21, &IChatService::StubReplyZeroed, "SetScreenSharingDisallowList"},
+            {22, &IChatService::StubReplyZeroed, "ClearScreenSharingDisallowList"},
+            {23, &IChatService::StubReplyZeroed, "SetScreenSharingMode"},
+            {40, &IChatService::StubReplyZeroed, "GetRealtimeAudioLevels"},
+            {51, &IChatService::StubReplyZeroed, "CalculateRequiredAudioStreamWorkBufferSize"},
+            {60, &IChatService::StubReplyZeroed, "SetSharingKey"},
+            {61, &IChatService::StubReplyZeroed, "ClearSharingKey"},
         };
         RegisterHandlers(functions);
     }
 
 private:
     void OpenSession(HLERequestContext& ctx) {
-        LOG_WARNING(Service_Friend, "(STUBBED) chat:u 0, returning a chat session");
+        LOG_WARNING(Service_Friend, "(STUBBED) chat:u {}, returning a chat session", ctx.GetCommand());
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(ResultSuccess);
         rb.PushIpcInterface<IChatSession>(ctx, system);
+    }
+
+    void OpenUserLayoutCustomizationShimScopedObject(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_Friend, "called");
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<IUserLayoutCustomizationShimScopedObject>(ctx, system);
+    }
+
+    // 11: the nn::chat::RoomInfo (0xF0 bytes) of the room the user chats in. Nobody is ever in a
+    // room here, so it is all zeroes, ChattingUid (0x18) included. The auto stub left the title's
+    // buffer as it was.
+    void GetRoomInfo(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_Friend, "called");
+        constexpr std::array<u8, 0xF0> room_info{};
+        ctx.WriteBuffer(room_info);
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
+    void OpenStubObject(HLERequestContext& ctx) {
+        static constexpr std::array<const char*, 2> names{
+            "nx2:chat:IVirtualCameraShimScopedObject",
+            "nx2:chat:IUserSelectiveTalkShimScopedObject",
+        };
+        const char* name = names[ctx.GetCommand() - 3];
+        LOG_WARNING(Service_Friend, "(STUBBED) chat:u {}, returning {}", ctx.GetCommand(), name);
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<INx2StubInterface>(ctx, system, name);
     }
 };
 

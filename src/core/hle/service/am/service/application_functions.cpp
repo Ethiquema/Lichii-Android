@@ -58,19 +58,18 @@ IApplicationFunctions::IApplicationFunctions(Core::System& system_, std::shared_
     : ServiceFramework{system_, "IApplicationFunctions"}, m_applet{std::move(applet)} {
     // clang-format off
     static const FunctionInfo functions[] = {
-        {0, &IApplicationFunctions::StubReplyZeroed, "Unknown0"},
         {1, D<&IApplicationFunctions::PopLaunchParameter>, "PopLaunchParameter"},
-        {10, &IApplicationFunctions::StubReplyZeroed, "CreateApplicationAndPushAndRequestToStart"},
-        {11, &IApplicationFunctions::StubReplyZeroed, "CreateApplicationAndPushAndRequestToStartForQuest"},
+        {10, nullptr, "CreateApplicationAndPushAndRequestToStart"},
+        {11, nullptr, "CreateApplicationAndPushAndRequestToStartForQuest"},
         {12, D<&IApplicationFunctions::CreateApplicationAndRequestToStart>, "CreateApplicationAndRequestToStart"},
-        {13, &IApplicationFunctions::StubReplyZeroed, "CreateApplicationAndRequestToStartForQuest"},
-        {14, &IApplicationFunctions::StubReplyZeroed, "CreateApplicationWithAttributeAndPushAndRequestToStartForQuest"},
-        {15, &IApplicationFunctions::StubReplyZeroed, "CreateApplicationWithAttributeAndRequestToStartForQuest"},
+        {13, nullptr, "CreateApplicationAndRequestToStartForQuest"},
+        {14, nullptr, "CreateApplicationWithAttributeAndPushAndRequestToStartForQuest"},
+        {15, nullptr, "CreateApplicationWithAttributeAndRequestToStartForQuest"},
         {20, D<&IApplicationFunctions::EnsureSaveData>, "EnsureSaveData"},
         {21, D<&IApplicationFunctions::GetDesiredLanguage>, "GetDesiredLanguage"},
         {22, D<&IApplicationFunctions::SetTerminateResult>, "SetTerminateResult"},
         {23, D<&IApplicationFunctions::GetDisplayVersion>, "GetDisplayVersion"},
-        {24, &IApplicationFunctions::StubReplyZeroed, "GetLaunchStorageInfoForDebug"},
+        {24, nullptr, "GetLaunchStorageInfoForDebug"},
         {25, D<&IApplicationFunctions::ExtendSaveData>, "ExtendSaveData"},
         {26, D<&IApplicationFunctions::GetSaveDataSize>, "GetSaveDataSize"},
         {27, D<&IApplicationFunctions::CreateCacheStorage>, "CreateCacheStorage"},
@@ -81,39 +80,37 @@ IApplicationFunctions::IApplicationFunctions(Core::System& system_, std::shared_
         {32, D<&IApplicationFunctions::BeginBlockingHomeButton>, "BeginBlockingHomeButton"},
         {33, D<&IApplicationFunctions::EndBlockingHomeButton>, "EndBlockingHomeButton"},
         {34, nullptr, "SelectApplicationLicense"},
-        {35, &IApplicationFunctions::StubReplyZeroed, "GetDeviceSaveDataSizeMax"},
-        {36, &IApplicationFunctions::StubReplyZeroed, "GetLimitedApplicationLicense"},
-        {37, &IApplicationFunctions::StubReplyEvent, "GetLimitedApplicationLicenseUpgradableEvent"},
+        {35, nullptr, "GetDeviceSaveDataSizeMax"},
+        {36, nullptr, "GetLimitedApplicationLicense"},
+        {37, nullptr, "GetLimitedApplicationLicenseUpgradableEvent"},
         {40, D<&IApplicationFunctions::NotifyRunning>, "NotifyRunning"},
         {50, D<&IApplicationFunctions::GetPseudoDeviceId>, "GetPseudoDeviceId"},
         {60, D<&IApplicationFunctions::SetMediaPlaybackStateForApplication>, "SetMediaPlaybackStateForApplication"},
         {65, D<&IApplicationFunctions::IsGamePlayRecordingSupported>, "IsGamePlayRecordingSupported"},
         {66, D<&IApplicationFunctions::InitializeGamePlayRecording>, "InitializeGamePlayRecording"},
         {67, D<&IApplicationFunctions::SetGamePlayRecordingState>, "SetGamePlayRecordingState"},
-        {68, &IApplicationFunctions::StubReplyZeroed, "RequestFlushGamePlayingMovieForDebug"},
-        {70, &IApplicationFunctions::StubReplyZeroed, "RequestToShutdown"},
-        {71, &IApplicationFunctions::StubReplyZeroed, "RequestToReboot"},
-        {72, &IApplicationFunctions::StubReplyZeroed, "RequestToSleep"},
-        {80, &IApplicationFunctions::StubReplyZeroed, "ExitAndRequestToShowThanksMessage"},
+        {68, nullptr, "RequestFlushGamePlayingMovieForDebug"},
+        {70, nullptr, "RequestToShutdown"},
+        {71, nullptr, "RequestToReboot"},
+        {72, nullptr, "RequestToSleep"},
+        {80, nullptr, "ExitAndRequestToShowThanksMessage"},
         {90, D<&IApplicationFunctions::EnableApplicationCrashReport>, "EnableApplicationCrashReport"},
         {100, D<&IApplicationFunctions::InitializeApplicationCopyrightFrameBuffer>, "InitializeApplicationCopyrightFrameBuffer"},
         {101, D<&IApplicationFunctions::SetApplicationCopyrightImage>, "SetApplicationCopyrightImage"},
         {102, D<&IApplicationFunctions::SetApplicationCopyrightVisibility>, "SetApplicationCopyrightVisibility"},
         {110, D<&IApplicationFunctions::QueryApplicationPlayStatistics>, "QueryApplicationPlayStatistics"},
         {111, D<&IApplicationFunctions::QueryApplicationPlayStatisticsByUid>, "QueryApplicationPlayStatisticsByUid"},
-        {112, &IApplicationFunctions::StubReplyZeroed, "Unknown112"},
-        {113, &IApplicationFunctions::StubReplyZeroed, "Unknown113"},
         {120, D<&IApplicationFunctions::ExecuteProgram>, "ExecuteProgram"},
         {121, D<&IApplicationFunctions::ClearUserChannel>, "ClearUserChannel"},
         {122, D<&IApplicationFunctions::UnpopToUserChannel>, "UnpopToUserChannel"},
         {123, D<&IApplicationFunctions::GetPreviousProgramIndex>, "GetPreviousProgramIndex"},
-        {124, &IApplicationFunctions::StubReplyZeroed, "EnableApplicationAllThreadDumpOnCrash"},
+        {124, nullptr, "EnableApplicationAllThreadDumpOnCrash"},
         {130, D<&IApplicationFunctions::GetGpuErrorDetectedSystemEvent>, "GetGpuErrorDetectedSystemEvent"},
-        {131, &IApplicationFunctions::StubReplyZeroed, "SetDelayTimeToAbortOnGpuError"},
+        {131, nullptr, "SetDelayTimeToAbortOnGpuError"},
         {140, D<&IApplicationFunctions::GetFriendInvitationStorageChannelEvent>, "GetFriendInvitationStorageChannelEvent"},
         {141, D<&IApplicationFunctions::TryPopFromFriendInvitationStorageChannel>, "TryPopFromFriendInvitationStorageChannel"},
         {150, D<&IApplicationFunctions::GetNotificationStorageChannelEvent>, "GetNotificationStorageChannelEvent"},
-        {151, &IApplicationFunctions::StubReplyInterface, "TryPopFromNotificationStorageChannel"},
+        {151, nullptr, "TryPopFromNotificationStorageChannel"},
         {160, D<&IApplicationFunctions::GetHealthWarningDisappearedSystemEvent>, "GetHealthWarningDisappearedSystemEvent"},
         {170, &IApplicationFunctions::StubReplyZeroed, "SetHdcpAuthenticationActivated"},
         {180, &IApplicationFunctions::StubReplyZeroed, "GetLaunchRequiredVersion"},
@@ -122,21 +119,25 @@ IApplicationFunctions::IApplicationFunctions(Core::System& system_, std::shared_
         {200, &IApplicationFunctions::StubReplyZeroed, "GetLastApplicationExitReason"},
         {210, D<&IApplicationFunctions::GetOperationModeRefreshEvent>, "GetOperationModeRefreshEvent (guessed)"},
         {220, &IApplicationFunctions::StubReplyZeroed, "Unknown220"}, // [20.0.0+]
-        {230, &IApplicationFunctions::StubReplyZeroed, "Unknown230"},
+        {230, D<&IApplicationFunctions::IsTensorRtSupported>, "IsTensorRtSupported"},
         {300, &IApplicationFunctions::StubReplyInterface, "CreateMovieWriter"}, // [19.0.0+]
         {310, &IApplicationFunctions::StubReplyZeroed, "Unknown310"}, // [20.0.0+]
         {320, D<&IApplicationFunctions::Unknown320>, "Unknown320"}, // [20.0.0+]
         {321, D<&IApplicationFunctions::Unknown321>, "Unknown321"}, // Switch 2
         {330, D<&IApplicationFunctions::Unknown330>, "Unknown330"}, // [20.0.0+]
-        {500, &IApplicationFunctions::StubReplyEvent, "StartContinuousRecordingFlushForDebug"},
-        {1000, &IApplicationFunctions::StubReplyInterface, "CreateMovieMaker"},
+        {500, nullptr, "StartContinuousRecordingFlushForDebug"},
+        {1000, nullptr, "CreateMovieMaker"},
         {1001, D<&IApplicationFunctions::PrepareForJit>, "PrepareForJit"},
-        {2000, &IApplicationFunctions::StubReplyZeroed, "Unknown2000"},
     };
     // clang-format on
 
     RegisterHandlers(functions);
 }
+
+IApplicationFunctions::IApplicationFunctions(Core::System& system_, std::shared_ptr<Applet> applet)
+    : ServiceFramework{system_, "IApplicationFunctions"}
+    , m_applet{std::move(applet)}
+{}
 
 IApplicationFunctions::~IApplicationFunctions() = default;
 
@@ -255,12 +256,13 @@ Result IApplicationFunctions::GetDisplayVersion(Out<DisplayVersion> out_display_
 }
 
 Result IApplicationFunctions::ExtendSaveData(Out<u64> out_required_size, FileSys::SaveDataType type,
-                                             u128 user_id, u64 normal_size, u64 journal_size) {
-    LOG_DEBUG(Service_AM, "called with type={} user_id={:016X}{:016X} normal={:#x} journal={:#x}",
-              static_cast<u8>(type), user_id[1], user_id[0], normal_size, journal_size);
+                                             Common::UUID user_id, u64 normal_size,
+                                             u64 journal_size) {
+    LOG_DEBUG(Service_AM, "called with type={} user_id={} normal={:#x} journal={:#x}",
+              static_cast<u8>(type), user_id.FormattedString(), normal_size, journal_size);
 
     system.GetFileSystemController().OpenSaveDataController()->WriteSaveDataSize(
-        type, m_applet->program_id, user_id, {normal_size, journal_size});
+        type, m_applet->program_id, user_id.AsU128(), {normal_size, journal_size});
 
     // The following value is used to indicate the amount of space remaining on failure
     // due to running out of space. Since we always succeed, this should be 0.
@@ -270,12 +272,11 @@ Result IApplicationFunctions::ExtendSaveData(Out<u64> out_required_size, FileSys
 }
 
 Result IApplicationFunctions::GetSaveDataSize(Out<u64> out_normal_size, Out<u64> out_journal_size,
-                                              FileSys::SaveDataType type, u128 user_id) {
-    LOG_DEBUG(Service_AM, "called with type={} user_id={:016X}{:016X}", type, user_id[1],
-              user_id[0]);
+                                              FileSys::SaveDataType type, Common::UUID user_id) {
+    LOG_DEBUG(Service_AM, "called with type={} user_id={}", type, user_id.FormattedString());
 
     const auto size = system.GetFileSystemController().OpenSaveDataController()->ReadSaveDataSize(
-        type, m_applet->program_id, user_id);
+        type, m_applet->program_id, user_id.AsU128());
 
     *out_normal_size = size.normal;
     *out_journal_size = size.journal;
@@ -576,18 +577,52 @@ Result IApplicationFunctions::GetOperationModeRefreshEvent(
     R_SUCCEED();
 }
 
+Result IApplicationFunctions::IsTensorRtSupported(Out<bool> out_is_supported) {
+    // Switch 2 hardware runs TensorRT networks (DLSS); the zeroed stub told titles it can't.
+    LOG_DEBUG(Service_AM, "called");
+    *out_is_supported = true;
+    R_SUCCEED();
+}
+
 Result IApplicationFunctions::Unknown320(Out<u16> out) {
     // Called by Switch 2 titles during nn::oe::Initialize. It returns two bytes of data (meaning
     // unknown); a reply without them left the caller reading stale message words.
     LOG_WARNING(Service_AM, "(STUBBED) called");
-    *out = 0;
     R_SUCCEED();
 }
 
-Result IApplicationFunctions::Unknown321(Out<u8> out) {
-    // Called by Switch 2 titles right after 320; returns one byte (meaning unknown).
+Result IApplicationFunctions::Unknown321() {
+    // Called by Switch 2 titles right after 320; arguments unknown.
     LOG_WARNING(Service_AM, "(STUBBED) called");
-    *out = 0;
+    R_SUCCEED();
+}
+
+Result IApplicationFunctions::GetScreenShotAndContinuousRecordingInitiallyEnabled(
+    Out<bool> out_screenshot_enabled, Out<bool> out_recording_enabled) {
+    std::scoped_lock lk{m_applet->lock};
+    *out_screenshot_enabled = m_applet->screenshot_permission != ScreenshotPermission::Disable;
+    *out_recording_enabled = m_applet->game_play_recording_supported &&
+                             m_applet->game_play_recording_state == GamePlayRecordingState::Enabled;
+    LOG_DEBUG(Service_AM, "called, screenshot={}, recording={}", *out_screenshot_enabled,
+              *out_recording_enabled);
+    R_SUCCEED();
+}
+
+Result IApplicationFunctions::GetScreenShotAndContinuousRecordingInitiallyEnabled(
+    Out<bool> out_screenshot_enabled, Out<bool> out_recording_enabled) {
+    std::scoped_lock lk{m_applet->lock};
+    *out_screenshot_enabled = m_applet->screenshot_permission != ScreenshotPermission::Disable;
+    *out_recording_enabled = m_applet->game_play_recording_supported &&
+                             m_applet->game_play_recording_state == GamePlayRecordingState::Enabled;
+    LOG_DEBUG(Service_AM, "called, screenshot={}, recording={}", *out_screenshot_enabled,
+              *out_recording_enabled);
+    R_SUCCEED();
+}
+
+Result IApplicationFunctions::Unknown321(Out<bool> out_enabled) {
+    // SDK 23.0 uses this initial bool for VI buffer permission bit 4 and RTC sharing audio.
+    *out_enabled = false;
+    LOG_DEBUG(Service_AM, "called, enabled={}", *out_enabled);
     R_SUCCEED();
 }
 

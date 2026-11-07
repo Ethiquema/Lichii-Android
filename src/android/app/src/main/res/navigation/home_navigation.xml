@@ -8,7 +8,7 @@
     <fragment
         android:id="@+id/gamesFragment"
         android:name="org.yuzu.yuzu_emu.ui.GamesFragment"
-        android:label="PlatformGamesFragment" />
+        android:label="PlatformGamesFragment">
         <action
             android:id="@+id/action_gamesFragment_to_homeSettingsFragment"
             app:destination="@id/homeSettingsFragment"
@@ -16,6 +16,14 @@
             app:exitAnim="@anim/nav_default_exit_anim"
             app:popEnterAnim="@anim/nav_default_pop_enter_anim"
             app:popExitAnim="@anim/nav_default_pop_exit_anim" />
+        <action
+            android:id="@+id/action_gamesFragment_to_profileManagerFragment"
+            app:destination="@id/profileManagerFragment"
+            app:enterAnim="@anim/nav_default_enter_anim"
+            app:exitAnim="@anim/nav_default_exit_anim"
+            app:popEnterAnim="@anim/nav_default_pop_enter_anim"
+            app:popExitAnim="@anim/nav_default_pop_exit_anim" />
+    </fragment>
 
     <fragment
         android:id="@+id/homeSettingsFragment"
@@ -148,6 +156,9 @@
     <action
         android:id="@+id/action_global_perGamePropertiesFragment"
         app:destination="@id/perGamePropertiesFragment" />
+    <action
+        android:id="@+id/action_global_gameInfoFragment"
+        app:destination="@id/gameInfoFragment" />
     <fragment
         android:id="@+id/gameInfoFragment"
         android:name="org.yuzu.yuzu_emu.fragments.GameInfoFragment"

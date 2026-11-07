@@ -1,40 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
-#include <array>
-#include <optional>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "shader_recompiler/environment.h"
 #include "shader_recompiler/frontend/ir/basic_block.h"
 #include "shader_recompiler/frontend/ir/ir_emitter.h"
 #include "shader_recompiler/frontend/ir/program.h"
 #include "shader_recompiler/host_translate_info.h"
 #include "shader_recompiler/ir_opt/passes.h"
-
-namespace {
-class TestEnvironment final : public Shader::Environment {
-public:
-    u64 ReadInstruction(u32) override { return 0; }
-    u32 ReadCbufValue(u32, u32) override { return 0; }
-    Shader::TextureType ReadTextureType(u32) override { return Shader::TextureType::Color2D; }
-    Shader::TexturePixelFormat ReadTexturePixelFormat(u32) override {
-        return Shader::TexturePixelFormat::A8B8G8R8_UNORM;
-    }
-    bool IsTexturePixelFormatInteger(u32) override { return false; }
-    u32 ReadViewportTransformState() override { return 1; }
-    u32 TextureBoundBuffer() const override { return 0; }
-    u32 LocalMemorySize() const override { return 0; }
-    u32 SharedMemorySize() const override { return 0; }
-    std::array<u32, 3> WorkgroupSize() const override { return {32, 1, 1}; }
-    bool HasHLEMacroState() const override { return false; }
-    std::optional<Shader::ReplaceConstant> GetReplaceConstBuffer(u32, u32) override {
-        return std::nullopt;
-    }
-    void Dump(u64, u64) override {}
-};
-}
 
 TEST_CASE("Global address tracking stops at a memory load", "[shader_recompiler][global_memory]") {
     using namespace Shader;
@@ -53,8 +27,7 @@ TEST_CASE("Global address tracking stops at a memory load", "[shader_recompiler]
     program.post_order_blocks.push_back(&block);
     HostTranslateInfo host{};
     host.min_ssbo_alignment = 16;
-    TestEnvironment env;
-    Optimization::GlobalMemoryToStorageBufferPass(env, program, host);
+    Optimization::GlobalMemoryToStorageBufferPass(program, host);
 
     const auto has = [&](IR::Opcode opcode) {
         return std::ranges::any_of(block.Instructions(), [=](const IR::Inst& inst) {

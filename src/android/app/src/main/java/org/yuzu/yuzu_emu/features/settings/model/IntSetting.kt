@@ -32,13 +32,11 @@ enum class IntSetting(override val key: String) : AbstractIntSetting {
     RENDERER_DYNA_STATE("dyna_state"),
     DMA_ACCURACY("dma_accuracy"),
     GPU_FENCE_BEHAVIOR("gpu_fence_behavior"),
-    FRAME_PACING_MODE("frame_pacing_mode"),
     AUDIO_OUTPUT_ENGINE("output_engine"),
     MAX_ANISOTROPY("max_anisotropy"),
     THEME("theme"),
     THEME_MODE("theme_mode"),
     STATIC_THEME_COLOR("static_theme_color"),
-    APP_LANGUAGE("app_language"),
     OVERLAY_SCALE("control_scale"),
     OVERLAY_OPACITY("control_opacity"),
     LOCK_DRAWER("lock_drawer"),
@@ -51,9 +49,6 @@ enum class IntSetting(override val key: String) : AbstractIntSetting {
     FAST_CPU_TIME("fast_cpu_time"),
     CPU_TICKS("cpu_ticks"),
     FAST_GPU_TIME("fast_gpu_time"),
-    GPU_UNSWIZZLE_TEXTURE_SIZE("gpu_unswizzle_texture_size"),
-    GPU_UNSWIZZLE_STREAM_SIZE("gpu_unswizzle_stream_size"),
-    GPU_UNSWIZZLE_CHUNK_SIZE("gpu_unswizzle_chunk_size"),
     BAT_TEMPERATURE_UNIT("bat_temperature_unit"),
     CABINET_APPLET("cabinet_applet_mode"),
     CONTROLLER_APPLET("controller_applet_mode"),
@@ -73,7 +68,7 @@ enum class IntSetting(override val key: String) : AbstractIntSetting {
     INPUT_OVERLAY_AUTO_HIDE("input_overlay_auto_hide"),
     OVERLAY_GRID_SIZE("overlay_grid_size"),
     GPU_LOG_RING_BUFFER_SIZE("gpu_log_ring_buffer_size"),
-    ANDROID_PIPELINE_WORKERS("pipeline_worker_count")
+    PRODUCT_MODEL("product_model")
     ;
 
     override fun getInt(needsGlobal: Boolean): Int = NativeConfig.getInt(key, needsGlobal)

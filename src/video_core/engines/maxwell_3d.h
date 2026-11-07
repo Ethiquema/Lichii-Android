@@ -83,7 +83,7 @@ public:
         static constexpr std::size_t MaxShaderProgram = 6;
         static constexpr std::size_t MaxShaderStage = 5;
         // Maximum number of const buffers per shader stage.
-        static constexpr std::size_t MaxConstBuffers = 18;
+        static constexpr std::size_t MaxConstBuffers = 32;
         static constexpr std::size_t MaxConstBufferSize = 0x10000;
 
         struct ID {
@@ -3059,7 +3059,7 @@ public:
     // clang-format on
 
     struct DrawManager {
-        enum class DrawMode : u32 { General = 0, Instance, InlineIndex };
+        enum class DrawMode : u32 { General = 0, Instance, InlineIndex, InstanceArray };
         struct State {
             Maxwell3D::Regs::PrimitiveTopology topology{};
             DrawMode draw_mode{};
@@ -3098,14 +3098,8 @@ public:
         };
         void ProcessMethodCall(Maxwell3D& maxwell3d, u32 method, u32 argument);
         void Clear(Maxwell3D& maxwell3d, u32 layer_count);
-        /// Draws the waiting instances. loop_continues is set when the loop goes on afterwards.
-        void DrawDeferred(Maxwell3D& maxwell3d, bool loop_continues = false);
-        /// Instances after the first wait to be drawn together (DrawDeferred).
-        [[nodiscard]] bool HasDeferredDraw() const noexcept {
-            return draw_state.draw_mode == DrawMode::Instance && draw_state.instance_count != 0;
-        }
-        /// Methods an instance loop writes between its draws; any other write ends the loop.
-        [[nodiscard]] static bool IsInstanceLoopMethod(u32 method) noexcept;
+        void DrawDeferred(Maxwell3D& maxwell3d);
+        void FlushInstanceArray(Maxwell3D& maxwell3d);
         void DrawArray(Maxwell3D& maxwell3d, Maxwell3D::Regs::PrimitiveTopology topology, u32 vertex_first, u32 vertex_count, u32 base_instance, u32 num_instances);
         void DrawArrayInstanced(Maxwell3D& maxwell3d, Maxwell3D::Regs::PrimitiveTopology topology, u32 vertex_first, u32 vertex_count, bool subsequent);
         void DrawIndex(Maxwell3D& maxwell3d, Maxwell3D::Regs::PrimitiveTopology topology, u32 index_first, u32 index_count, u32 base_index, u32 base_instance, u32 num_instances);
@@ -3121,6 +3115,7 @@ public:
         void ProcessDraw(Maxwell3D& maxwell3d, bool draw_indexed, u32 instance_count);
         void ProcessDrawIndirect(Maxwell3D& maxwell3d);
         State draw_state{};
+        Maxwell3D::Regs::PrimitiveTopology instance_topology{};
         DrawTextureState draw_texture_state{};
         IndirectParams indirect_state{};
     };
@@ -3164,13 +3159,6 @@ public:
     /// Reads a register value located at the input method address
     u32 GetRegisterValue(u32 method) const;
 
-    void TraceFirstMethodWrite(u32 method, u32 argument);
-
-    /// GPU memory, for Turing macros that read memory into their FIFO or data RAM.
-    MemoryManager& GetMemoryManager() {
-        return memory_manager;
-    }
-
     void SetNativeTuringMacroMode(bool enabled) {
         GetNativeMacroEngine().native_turing = enabled;
         upload_state.SetNativePartialTransfers(enabled);
@@ -3179,21 +3167,7 @@ public:
         native_macro_context = std::move(context);
     }
     MacroEngine& GetNativeMacroEngine() { return native_macro_context ? native_macro_context->engine : macro_engine; }
-    /// This channel's MME data RAM (shared with its compute engine).
-    std::array<u32, 0xc00>& GetNativeDataRam() { return native_data_ram; }
     std::span<u32> GetNativeMacroPositions() { return native_macro_context ? std::span<u32>{native_macro_context->positions} : std::span<u32>{macro_positions}; }
-
-    /// Root tables: eight 256-byte tables written inline (method 0x504 selects a table, bits 0-2,
-    /// and a byte offset, bits 8-15; each 0x508 writes the next word) that shaders read as constant
-    /// banks 24-31. NVN2 keeps push constants in bank 24, which the Ampere lowering reads as bank 17.
-    struct RootTables {
-        static constexpr u32 SelectMethod = 0x504 / 4;
-        static constexpr u32 LoadMethod = 0x508 / 4;
-        std::array<std::array<u32, 64>, 8> tables{};
-        u32 selected{};
-        u32 offset{};
-        bool loaded{};
-    } root_tables;
 
 
     /// Write the value to the register identified by method.
@@ -3202,11 +3176,6 @@ public:
     /// Write multiple values to the register identified by method.
     void CallMultiMethod(Core::System& system, u32 method, const u32* base_start, u32 amount, u32 methods_pending) override;
 
-    /// GpuSplit's back (fast_maxwell3d): CallMethod for each of up to 64 single writes to the
-    /// constant buffer data registers, uploaded in one memory write within a device page.
-    void CallConstBufferWords(Core::System& system, const u32* methods, const u32* arguments,
-                              u32 count);
-
     /// GPU thread split with macros on its front half (gpu_split.h, EDEN_NX2_SPLIT=2), called by
     /// the front instead of CallMethod: runs macros and macro uploads against a copy of the
     /// registers and sends the register writes to the back thread.
@@ -3214,6 +3183,11 @@ public:
                          u32 argument, bool is_last_call);
     void FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit& split, u32 method,
                               const u32* base_start, u32 amount, u32 methods_pending);
+    /// LOCAL TEST (Zelda), EDEN_NX2_FRONT_BATCH=1: `count` incrementing register writes from
+    /// `method` on (all below the macro range), as `count` FrontCallMethod calls would make them.
+    /// `ends_method`: the last word is the method's last.
+    void FrontWriteRun(Core::System& system, VideoCommon::GpuSplit& split, u32 method,
+                       const u32* words, u32 count, bool ends_method);
 
     bool ShouldExecute() const {
         return execute_on;
@@ -3259,6 +3233,8 @@ public:
     bool AnyParametersDirty() const {
         return current_macro_dirty;
     }
+
+    bool ReadMacroMemory(GPUVAddr address, std::span<u32> destination);
 
     u32 GetMaxCurrentVertices();
 
@@ -3383,7 +3359,6 @@ private:
 
     /// Interpreter for the macro codes uploaded to the GPU.
     std::shared_ptr<NativeMacroContext> native_macro_context;
-    std::array<u32, 0xc00> native_data_ram{};
     MacroEngine macro_engine;
 
     Upload::State upload_state;
@@ -3397,11 +3372,11 @@ private:
     // the front owns the macro code and bindings (the back thread then leaves them alone).
     struct FrontState;
     FrontState& Front(Core::System& system, VideoCommon::GpuSplit& split);
+    void ReleaseFront();
     void FrontWrite(VideoCommon::GpuSplit& split, FrontState& state, u32 method, u32 argument,
                     bool is_last_call, bool from_macro);
     void FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split, FrontState& state);
-    void FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& state, u32 macro, u32 method,
-                      u32 count);
+    void FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& state, u32 method, u32 count);
     void FrontVerify(VideoCommon::GpuSplit& split, FrontState& state);
     void FinishFrontMacro(Core::System& system);
     std::unique_ptr<FrontState> front;

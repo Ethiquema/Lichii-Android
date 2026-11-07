@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <memory>
 #include <variant>
 #include <vector>
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -41,16 +40,12 @@ class UpdateDescriptorQueue final {
     static constexpr size_t FRAMES_IN_FLIGHT = 8;
 
 public:
-    static constexpr size_t GUEST_FRAME_PAYLOAD_SIZE = 0x80000;
-    static constexpr size_t COMPUTE_FRAME_PAYLOAD_SIZE = 0x20000;
+    static constexpr size_t GUEST_FRAME_PAYLOAD_SIZE = 0x20000;
+    static constexpr size_t COMPUTE_FRAME_PAYLOAD_SIZE = 0x8000;
 
     explicit UpdateDescriptorQueue(const Device& device_, size_t frame_payload_size_,
                                    bool supports_descriptor_buffer_ = false);
     ~UpdateDescriptorQueue();
-
-    [[nodiscard]] bool UsesDescriptorBuffer() const noexcept {
-        return use_descriptor_buffer;
-    }
 
     void TickFrame();
     void Acquire(Scheduler& scheduler, size_t required_entries = 0,
@@ -58,10 +53,6 @@ public:
 
     const DescriptorUpdateEntry* UpdateData() const noexcept {
         return upload_start;
-    }
-
-    size_t UpdateCount() const noexcept {
-        return upload_start ? static_cast<size_t>(payload_cursor - upload_start) : 0;
     }
 
     void AddSampledImage(VkImageView image_view, VkSampler sampler) {
@@ -127,7 +118,7 @@ private:
     DescriptorUpdateEntry* payload_cursor = nullptr;
     DescriptorUpdateEntry* payload_start = nullptr;
     const DescriptorUpdateEntry* upload_start = nullptr;
-    std::unique_ptr<DescriptorUpdateEntry[]> payload;
+    std::vector<DescriptorUpdateEntry> payload;
 };
 
 // TODO: should these be separate classes instead?

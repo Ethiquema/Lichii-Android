@@ -13,7 +13,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include "common/container/unordered_set.h"
 #include <vector>
 
 #include "common/address_space.h"
@@ -64,6 +63,13 @@ public:
 
     Kernel::KEvent* QueryEvent(u32 event_id) override;
 
+    NvResult CreateNativeSparseRegion(u64 address, u64 size);
+    NvResult DestroyNativeSparseRegion(u64 address, u64 size);
+    NvResult MapNative4K(u32 handle, u64 address, u64 buffer_offset, u64 size, u8 kind);
+    NvResult UnmapNative4K(u64 address, u64 size);
+    NvResult GetNativeSyncpointShim(u64& address, u32& stride, u32& count);
+    NvResult ModifyNativeKind(u64 address, u64 size, u8 requested, u8 fallback);
+
     struct VaRegion {
         u64 offset;
         u32 page_size;
@@ -113,8 +119,6 @@ private:
     };
     static_assert(sizeof(IoctlRemapEntry) == 20, "IoctlRemapEntry is incorrect size");
 
-    ::Common::unordered_set<s64_le> map_buffer_offsets{};
-
     struct IoctlMapBufferEx {
         MappingFlags flags{}; // bit0: fixed_offset, bit2: cacheable
         u32_le kind{};        // -1 is default
@@ -144,6 +148,25 @@ private:
     };
     static_assert(sizeof(IoctlGetVaRegions) == 16 + sizeof(VaRegion) * 2,
                   "IoctlGetVaRegions is incorrect size");
+
+    struct IoctlSyncpointShimInfo {
+        u64_le address;
+        u32_le stride;
+        u32_le count;
+    };
+    static_assert(sizeof(IoctlSyncpointShimInfo) == 16);
+    NvResult GetSyncpointShimInfo(IoctlSyncpointShimInfo& params);
+
+    struct IoctlModifyKind {
+        u16_le compressed_kind;
+        u16_le uncompressed_kind;
+        u32_le reserved;
+        u64_le buffer_offset;
+        u64_le size;
+        u64_le mapping_base;
+    };
+    static_assert(sizeof(IoctlModifyKind) == 32);
+    NvResult ModifyKind(IoctlModifyKind& params);
 
     NvResult AllocAsEx(IoctlAllocAsEx& params);
     NvResult AllocateSpace(IoctlAllocSpace& params);
@@ -196,6 +219,12 @@ private:
     std::map<u64, Allocation> allocation_map;
     std::mutex mutex; //!< Locks all AS operations
 
+    bool m_extended_abi{};
+    bool m_syncpoint_shim_reserved{};
+    DeviceFD m_fd{-1};
+    Kernel::KProcess* m_owner_process{};
+    std::shared_ptr<nvhost_as_gpu> m_shared_parent;
+
     struct VM {
         static constexpr u32 YUZU_PAGESIZE{0x1000};
         static constexpr u32 PAGE_SIZE_BITS{static_cast<u32>(std::countr_zero<u32>(YUZU_PAGESIZE))};
@@ -222,13 +251,13 @@ private:
     } vm;
     std::unique_ptr<Tegra::MemoryManager> gmmu;
 
-    struct IoctlNx2SyncpointShimInfo {
-        u64_le address;
-        u32_le stride;
-        u32_le count;
+    struct IoctlGetSyncRoMap {
+        u64_le base_gpuva;
+        u32_le sync_size;
+        u32_le num_syncpoints;
     };
-    static_assert(sizeof(IoctlNx2SyncpointShimInfo) == 16);
-    NvResult Nx2GetSyncpointShimInfo(IoctlNx2SyncpointShimInfo& params);
+    static_assert(sizeof(IoctlGetSyncRoMap) == 16);
+    NvResult GetSyncRoMap(IoctlGetSyncRoMap& params);
     bool nx2_syncpoint_shim{};
 
     // Switch 2: maps GPU-accessible process memory (CPU range) at a GPU address.

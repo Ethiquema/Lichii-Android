@@ -11,8 +11,11 @@
 #include <optional>
 #include "common/common_funcs.h"
 #include "common/common_types.h"
+#include "common/virtual_buffer.h"
 
 namespace Common {
+
+[[nodiscard]] u64 GetCommittedBackingSize() noexcept;
 
 enum class MemoryPermission : u32 {
     Read = 1 << 0,
@@ -57,11 +60,6 @@ public:
     /// last full clear) is skipped: clearing it only made the host give every page real memory.
     void ClearBackingRegion(size_t physical_offset, size_t length, u32 fill_value);
 
-    /// Memory written once and read again rarely: its pages leave the working set (backing and,
-    /// when given, its view at virtual_offset), so the OS compresses or pages them out first when
-    /// it needs RAM. The contents stay; using the pages brings them back.
-    void HintCold(size_t physical_offset, size_t length,
-                  std::optional<size_t> virtual_offset) const;
     /// Pages the kernel hands out (cleared or not).
     void MarkUsed(size_t physical_offset, size_t length);
 
@@ -97,11 +95,13 @@ private:
     size_t backing_size{};
     size_t virtual_size{};
 
-#if !(defined(__OPENORBIS__) || defined(__managarm__))
+#if !(defined(__OPENORBIS__) || defined(__managarm__) || defined(__wasi__) || defined(__EMSCRIPTEN__))
     // Low level handler for the platform dependent memory routines
     class Impl;
     std::unique_ptr<Impl> impl;
 #endif
+    size_t backing_size{};
+    size_t virtual_size{};
     u8* backing_base{};
     u8* virtual_base{};
     size_t virtual_base_offset{};
@@ -112,7 +112,7 @@ private:
     std::unique_ptr<std::atomic<u8>[]> granules;
     size_t num_granules{};
     // Windows requires it for kernels whom lack proper support for some functions!
-    bool fallback_buffer{false};
+    std::optional<Common::VirtualBuffer<u8>> fallback_buffer;
 };
 
 } // namespace Common

@@ -17,6 +17,8 @@ add_library(core STATIC
     constants.h
     core.cpp
     core.h
+    game_overrides.cpp
+    game_overrides.h
     game_settings.cpp
     game_settings.h
     core_timing.cpp
@@ -42,14 +44,6 @@ add_library(core STATIC
     debugger/debugger.cpp
     debugger/debugger.h
     debugger/debugger_interface.h
-    debugger/gdbstub.cpp
-    debugger/gdbstub.h
-    debugger/gdbstub_arch.cpp
-    debugger/gdbstub_arch.h
-    debugger/nx2_debug_server.cpp
-    debugger/nx2_debug_server.h
-    debugger/nx2_debug_tools.cpp
-    debugger/nx2_debug_tools.h
     device_memory.cpp
     device_memory.h
     device_memory_manager.h
@@ -138,8 +132,6 @@ add_library(core STATIC
     file_sys/registered_cache.h
     file_sys/nup_container.cpp
     file_sys/nup_container.h
-    file_sys/nup_writer.cpp
-    file_sys/nup_writer.h
     file_sys/romfs.cpp
     file_sys/romfs.h
     file_sys/romfs_factory.cpp
@@ -398,6 +390,8 @@ add_library(core STATIC
     hle/kernel/svc_results.h
     hle/kernel/svc_types.h
     hle/result.h
+    hle/zlib_acceleration.cpp
+    hle/zlib_acceleration.h
     hle/service/acc/acc.cpp
     hle/service/acc/acc.h
     hle/service/acc/async_context.cpp
@@ -454,10 +448,6 @@ add_library(core STATIC
     hle/service/am/process_creation.h
     hle/service/am/process_holder.cpp
     hle/service/am/process_holder.h
-    hle/service/am/service/all_system_applet_proxies_service.cpp
-    hle/service/am/service/all_system_applet_proxies_service.h
-    hle/service/am/service/applet_common_functions.cpp
-    hle/service/am/service/applet_common_functions.h
     hle/service/am/service/application_accessor.cpp
     hle/service/am/service/application_accessor.h
     hle/service/am/service/application_creator.cpp
@@ -465,18 +455,29 @@ add_library(core STATIC
     hle/service/am/service/application_functions.cpp
     hle/service/am/service/application_functions.h
     hle/service/am/service/application_proxy.cpp
-    hle/service/am/service/graphics_scale_controller.h
+    hle/service/am/service/graphics_scaling_parameters_functions.h
+    hle/service/am/service/performance_functions.h
     hle/service/am/service/application_proxy.h
     hle/service/am/service/application_proxy_service.cpp
     hle/service/am/service/application_proxy_service.h
+    hle/service/am/service/performance_functions.cpp
+    hle/service/am/service/performance_functions.h
+    hle/service/am/service/gpu_session.cpp
+    hle/service/am/service/gpu_session.h
+    hle/service/am/service/graphics_session.cpp
+    hle/service/am/service/graphics_session.h
+    hle/service/am/service/graphics_supervisor.cpp
+    hle/service/am/service/graphics_supervisor.h
+    hle/service/am/service/graphics_supervisor_protocol.h
+    hle/service/am/service/graphics_syncpoint_cache.h
+    hle/service/am/service/graphics_scaling_parameters_functions.cpp
+    hle/service/am/service/graphics_scaling_parameters_functions.h
     hle/service/am/service/audio_controller.cpp
     hle/service/am/service/audio_controller.h
     hle/service/am/service/common_state_getter.cpp
     hle/service/am/service/common_state_getter.h
     hle/service/am/service/cradle_firmware_updater.cpp
     hle/service/am/service/cradle_firmware_updater.h
-    hle/service/am/service/debug_functions.cpp
-    hle/service/am/service/debug_functions.h
     hle/service/am/service/display_controller.cpp
     hle/service/am/service/display_controller.h
     hle/service/am/service/global_state_controller.cpp
@@ -485,28 +486,14 @@ add_library(core STATIC
     hle/service/am/service/home_menu_functions.h
     hle/service/am/service/library_applet_accessor.cpp
     hle/service/am/service/library_applet_accessor.h
-    hle/service/am/service/library_applet_creator.cpp
-    hle/service/am/service/library_applet_creator.h
-    hle/service/am/service/library_applet_proxy.cpp
-    hle/service/am/service/library_applet_proxy.h
-    hle/service/am/service/library_applet_self_accessor.cpp
-    hle/service/am/service/library_applet_self_accessor.h
-    hle/service/am/service/lock_accessor.cpp
-    hle/service/am/service/lock_accessor.h
     hle/service/am/service/overlay_functions.cpp
     hle/service/am/service/overlay_functions.h
-    hle/service/am/service/overlay_applet_proxy.cpp
-    hle/service/am/service/overlay_applet_proxy.h
     hle/service/am/service/process_winding_controller.cpp
     hle/service/am/service/process_winding_controller.h
     hle/service/am/service/self_controller.cpp
     hle/service/am/service/self_controller.h
     hle/service/am/service/storage.cpp
     hle/service/am/service/storage.h
-    hle/service/am/service/storage_accessor.cpp
-    hle/service/am/service/storage_accessor.h
-    hle/service/am/service/system_applet_proxy.cpp
-    hle/service/am/service/system_applet_proxy.h
     hle/service/am/service/window_controller.cpp
     hle/service/am/service/window_controller.h
     hle/service/am/window_system.cpp
@@ -536,8 +523,7 @@ add_library(core STATIC
     hle/service/audio/audio_renderer_manager.cpp
     hle/service/audio/audio_renderer_manager.h
     hle/service/audio/nx2_audio_device_manager.h
-    hle/service/audio/nx2_sysmix.cpp
-    hle/service/audio/nx2_sysmix.h
+    hle/service/audio/nx2_hwacod.h
     hle/service/audio/nx2_audio_user_client.h
     hle/service/audio/audio_renderer.cpp
     hle/service/audio/audio_renderer.h
@@ -549,9 +535,6 @@ add_library(core STATIC
     hle/service/audio/final_output_recorder_manager.cpp
     hle/service/audio/final_output_recorder_manager.h
     hle/service/audio/hardware_opus_decoder_manager.cpp
-    hle/service/audio/hardware_audio_codec.cpp
-    hle/service/audio/hardware_audio_codec.h
-    hle/service/audio/hardware_audio_codec_protocol.h
     hle/service/audio/hardware_opus_decoder_manager.h
     hle/service/audio/hardware_opus_decoder.cpp
     hle/service/audio/hardware_opus_decoder.h
@@ -598,20 +581,8 @@ add_library(core STATIC
     hle/service/btdrv/btdrv.h
     hle/service/btm/btm.cpp
     hle/service/btm/btm.h
-    hle/service/btm/btm_debug.cpp
-    hle/service/btm/btm_debug.h
-    hle/service/btm/btm_system.cpp
-    hle/service/btm/btm_system.h
-    hle/service/btm/btm_system_core.cpp
-    hle/service/btm/btm_system_core.h
-    hle/service/btm/btm_user.cpp
-    hle/service/btm/btm_user.h
-    hle/service/btm/btm_user_core.cpp
-    hle/service/btm/btm_user_core.h
     hle/service/caps/caps.cpp
     hle/service/caps/caps.h
-    hle/service/caps/caps_a.cpp
-    hle/service/caps/caps_a.h
     hle/service/caps/caps_c.cpp
     hle/service/caps/caps_c.h
     hle/service/caps/caps_manager.cpp
@@ -628,6 +599,18 @@ add_library(core STATIC
     hle/service/caps/caps_u.h
     hle/service/cmif_serialization.h
     hle/service/cmif_types.h
+    hle/service/dmnt/cheat_interface.cpp
+    hle/service/dmnt/cheat_interface.h
+    hle/service/dmnt/cheat_parser.cpp
+    hle/service/dmnt/cheat_parser.h
+    hle/service/dmnt/cheat_process_manager.cpp
+    hle/service/dmnt/cheat_process_manager.h
+    hle/service/dmnt/cheat_virtual_machine.cpp
+    hle/service/dmnt/cheat_virtual_machine.h
+    hle/service/dmnt/dmnt.cpp
+    hle/service/dmnt/dmnt.h
+    hle/service/dmnt/dmnt_results.h
+    hle/service/dmnt/dmnt_types.h
     hle/service/erpt/erpt.cpp
     hle/service/erpt/erpt.h
     hle/service/es/es.cpp
@@ -636,10 +619,6 @@ add_library(core STATIC
     hle/service/eupld/eupld.h
     hle/service/fatal/fatal.cpp
     hle/service/fatal/fatal.h
-    hle/service/fatal/fatal_p.cpp
-    hle/service/fatal/fatal_p.h
-    hle/service/fatal/fatal_u.cpp
-    hle/service/fatal/fatal_u.h
     hle/service/fgm/fgm.cpp
     hle/service/fgm/fgm.h
     hle/service/filesystem/filesystem.cpp
@@ -671,8 +650,6 @@ add_library(core STATIC
     hle/service/filesystem/save_data_controller.h
     hle/service/friend/friend.cpp
     hle/service/friend/friend.h
-    hle/service/friend/friend_interface.cpp
-    hle/service/friend/friend_interface.h
     hle/service/glue/arp.cpp
     hle/service/glue/arp.h
     hle/service/glue/bgtc.cpp
@@ -741,8 +718,6 @@ add_library(core STATIC
     hle/service/ldn/monitor_service.h
     hle/service/ldn/sf_monitor_service.cpp
     hle/service/ldn/sf_monitor_service.h
-    hle/service/ldn/sf_service.cpp
-    hle/service/ldn/sf_service.h
     hle/service/ldn/sf_service_monitor.cpp
     hle/service/ldn/sf_service_monitor.h
     hle/service/ldn/system_local_communication_service.cpp
@@ -804,7 +779,6 @@ add_library(core STATIC
     hle/service/nfp/nfp_types.h
     hle/service/ngc/ngc.cpp
     hle/service/ngc/ngc.h
-    hle/service/ngc/guest_hid.h
     hle/service/nifm/nifm.cpp
     hle/service/nifm/nifm.h
     hle/service/nim/nim.cpp
@@ -872,11 +846,15 @@ add_library(core STATIC
     hle/service/nvdrv/devices/nvhost_ctrl_gpu.h
     hle/service/nvdrv/devices/nvhost_gpu.cpp
     hle/service/nvdrv/devices/nvhost_gpu.h
+    hle/service/nvdrv/devices/nvhost_tsg_gpu.cpp
+    hle/service/nvdrv/devices/nvhost_tsg_gpu.h
     hle/service/nvdrv/devices/nvhost_nvdec.cpp
     hle/service/nvdrv/devices/nvhost_nvdec.h
     hle/service/nvdrv/devices/nvhost_nvdec_common.cpp
     hle/service/nvdrv/devices/nvhost_nvdec_common.h
     hle/service/nvdrv/devices/nvhost_nvjpg.cpp
+    hle/service/nvdrv/devices/nvhost_prof_gpu.cpp
+    hle/service/nvdrv/devices/nvhost_prof_gpu.h
     hle/service/nvdrv/devices/nvhost_nvjpg.h
     hle/service/nvdrv/devices/nvhost_vic.cpp
     hle/service/nvdrv/devices/nvhost_vic.h
@@ -933,8 +911,6 @@ add_library(core STATIC
     hle/service/olsc/native_handle_holder.h
     hle/service/olsc/olsc_service_for_application.cpp
     hle/service/olsc/olsc_service_for_application.h
-    hle/service/olsc/olsc_service_for_system_service.cpp
-    hle/service/olsc/olsc_service_for_system_service.h
     hle/service/olsc/olsc.cpp
     hle/service/olsc/olsc.h
     hle/service/olsc/remote_storage_controller.cpp
@@ -964,14 +940,8 @@ add_library(core STATIC
     hle/service/os/process.h
     hle/service/pcie/pcie.cpp
     hle/service/pcie/pcie.h
-    hle/service/pctl/parental_control_service_factory.cpp
-    hle/service/pctl/parental_control_service_factory.h
-    hle/service/pctl/parental_control_service.cpp
-    hle/service/pctl/parental_control_service.h
     hle/service/pctl/pctl.cpp
     hle/service/pctl/pctl.h
-    hle/service/pctl/pctl_results.h
-    hle/service/pctl/pctl_types.h
     hle/service/pcv/pcv.cpp
     hle/service/pcv/pcv.h
     hle/service/pm/pm.cpp
@@ -981,18 +951,8 @@ add_library(core STATIC
     hle/service/psc/ovln/ovln_types.h
     hle/service/psc/ovln/receiver_service.cpp
     hle/service/psc/ovln/receiver_service.h
-    hle/service/psc/ovln/receiver.cpp
-    hle/service/psc/ovln/receiver.h
     hle/service/psc/ovln/sender_service.cpp
     hle/service/psc/ovln/sender_service.h
-    hle/service/psc/ovln/sender.cpp
-    hle/service/psc/ovln/sender.h
-    hle/service/psc/pm_control.cpp
-    hle/service/psc/pm_control.h
-    hle/service/psc/pm_module.cpp
-    hle/service/psc/pm_module.h
-    hle/service/psc/pm_service.cpp
-    hle/service/psc/pm_service.h
     hle/service/psc/psc.cpp
     hle/service/psc/psc.h
     hle/service/psc/time/alarms.cpp
@@ -1043,21 +1003,12 @@ add_library(core STATIC
     hle/service/ptm/ts.h
     hle/service/ro/ro.cpp
     hle/service/ro/ro.h
-    hle/service/ro/ro_nro_utils.cpp
-    hle/service/ro/ro_nro_utils.h
-    hle/service/ro/ro_results.h
-    hle/service/ro/ro_types.h
     hle/service/server_manager.cpp
     hle/service/server_manager.h
     hle/service/service.cpp
     hle/service/service.h
-    hle/service/nx2_streamplay.h
     hle/service/nx2_stub_interface.h
     hle/service/nx2_gsv.h
-    hle/service/nx2_video_input_queue.h
-    hle/service/nx2_image_layout.h
-    hle/service/nx2_present_pacer.h
-    hle/service/nx2_video_ready.h
     hle/service/services.cpp
     hle/service/services.h
     hle/service/set/factory_settings_server.cpp
@@ -1082,8 +1033,6 @@ add_library(core STATIC
     hle/service/set/system_settings_server.h
     hle/service/sm/sm.cpp
     hle/service/sm/sm.h
-    hle/service/sm/sm_controller.cpp
-    hle/service/sm/sm_controller.h
     hle/service/sockets/bsd.cpp
     hle/service/sockets/bsd.h
     hle/service/sockets/nsd.cpp
@@ -1108,6 +1057,8 @@ add_library(core STATIC
     hle/service/ssl/ssl_types.h
     hle/service/tma/tma.cpp
     hle/service/tma/tma.h
+    hle/service/ulsf/ulsf.cpp
+    hle/service/ulsf/ulsf.h
     hle/service/usb/usb.cpp
     hle/service/usb/usb.h
     hle/service/vi/application_display_service.cpp
@@ -1154,12 +1105,15 @@ add_library(core STATIC
     internal_network/network_interface.h
     internal_network/socket_proxy.cpp
     internal_network/socket_proxy.h
+    internal_network/socket_types.h
     internal_network/sockets.h
     internal_network/wifi_scanner.h
     launch_timestamp_cache.cpp
     launch_timestamp_cache.h
     loader/deconstructed_rom_directory.cpp
     loader/deconstructed_rom_directory.h
+    loader/homebrew_nxlink.cpp
+    loader/homebrew_nxlink.h
     loader/kip.cpp
     loader/kip.h
     loader/loader.cpp
@@ -1180,11 +1134,6 @@ add_library(core STATIC
     loader/xci.h
     memory.cpp
     memory.h
-    memory/cheat_engine.cpp
-    memory/cheat_engine.h
-    memory/dmnt_cheat_types.h
-    memory/dmnt_cheat_vm.cpp
-    memory/dmnt_cheat_vm.h
     perf_stats.cpp
     perf_stats.h
     reporter.cpp
@@ -1193,6 +1142,20 @@ add_library(core STATIC
     tools/freezer.h
     tools/renderdoc.cpp
     tools/renderdoc.h)
+if (NOT EMSCRIPTEN)
+    # incompatible with wasm's async model
+    target_sources(core PRIVATE
+        debugger/gdbstub.cpp
+        debugger/gdbstub.h
+        debugger/gdbstub_arch.cpp
+        debugger/gdbstub_arch.h)
+endif()
+
+if (UNIX AND NOT APPLE)
+    target_sources(core PRIVATE
+        internal_network/socket_icmp.cpp
+        internal_network/socket_icmp.h)
+endif()
 
 if (ENABLE_WIFI_SCAN)
     target_sources(core PRIVATE internal_network/wifi_scanner.cpp)
@@ -1222,24 +1185,26 @@ if (MSVC)
     )
 else()
     target_compile_options(core PRIVATE
-        $<$<COMPILE_LANGUAGE:C,CXX>:-Wconversion>
+        $<$<COMPILE_LANGUAGE:C,CXX>:-Werror=conversion>
         $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-sign-conversion>
         $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-cast-function-type>
         $<$<CXX_COMPILER_ID:Clang>:-fsized-deallocation>)
     # pre-clang19 will spam with "OH DID YOU MEAN THIS?" otherwise...
-    if (CXX_CLANG AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 20)
+    if (CXX_CLANG AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 19)
         target_compile_options(core PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-cast-function-type-mismatch>)
     endif()
 endif()
 
-target_include_directories(core PRIVATE ${OPUS_INCLUDE_DIRS})
 target_link_libraries(core PUBLIC common PRIVATE audio_core hid_core network video_core nx_tzdb tz)
 if (MSVC)
     target_link_libraries(core PRIVATE getopt)
 endif()
 
 if (BOOST_NO_HEADERS)
-    target_link_libraries(core PUBLIC Boost::container Boost::heap Boost::asio Boost::process Boost::crc)
+    target_link_libraries(core PUBLIC Boost::container Boost::heap Boost::crc)
+    if (NOT EMSCRIPTEN)
+        target_link_libraries(core PUBLIC Boost::asio Boost::process)
+    endif()
 else()
     target_link_libraries(core PUBLIC Boost::headers)
 endif()
@@ -1251,7 +1216,7 @@ target_link_libraries(core PRIVATE
     RenderDoc::API
     ZLIB::ZLIB)
 
-target_link_libraries(core PUBLIC httplib::httplib zstd::zstd)
+target_link_libraries(core PUBLIC httplib::httplib zstd::zstd frozen::frozen-headers)
 
 if (ENABLE_WEB_SERVICE)
     target_compile_definitions(core PUBLIC ENABLE_WEB_SERVICE)
@@ -1272,9 +1237,19 @@ if (HAS_NCE)
         arm/nce/interpreter_visitor.cpp
         arm/nce/interpreter_visitor.h
         arm/nce/patcher.cpp
-        arm/nce/patcher.h
-        arm/nce/visitor_base.h)
+        arm/nce/patcher.h)
     target_link_libraries(core PRIVATE merry::oaknut)
+endif()
+
+# Native execution of application code on Apple silicon (EDEN_NX2_HYPERVISOR=1).
+if (APPLE AND ARCHITECTURE_arm64)
+    target_sources(core PRIVATE
+        arm/hypervisor/arm_hypervisor.cpp
+        arm/hypervisor/arm_hypervisor.h
+        arm/hypervisor/hv_vm.cpp
+        arm/hypervisor/hv_vm.h)
+    target_compile_definitions(core PRIVATE HAS_HYPERVISOR)
+    target_link_libraries(core PRIVATE "-framework Hypervisor")
 endif()
 
 if (ARCHITECTURE_x86_64 OR ARCHITECTURE_arm64 OR ARCHITECTURE_riscv64 OR ARCHITECTURE_loongarch64)
@@ -1295,18 +1270,12 @@ if (ARCHITECTURE_x86_64 OR ARCHITECTURE_arm64 OR ARCHITECTURE_riscv64 OR ARCHITE
         hle/service/jit/jit.cpp
         hle/service/jit/jit.h)
     target_link_libraries(core PRIVATE dynarmic::dynarmic)
+    # Quick hack for XCode generator...
+    if (IOS)
+        target_include_directories(core PRIVATE "${CMAKE_SOURCE_DIR}/dynarmic/src")
+    endif()
 endif()
 
-if (TARGET OpenSSL::SSL)
-    target_sources(core PRIVATE hle/service/ssl/ssl_backend_openssl.cpp)
-    target_link_libraries(core PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-else()
-    target_sources(core PRIVATE hle/service/ssl/ssl_backend_none.cpp)
-endif()
-
-if (ENABLE_LTO AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
-    # Fibers can migrate between host threads; keep kernel TLS lookups outside LTO callers.
-    set_source_files_properties(hle/kernel/kernel.cpp PROPERTIES COMPILE_OPTIONS -fno-lto)
-endif()
+target_link_libraries(core PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
 create_target_directory_groups(core)

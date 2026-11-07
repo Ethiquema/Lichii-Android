@@ -27,13 +27,13 @@ void Host1x::StartDevice(s32 fd, ChannelType type, u32 syncpt) {
 #ifdef YUZU_LEGACY
         std::call_once(nvdec_first_init, []() {std::this_thread::sleep_for(std::chrono::milliseconds{500});}); // HACK: For Astroneer
 #endif
-        devices[fd].emplace<Tegra::Host1x::Nvdec>(*this, fd, syncpt);
+        devices[fd] = std::make_unique<Tegra::Host1x::Nvdec>(*this, fd, syncpt);
         break;
     case ChannelType::VIC:
 #ifdef YUZU_LEGACY
         std::call_once(vic_first_init, []() {std::this_thread::sleep_for(std::chrono::milliseconds{500});}); // HACK: For Astroneer
 #endif
-        devices[fd].emplace<Tegra::Host1x::Vic>(*this, fd, syncpt);
+        devices[fd] = std::make_unique<Tegra::Host1x::Vic>(*this, fd, syncpt);
         break;
     default:
         LOG_ERROR(HW_GPU, "Unimplemented host1x device {}", u32(type));

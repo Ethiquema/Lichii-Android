@@ -6,12 +6,14 @@
 - [macOS](#macos)
 - [OpenIndiana](#openindiana)
 - [OmniOS](#omnios)
+- [iOS](#ios)
 - [HaikuOS](#haikuos)
 - [OpenBSD](#openbsd)
 - [FreeBSD](#freebsd)
 - [NetBSD](#netbsd)
 - [MSYS2](#msys2)
 - [RedoxOS](#redoxos)
+- [WebAssembly](#webassembly)
 <!-- /TOC -->
 
 ## Arch Linux
@@ -65,7 +67,7 @@ export LIBGL_ALWAYS_SOFTWARE=1
 
 ## OmniOS
 
-Install `developer/gcc14` on OmniOS using pkgsrc.
+Install `developer/gcc15` on OmniOS using pkgsrc.
 
 Since so many dependencies are missing on `OmniOS`, you may wish to use `-DCPMUTIL_FORCE_BUNDLED=ON` and `-DYUZU_USE_BUNDLED_OPENSSL=OFF`.
 
@@ -74,21 +76,15 @@ For OmniOS you are required to build glslang yourself:
 sudo pkg install python-313
 git clone --depth=1 https://github.com/KhronosGroup/glslang.git
 cd glslang
-python3.13 ./update_glslang_sources.py
+python3 ./update_glslang_sources.py
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -- -j `nproc`
+cmake --build build -- -j`nproc`
 cmake --install build
 ```
 
-It may be tempting to specify `-t glslang`, but this will cause installation to fail. So don't.
+Use `gmake` to properly build all utilities. You require an X11 server, [this guide](https://web.archive.org/web/20260424200928/https://geekblood.wordpress.com/2017/10/26/installing-x11-and-a-desktop-environment-on-omnios/) details how to attain one, the links to pkgsrc on said guide [are better found here](https://pkgsrc.smartos.org/install-on-illumos/).
 
-Using `--parallel` on CMake incorrectly passes `dmake ... -jn` instead of `dmake ... -j n`, this is a bug with OmniOS's CMake, it's recommended to not use this option until it's fixed.
-
-You may also need to install `gmake` in order to properly build FFmpeg, this is provided by the `build-essential` package.
-
-If it wasn't obvious already, you require a X11 server to properly run the emulator within OmniOS, [this guide](https://web.archive.org/web/20260424200928/https://geekblood.wordpress.com/2017/10/26/installing-x11-and-a-desktop-environment-on-omnios/) is a great starting point for that, the links to pkgsrc are outdated so follow [this exemplar](https://pkgsrc.smartos.org/install-on-illumos/) as well.
-
-For Solaris based OSes, `${CMAKE_SYSTEM_NAME}` isn't properly set on CMake (it's set to i686 on AMD64), you may find issues when building OpenSSL from `openssl-cmake`.
+For Solaris based OSes, `${CMAKE_SYSTEM_PROCESSOR}` isn't properly set on CMake (it's set to i686 on AMD64, must be `amd64`), you may find issues when building OpenSSL from `openssl-cmake`.
 
 ## HaikuOS
 
@@ -100,13 +96,13 @@ For reasons unberknownst to any human being, `glslangValidator` will crash upon 
 
 For this reason this patch is NOT applied to default on all platforms (for obvious reasons) - instead this is a HaikuOS specific patch, apply with `git apply <absolute path to patch>` after cloning SPIRV-Tools then `make -C build` and add the resulting binary (in `build/StandAlone/glslang`) into PATH.
 
-`cubeb_devel` will also not work, either disable cubeb or uninstall it.
-
 Still will not run flawlessly until `mesa-24` is available. Modify CMakeCache.txt with the `.so` of libGL and libGLESv2 by doing the incredibly difficult task of copy pasting them (`cp /boot/system/lib/libGL.so .`)
 
 If you have `quazip1_qt6_devel`, uninstall it. It may call `Core5Compat` on CMake which is wrongly packaged.
 
 ## OpenBSD
+
+OpenSSL 4.0 is available via ports, needs to be pointed to directly via `-DOPENSSL_ROOT_DIR=/usr/local/include/eopenssl40`.
 
 System boost doesn't have `context` (as of 7.8); so you may need to specify `-DYUZU_USE_CPM=ON -DBoost_FORCE_BUNDLED=ON`.
 
@@ -147,15 +143,13 @@ System provides a default `g++-10` which doesn't support the current C++ codebas
 
 Make may error out when generating C++ headers of SPIRV shaders, hence it's recommended to use `gmake` over the default system one.
 
-[parallel/spirv-tools](https://iso.us.netbsd.org/pub/pkgsrc/current/pkgsrc/parallel/spirv-tools/index.html) isn't available in binary form and must be built from source.
-
-glslang is not available on NetBSD, to circumvent this simply build glslang by yourself:
+If [parallel/spirv-tools](https://iso.us.netbsd.org/pub/pkgsrc/current/pkgsrc/parallel/spirv-tools/index.html) isn't available in binary, build from source:
 
 ```sh
-pkgin python313
+pkgin install python314
 git clone --depth=1 https://github.com/KhronosGroup/glslang.git
 cd glslang
-python3.13 ./update_glslang_sources.py
+python3.14 ./update_glslang_sources.py
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -- -j`nproc`
 cmake --install build
@@ -163,7 +157,7 @@ cmake --install build
 
 However, pkgsrc is highly recommended, see [getting pkgsrc](https://iso.us.netbsd.org/pub/pkgsrc/current/pkgsrc/doc/pkgsrc.html#getting). You must get `current` not the `2025Q2` version.
 
-`QtCore` on NetBSD is included, but due to misconfigurations(!) we MUST include one of the standard headers that include `bits/c++config.h`, since source_location (required by `QtCore`) isn't properly configured to intake `bits/c++config.h` (none of the experimental library is). This is a bug with NetBSD packaging and not our fault, but alas.
+`QtCore` on NetBSD is included, but due to misconfigurations you must include `bits/c++config.h`, since source_location (required by `QtCore`) isn't properly configured to intake `bits/c++config.h` (none of the experimental library is).
 
 ## DragonFlyBSD
 
@@ -239,6 +233,6 @@ find ./*/ -name "*.dll" | while read -r dll; do deps "$dll"; done
 
 ## RedoxOS
 
-The package install may randomly hang at times, in which case it has to be restarted. ALWAYS do a `sudo pkg update` or the chances of it hanging will be close to 90%. If "multiple" installs fail at once, try installing 1 by 1 the packages.
+Package installs randomly hang at times, you may need to restart it about 3-5 times to complete. Always do `sudo pkg update` or it will hang. Try installing each package individually.
 
-When CMake invokes certain file syscalls - it may sometimes cause crashes or corruptions on the (kernel?) address space - so reboot the system if there is a "hang" in CMake.
+When CMake invokes certain file syscalls - most of the time it causes crashes, and corruptions on the address space. Reboot if there's a freeze over 5 minutes.

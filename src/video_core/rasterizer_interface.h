@@ -77,13 +77,13 @@ public:
     virtual void DisableGraphicsUniformBuffer(size_t stage, u32 index) = 0;
 
     /// Signal a GPU based semaphore as a fence
-    virtual void SignalFence(std::function<void()>&& func) = 0;
+    virtual void SignalFence(std::function<void()>&& func, bool ordered = false) = 0;
 
     /// Send an operation to be done after a certain amount of flushes.
     virtual void SyncOperation(std::function<void()>&& func) = 0;
 
     /// Signal a GPU based syncpoint as a fence
-    virtual void SignalSyncPoint(u32 value) = 0;
+    virtual void SignalSyncPoint(u32 value, u32 count) = 0;
 
     /// Signal a GPU based reference as point
     virtual void SignalReference() = 0;
@@ -153,12 +153,6 @@ public:
     /// Notify rasterizer that any caches of the specified region are desync with guest
     virtual void OnCacheInvalidation(PAddr addr, u64 size) = 0;
 
-    virtual bool TryCacheInvalidation(DAddr addr, u64 size) {
-        if (MustFlushRegion(addr, size, VideoCommon::CacheType::BufferCache)) return false;
-        OnCacheInvalidation(addr, size);
-        return true;
-    }
-
     virtual bool OnCPUWrite(PAddr addr, u64 size) = 0;
 
     /// Sync memory between guest and host.
@@ -177,6 +171,9 @@ public:
 
     /// Notify the host renderer to wait for previous primitive and compute operations.
     virtual void WaitForIdle() = 0;
+
+    /// Emulate the NX2 PBDMA memory barrier when the backend requires an explicit barrier.
+    virtual void Nx2Membar() {}
 
     /// Notify the host renderer to wait for reads and writes to render targets and flush caches.
     virtual void FragmentBarrier() = 0;
@@ -203,37 +200,12 @@ public:
 
     /// Stand-in for a DLSS evaluation: temporal upscale of src into dst along motion_vectors
     /// (jitter in src pixels; motion_scale turns a motion vector into a UV offset to the previous
-    /// frame), with depth for NVIDIA DLSS or FSR 3.1. With use_history=false, only de-jitter src.
-    /// False when unsupported; the caller retains its native dispatch.
+    /// frame). False when unsupported; the caller then falls back to AccelerateSurfaceCopy.
     [[nodiscard]] virtual bool AccelerateTemporalUpscale(
         const Tegra::Engines::Fermi2D::Surface& src, const Tegra::Engines::Fermi2D::Surface& dst,
-        const Tegra::Engines::Fermi2D::Surface& motion_vectors,
-        const Tegra::Texture::TICEntry* depth, std::array<f32, 2> jitter,
-        std::array<f32, 2> motion_scale, bool use_history = true) {
+        const Tegra::Engines::Fermi2D::Surface& motion_vectors, std::array<f32, 2> jitter,
+        std::array<f32, 2> motion_scale) {
         return false;
-    }
-
-    /// Whether a game's own DLSS network can run here: its matrix multiplies are emulated with
-    /// 32-wide shuffles, and its output must be checkable (ProbeGameDlssOutput).
-    [[nodiscard]] virtual bool SupportsGameDlssNetwork() const {
-        return false;
-    }
-
-    /// Whether NVIDIA DLSS (the "Use NVIDIA DLSS" setting) would draw a game's DLSS evaluation.
-    [[nodiscard]] virtual bool UsesNvidiaDlss() const {
-        return false;
-    }
-
-    /// Whether ProbeGameDlssOutput checks anything on this backend.
-    [[nodiscard]] virtual bool CanProbeGameDlssOutput() const {
-        return false;
-    }
-
-    /// Records a health check of a game's DLSS network output (dst) against its input (src) and
-    /// returns the result of an earlier check once the GPU has finished it.
-    [[nodiscard]] virtual std::optional<VideoCore::GameDlssProbe> ProbeGameDlssOutput(
-        const Tegra::Engines::Fermi2D::Surface& src, const Tegra::Engines::Fermi2D::Surface& dst) {
-        return std::nullopt;
     }
 
     [[nodiscard]] virtual Tegra::Engines::AccelerateDMAInterface& AccessAccelerateDMA() = 0;

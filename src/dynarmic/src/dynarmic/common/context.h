@@ -67,9 +67,7 @@
 #else
 #   define CTX_SP (_UC_MACHINE_SP(ucontext))
 #endif
-#endif
-
-#if defined(ARCHITECTURE_arm64)
+#elif defined(ARCHITECTURE_arm64)
 #    if defined(__APPLE__)
 #        define CTX_PC (mctx->__ss.__pc)
 #        define CTX_SP (mctx->__ss.__sp)
@@ -88,7 +86,7 @@
 #        define CTX_Q(i) (fpctx->vregs[i])
 #        define CTX_FPSR (fpctx->fpsr)
 #        define CTX_FPCR (fpctx->fpcr)
-#    elif defined(__FreeBSD__)
+#    elif defined(__FreeBSD__) || defined(__DragonFly__)
 #        define CTX_PC (mctx.mc_gpregs.gp_elr)
 #        define CTX_SP (mctx.mc_gpregs.gp_sp)
 #        define CTX_LR (mctx.mc_gpregs.gp_lr)
@@ -131,6 +129,9 @@
 #    elif defined(__managarm__)
 #        define CTX_PC (mctx.__pollution(gregs)[REG_RIP])
 #        define CTX_SP (mctx.__pollution(gregs)[REG_RSP])
+#    elif defined(__OPENORBIS__)
+#        define CTX_RIP (mctx.gregs[REG_RIP])
+#        define CTX_RSP (mctx.gregs[REG_RSP])
 #    else
 #        error "unknown platform"
 #    endif

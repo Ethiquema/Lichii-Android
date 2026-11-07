@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-FileCopyrightText: 2017 Citra Emulator Project
@@ -17,6 +17,7 @@
 #include "ui_configure_hotkeys.h"
 #include "yuzu/configuration/configure_hotkeys.h"
 #include "yuzu/hotkeys.h"
+#include "qt_common/uisettings.h"
 #include "yuzu/util/sequence_dialog/sequence_dialog.h"
 
 constexpr int name_column = 0;

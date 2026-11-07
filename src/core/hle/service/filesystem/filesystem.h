@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <mutex>
+#include <string>
 #include "common/common_types.h"
 #include "core/file_sys/fs_directory.h"
 #include "core/file_sys/fs_filesystem.h"
@@ -55,6 +56,7 @@ enum class ContentStorageId : u32 {
     System,
     User,
     SdCard,
+    System0,
 };
 
 enum class ImageDirectoryId : u32 {
@@ -71,11 +73,12 @@ public:
     ~FileSystemController();
 
     Result RegisterProcess(ProcessId process_id, ProgramId program_id,
-                           std::shared_ptr<FileSys::RomFSFactory>&& factory);
+                           std::shared_ptr<FileSys::RomFSFactory>&& factory,
+                           std::string homebrew_initial_cwd = {});
     Result OpenProcess(ProgramId* out_program_id,
-                       std::shared_ptr<SaveDataController>* out_save_data_controller,
-                       std::shared_ptr<RomFsController>* out_romfs_controller,
-                       ProcessId process_id);
+                        std::shared_ptr<SaveDataController>* out_save_data_controller,
+                        std::shared_ptr<RomFsController>* out_romfs_controller,
+                        ProcessId process_id, std::string* out_homebrew_initial_cwd = nullptr);
     void SetPackedUpdate(ProcessId process_id, FileSys::VirtualFile update_raw);
 
     std::shared_ptr<SaveDataController> OpenSaveDataController();
@@ -108,6 +111,7 @@ public:
     FileSys::VirtualDir GetSystemNANDContentDirectory() const;
     FileSys::VirtualDir GetUserNANDContentDirectory() const;
     FileSys::VirtualDir GetSDMCContentDirectory() const;
+    FileSys::VirtualDir GetSystem0NANDContentDirectory() const;
 
     FileSys::VirtualDir GetNANDImageDirectory() const;
     FileSys::VirtualDir GetSDMCImageDirectory() const;
@@ -138,6 +142,7 @@ private:
         ProgramId program_id;
         std::shared_ptr<FileSys::RomFSFactory> romfs_factory;
         std::shared_ptr<FileSys::SaveDataFactory> save_data_factory;
+        std::string homebrew_initial_cwd;
     };
 
     std::mutex registration_lock;
@@ -153,6 +158,8 @@ private:
     std::unique_ptr<FileSys::PlaceholderCache> gamecard_placeholder;
 
     Core::System& system;
+
+    std::shared_ptr<SaveDataController> system_save_data_controller;
 };
 
 void LoopProcess(Core::System& system);

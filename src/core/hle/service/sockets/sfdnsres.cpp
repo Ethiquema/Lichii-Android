@@ -21,25 +21,6 @@
 namespace Service::Sockets {
 
 SFDNSRES::SFDNSRES(Core::System& system_) : ServiceFramework{system_, "sfdnsres"} {
-    static const FunctionInfo functions[] = {
-        {0, nullptr, "SetDnsAddressesPrivateRequest"},
-        {1, nullptr, "GetDnsAddressPrivateRequest"},
-        {2, &SFDNSRES::GetHostByNameRequest, "GetHostByNameRequest"},
-        {3, nullptr, "GetHostByAddrRequest"},
-        {4, nullptr, "GetHostStringErrorRequest"},
-        {5, &SFDNSRES::GetGaiStringErrorRequest, "GetGaiStringErrorRequest"},
-        {6, &SFDNSRES::GetAddrInfoRequest, "GetAddrInfoRequest"},
-        {7, nullptr, "GetNameInfoRequest"},
-        {8, nullptr, "RequestCancelHandleRequest"},
-        {9, nullptr, "CancelRequest"},
-        {10, &SFDNSRES::GetHostByNameRequestWithOptions, "GetHostByNameRequestWithOptions"},
-        {11, nullptr, "GetHostByAddrRequestWithOptions"},
-        {12, &SFDNSRES::GetAddrInfoRequestWithOptions, "GetAddrInfoRequestWithOptions"},
-        {13, nullptr, "GetNameInfoRequestWithOptions"},
-        {14, &SFDNSRES::ResolverSetOptionRequest, "ResolverSetOptionRequest"},
-        {15, nullptr, "ResolverGetOptionRequest"},
-    };
-    RegisterHandlers(functions);
 }
 
 SFDNSRES::~SFDNSRES() = default;
@@ -102,39 +83,39 @@ static bool IsBlockedHost(const std::string& host) {
         [&host](const std::string& domain) { return host.find(domain) != std::string::npos; });
 }
 
-static NetDbError GetAddrInfoErrorToNetDbError(GetAddrInfoError result) {
+static NetDbError GetAddrInfoErrorToNetDbError(Network::GetAddrInfoError result) {
     // These combinations have been verified on console (but are not
     // exhaustive).
     switch (result) {
-    case GetAddrInfoError::SUCCESS:
+    case Network::GetAddrInfoError::SUCCESS:
         return NetDbError::Success;
-    case GetAddrInfoError::AGAIN:
+    case Network::GetAddrInfoError::AGAIN:
         return NetDbError::TryAgain;
-    case GetAddrInfoError::NODATA:
+    case Network::GetAddrInfoError::NODATA:
         return NetDbError::HostNotFound;
-    case GetAddrInfoError::SERVICE:
+    case Network::GetAddrInfoError::SERVICE:
         return NetDbError::Success;
     default:
         return NetDbError::HostNotFound;
     }
 }
 
-static Errno GetAddrInfoErrorToErrno(GetAddrInfoError result) {
+static Network::Errno GetAddrInfoErrorToErrno(Network::GetAddrInfoError result) {
     // These combinations have been verified on console (but are not
     // exhaustive).
     switch (result) {
-    case GetAddrInfoError::SUCCESS:
+    case Network::GetAddrInfoError::SUCCESS:
         // Note: Sometimes a successful lookup sets errno to EADDRNOTAVAIL for
         // some reason, but that doesn't seem useful to implement.
-        return Errno::SUCCESS;
-    case GetAddrInfoError::AGAIN:
-        return Errno::SUCCESS;
-    case GetAddrInfoError::NODATA:
-        return Errno::SUCCESS;
-    case GetAddrInfoError::SERVICE:
-        return Errno::INVAL;
+        return Network::Errno::E_SUCCESS;
+    case Network::GetAddrInfoError::AGAIN:
+        return Network::Errno::E_SUCCESS;
+    case Network::GetAddrInfoError::NODATA:
+        return Network::Errno::E_SUCCESS;
+    case Network::GetAddrInfoError::SERVICE:
+        return Network::Errno::E_INVAL;
     default:
-        return Errno::SUCCESS;
+        return Network::Errno::E_SUCCESS;
     }
 }
 
@@ -155,9 +136,7 @@ static void AppendNulTerminated(std::vector<u8>& vec, std::string_view str) {
 // host's gethostbyname, because it simplifies portability: e.g., getaddrinfo
 // behaves the same on Unix and Windows, unlike gethostbyname where Windows
 // doesn't implement h_errno.
-static std::vector<u8> SerializeAddrInfoAsHostEnt(const std::vector<Network::AddrInfo>& vec,
-                                                  std::string_view host) {
-
+static std::vector<u8> SerializeAddrInfoAsHostEnt(std::span<const Network::AddrInfo> vec, std::string_view host) {
     std::vector<u8> data;
     // h_name: use the input hostname (append nul-terminated)
     AppendNulTerminated(data, host);
@@ -165,12 +144,12 @@ static std::vector<u8> SerializeAddrInfoAsHostEnt(const std::vector<Network::Add
 
     Append<u32_be>(data, 0); // count of h_aliases
     // (If the count were nonzero, the aliases would be appended as nul-terminated here.)
-    Append<u16_be>(data, static_cast<u16>(Domain::INET)); // h_addrtype
+    Append<u16_be>(data, u16(Network::Domain::INET)); // h_addrtype
     Append<u16_be>(data, sizeof(Network::IPv4Address));   // h_length
     // h_addr_list:
     size_t count = vec.size();
     ASSERT(count <= UINT32_MAX);
-    Append<u32_be>(data, static_cast<uint32_t>(count));
+    Append<u32_be>(data, u32(count));
     for (const Network::AddrInfo& addrinfo : vec) {
         // On the Switch, this is passed through htonl despite already being
         // big-endian, so it ends up as little-endian.
@@ -182,7 +161,7 @@ static std::vector<u8> SerializeAddrInfoAsHostEnt(const std::vector<Network::Add
     return data;
 }
 
-static std::pair<u32, GetAddrInfoError> GetHostByNameRequestImpl(HLERequestContext& ctx) {
+static std::pair<u32, Network::GetAddrInfoError> GetHostByNameRequestImpl(HLERequestContext& ctx) {
     struct InputParameters {
         u8 use_nsd_resolve;
         u32 cancel_handle;
@@ -205,7 +184,7 @@ static std::pair<u32, GetAddrInfoError> GetHostByNameRequestImpl(HLERequestConte
     // Prevent resolution of Nintendo servers
     if (IsBlockedHost(host)) {
         LOG_WARNING(Network, "Resolution of hostname {} requested, returning EAI_AGAIN", host);
-        return {0, GetAddrInfoError::AGAIN};
+        return {0, Network::GetAddrInfoError::AGAIN};
     }
 
     auto res_v = Network::GetAddressInfo(host, /*service*/ std::nullopt);
@@ -213,10 +192,10 @@ static std::pair<u32, GetAddrInfoError> GetHostByNameRequestImpl(HLERequestConte
         const std::vector<u8> data = SerializeAddrInfoAsHostEnt(*res, host);
         const u32 data_size = u32(data.size());
         ctx.WriteBuffer(data, 0);
-        return {data_size, GetAddrInfoError::SUCCESS};
+        return {data_size, Network::GetAddrInfoError::SUCCESS};
     }
     auto* err = std::get_if<Network::GetAddrInfoError>(&res_v);
-    return {0, Translate(*err)};
+    return {0, *err};
 }
 
 void SFDNSRES::GetHostByNameRequest(HLERequestContext& ctx) {
@@ -224,7 +203,7 @@ void SFDNSRES::GetHostByNameRequest(HLERequestContext& ctx) {
 
     struct OutputParameters {
         NetDbError netdb_error;
-        Errno bsd_errno;
+        Network::Errno bsd_errno;
         u32 data_size;
     };
     static_assert(sizeof(OutputParameters) == 0xc);
@@ -244,7 +223,7 @@ void SFDNSRES::GetHostByNameRequestWithOptions(HLERequestContext& ctx) {
     struct OutputParameters {
         u32 data_size;
         NetDbError netdb_error;
-        Errno bsd_errno;
+        Network::Errno bsd_errno;
     };
     static_assert(sizeof(OutputParameters) == 0xc);
 
@@ -257,24 +236,23 @@ void SFDNSRES::GetHostByNameRequestWithOptions(HLERequestContext& ctx) {
     });
 }
 
-static std::vector<u8> SerializeAddrInfo(const std::vector<Network::AddrInfo>& vec,
-                                         std::string_view host) {
+static std::vector<u8> SerializeAddrInfo(std::span<const Network::AddrInfo> vec, std::string_view host) {
     // Adapted from
     // https://github.com/switchbrew/libnx/blob/c5a9a909a91657a9818a3b7e18c9b91ff0cbb6e3/nx/source/runtime/resolver.c#L190
     std::vector<u8> data;
 
     for (const Network::AddrInfo& addrinfo : vec) {
         // serialized addrinfo:
-        Append<u32_be>(data, 0xBEEFCAFE);                                        // magic
-        Append<u32_be>(data, 0);                                                 // ai_flags
-        Append<u32_be>(data, static_cast<u32>(Translate(addrinfo.family)));      // ai_family
-        Append<u32_be>(data, static_cast<u32>(Translate(addrinfo.socket_type))); // ai_socktype
-        Append<u32_be>(data, static_cast<u32>(Translate(addrinfo.protocol)));    // ai_protocol
+        Append<u32_be>(data, 0xBEEFCAFE); // magic
+        Append<u32_be>(data, 0); // ai_flags
+        Append<u32_be>(data, u32(addrinfo.family));      // ai_family
+        Append<u32_be>(data, u32(addrinfo.socket_type)); // ai_socktype
+        Append<u32_be>(data, u32(addrinfo.protocol));    // ai_protocol
         Append<u32_be>(data, 16); // ai_addrlen
         // ^ *not* sizeof(SerializedSockAddrIn), not that it matters since they're the same size
 
         // ai_addr:
-        Append<u16_be>(data, static_cast<u16>(Translate(addrinfo.addr.family))); // sin_family
+        Append<u16_be>(data, u16(addrinfo.addr.family)); // sin_family
         // On the Switch, the following fields are passed through htonl despite
         // already being big-endian, so they end up as little-endian.
         Append<u16_le>(data, addrinfo.addr.portno);                            // sin_port
@@ -296,7 +274,7 @@ static std::vector<u8> SerializeAddrInfo(const std::vector<Network::AddrInfo>& v
     return data;
 }
 
-static std::pair<u32, GetAddrInfoError> GetAddrInfoRequestImpl(HLERequestContext& ctx) {
+static std::pair<u32, Network::GetAddrInfoError> GetAddrInfoRequestImpl(HLERequestContext& ctx) {
     struct InputParameters {
         u8 use_nsd_resolve;
         u32 cancel_handle;
@@ -321,7 +299,7 @@ static std::pair<u32, GetAddrInfoError> GetAddrInfoRequestImpl(HLERequestContext
     // Prevent resolution of Nintendo servers
     if (IsBlockedHost(host)) {
         LOG_WARNING(Network, "Resolution of hostname {} requested, returning EAI_AGAIN", host);
-        return {0, GetAddrInfoError::AGAIN};
+        return {0, Network::GetAddrInfoError::AGAIN};
     }
 
     std::optional<std::string> service = std::nullopt;
@@ -331,24 +309,23 @@ static std::pair<u32, GetAddrInfoError> GetAddrInfoRequestImpl(HLERequestContext
     }
 
     // Serialized hints are also passed in a buffer, but are ignored for now.
-
     auto res_v = Network::GetAddressInfo(host, service);
     if (auto* res = std::get_if<std::vector<Network::AddrInfo>>(&res_v)) {
         const std::vector<u8> data = SerializeAddrInfo(*res, host);
         const u32 data_size = u32(data.size());
         ctx.WriteBuffer(data, 0);
-        return {data_size, GetAddrInfoError::SUCCESS};
+        return {data_size, Network::GetAddrInfoError::SUCCESS};
     }
     auto* err = std::get_if<Network::GetAddrInfoError>(&res_v);
-    return {0, Translate(*err)};
+    return {0, *err};
 }
 
 void SFDNSRES::GetAddrInfoRequest(HLERequestContext& ctx) {
     auto [data_size, emu_gai_err] = GetAddrInfoRequestImpl(ctx);
 
     struct OutputParameters {
-        Errno bsd_errno;
-        GetAddrInfoError gai_error;
+        Network::Errno bsd_errno;
+        Network::GetAddrInfoError gai_error;
         u32 data_size;
     };
     static_assert(sizeof(OutputParameters) == 0xc);
@@ -364,7 +341,7 @@ void SFDNSRES::GetAddrInfoRequest(HLERequestContext& ctx) {
 
 void SFDNSRES::GetGaiStringErrorRequest(HLERequestContext& ctx) {
     struct InputParameters {
-        GetAddrInfoError gai_errno;
+        Network::GetAddrInfoError gai_errno;
     };
     IPC::RequestParser rp{ctx};
     auto input = rp.PopRaw<InputParameters>();
@@ -382,9 +359,9 @@ void SFDNSRES::GetAddrInfoRequestWithOptions(HLERequestContext& ctx) {
 
     struct OutputParameters {
         u32 data_size;
-        GetAddrInfoError gai_error;
+        Network::GetAddrInfoError gai_error;
         NetDbError netdb_error;
-        Errno bsd_errno;
+        Network::Errno bsd_errno;
     };
     static_assert(sizeof(OutputParameters) == 0x10);
 
@@ -410,14 +387,6 @@ void SFDNSRES::ResolverSetOptionRequest(HLERequestContext& ctx) {
 
 DNS_PRIV::DNS_PRIV(Core::System& system_)
     : ServiceFramework{system_, "dns:priv"} {
-    // clang-format off
-    static const FunctionInfo functions[] = {
-        {0, nullptr, "Cmd0"},
-        {1, nullptr, "Cmd1"},
-        {2, nullptr, "Cmd2"},
-    };
-    // clang-format on
-    RegisterHandlers(functions);
 }
 
 DNS_PRIV::~DNS_PRIV() = default;

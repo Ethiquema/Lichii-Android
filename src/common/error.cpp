@@ -35,15 +35,26 @@ std::string NativeErrorToString(int e) {
                                    FORMAT_MESSAGE_IGNORE_INSERTS,
                                nullptr, e, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
                                LPSTR(&err_str), 1, nullptr);
-    if (res) {
-        std::string ret(err_str);
-        LocalFree(err_str);
-        return ret;
+    if (!res) {
+        return "(FormatMessageA failed to format error)";
     }
     return "(FormatMessageA failed to format error)";
 #else
-    char err_str[255];
-    return HandleStrerrorR(strerror_r(e, err_str, sizeof(err_str)), err_str);
+    char err_str[256];
+    // See https://github.com/llvm/llvm-project/blob/c8fdb5f8b93c3e1da5e2ff3ba8b18627d6147b51/openmp/runtime/src/kmp_i18n.cpp#L711
+    // musl doesn't provide a macro gate but defines strerror_r() even if _GNU_SOURCE is defined
+#if defined(__managarm__) || (defined(__GLIBC__) || defined(__BIONIC__)) || defined(_GNU_SOURCE)
+    // Thread safe (GNU-specific)
+    const char* str = strerror_r(e, err_str, sizeof(err_str));
+    return std::string(str);
+#else
+    // Thread safe (XSI-compliant)
+    int second_err = strerror_r(e, err_str, sizeof(err_str));
+    if (second_err != 0) {
+        return "(strerror_r failed to format error)";
+    }
+    return std::string(err_str);
+#endif // GLIBC etc.
 #endif // _WIN32
 }
 

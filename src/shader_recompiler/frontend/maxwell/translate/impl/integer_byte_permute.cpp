@@ -7,6 +7,8 @@
 
 namespace Shader::Maxwell {
 namespace {
+// PRMT in its default mode: each result byte is picked by a selector nibble from the eight bytes
+// {c, a} (0-3 from a, 4-7 from c); bit 3 of the nibble replicates the picked byte's sign bit.
 void PRMT(TranslatorVisitor& v, u64 insn, const IR::U32& selector, const IR::U32& src_c) {
     union {
         u64 raw;
@@ -23,15 +25,12 @@ void PRMT(TranslatorVisitor& v, u64 insn, const IR::U32& selector, const IR::U32
         const IR::U32 nibble{v.ir.BitFieldExtract(selector, v.ir.Imm32(byte * 4), v.ir.Imm32(4))};
         const IR::U32 index{v.ir.BitwiseAnd(nibble, v.ir.Imm32(7))};
         const IR::U32 source{
-            v.ir.Select(v.ir.ILessThan(index, v.ir.Imm32(4), false), src_a, src_c)};
-        const IR::U32 offset{
-            v.ir.ShiftLeftLogical(v.ir.BitwiseAnd(index, v.ir.Imm32(3)), v.ir.Imm32(3))};
+            IR::U32{v.ir.Select(v.ir.ILessThan(index, v.ir.Imm32(4), false), src_a, src_c)}};
+        const IR::U32 offset{v.ir.ShiftLeftLogical(v.ir.BitwiseAnd(index, v.ir.Imm32(3)), v.ir.Imm32(3))};
         const IR::U32 value{v.ir.BitFieldExtract(source, offset, v.ir.Imm32(8))};
-        const IR::U32 sign{
-            v.ir.BitFieldExtract(source, v.ir.IAdd(offset, v.ir.Imm32(7)), v.ir.Imm32(1), true)};
-        const IR::U1 replicate{
-            v.ir.INotEqual(v.ir.BitwiseAnd(nibble, v.ir.Imm32(8)), v.ir.Imm32(0))};
-        const IR::U32 picked{v.ir.Select(replicate, sign, value)};
+        const IR::U32 sign{v.ir.BitFieldExtract(source, v.ir.IAdd(offset, v.ir.Imm32(7)), v.ir.Imm32(1), true)};
+        const IR::U1 replicate{v.ir.INotEqual(v.ir.BitwiseAnd(nibble, v.ir.Imm32(8)), v.ir.Imm32(0))};
+        const IR::U32 picked{IR::U32{v.ir.Select(replicate, sign, value)}};
         result = v.ir.BitFieldInsert(result, picked, v.ir.Imm32(byte * 8), v.ir.Imm32(8));
     }
     v.X(prmt.dest_reg, result);

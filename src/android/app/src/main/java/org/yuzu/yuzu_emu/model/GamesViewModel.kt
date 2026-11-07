@@ -3,9 +3,7 @@
 
 package org.yuzu.yuzu_emu.model
 
-import android.net.Uri
 import android.widget.Toast
-import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.preference.PreferenceManager
@@ -61,14 +59,24 @@ class GamesViewModel : ViewModel() {
     }
 
     fun setGames(games: List<Game>) {
+        val preferences = PreferenceManager.getDefaultSharedPreferences(YuzuApplication.appContext)
+
         val sortedList = games.sortedWith(
-            compareBy(
-                { it.title.lowercase(Locale.getDefault()) },
-                { it.path }
-            )
+            compareByDescending<Game> { game ->
+                preferences.getLong(game.keyLastPlayedTime, 0L)
+            }.thenBy { it.title.lowercase(Locale.getDefault()) }
+              .thenBy { it.path }
         )
 
         _games.value = sortedList
+    }
+
+    fun resortGames() {
+        val currentGames = _games.value
+        if (currentGames.isNotEmpty()) {
+            setGames(currentGames)
+            _shouldScrollToTop.value = true
+        }
     }
 
     fun setShouldSwapData(shouldSwap: Boolean) {
@@ -117,12 +125,7 @@ class GamesViewModel : ViewModel() {
                                     return@forEach
                                 }
 
-                                val gameExists =
-                                    DocumentFile.fromSingleUri(
-                                        YuzuApplication.appContext,
-                                        Uri.parse(game.path)
-                                    )?.exists()
-                                if (gameExists == true) {
+                                if (game.fileExists) {
                                     deserializedGames.add(game)
                                 }
                             }

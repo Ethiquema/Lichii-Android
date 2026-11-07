@@ -9,7 +9,6 @@
 #include <span>
 #include <vector>
 
-#include "common/concepts.h"
 #include "core/hle/service/nvdrv/devices/nvdevice.h"
 
 namespace Service::Nvidia::Devices {

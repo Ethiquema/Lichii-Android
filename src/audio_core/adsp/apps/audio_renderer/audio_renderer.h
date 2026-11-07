@@ -63,13 +63,15 @@ public:
      */
     void Start();
 
+    void NotifyShutdown();
+
     /**
      * Stop the AudioRenderer.
      */
     void Stop();
 
     void Signal();
-    void Wait();
+    void Wait(std::stop_token stop_token);
 
     void Send(Direction dir, u32 message);
     u32 Receive(Direction dir);
@@ -102,8 +104,6 @@ private:
     Mailbox mailbox;
     /// Main thread
     std::jthread main_thread{};
-    /// The current state
-    std::atomic<bool> running{};
     /// Shared memory of input command buffers, set by host, read by DSP
     std::array<CommandBuffer, MaxRendererSessions> command_buffers{};
     /// The command lists to process

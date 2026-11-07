@@ -76,7 +76,6 @@ jboolean Java_org_yuzu_yuzu_1emu_utils_GameMetadata_getIsValid(JNIEnv* env, jobj
             auto const file_type = loader->GetFileType();
             if (file_type == Loader::FileType::Unknown || file_type == Loader::FileType::Error)
                 return false;
-            // IsContainerType covers NSP, NSZ, XCI, XCZ and NUP (Switch 2 packages).
             if (Loader::IsContainerType(file_type) &&
                 !Loader::IsBootableGameContainer(file, file_type))
                 return false;
