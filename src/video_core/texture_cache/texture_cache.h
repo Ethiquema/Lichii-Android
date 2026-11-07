@@ -3038,18 +3038,45 @@ ImageViewId TextureCache<P>::FindDepthBuffer() {
     if (gpu_addr == 0) {
         return ImageViewId{};
     }
-    const ImageInfo info(regs.zeta, regs.zeta_size, regs.anti_alias_samples_mode);
+    // Target-independent rasterization: the depth buffer keeps the raster sample count while
+    // the color targets use anti_alias_samples_mode.
+    Tegra::Texture::MsaaMode zeta_msaa_mode = regs.anti_alias_samples_mode;
+    if (regs.anti_alias_raster != Tegra::Engines::Maxwell3D::Regs::AntiAliasRaster::Mode1x1) {
+        const auto raster_mode = static_cast<Tegra::Texture::MsaaMode>(regs.anti_alias_raster);
+        bool use_raster = regs.tir_mode == Tegra::Engines::Maxwell3D::Regs::TIRMode::RasterNTargetM;
+        if (!use_raster && regs.anti_alias_samples_mode == Tegra::Texture::MsaaMode::Msaa1x1) {
+            // Clears can be issued before tir_mode is enabled. Only a depth buffer sized for the
+            // raster samples relative to the color target is treated as multisampled, otherwise
+            // it ping-pongs between a 1x and a multisampled image every frame.
+            const auto& rt0 = regs.rt[0];
+            use_raster = rt0.Address() != 0 && rt0.format != Tegra::RenderTargetFormat::NONE &&
+                         regs.zeta_size.width == rt0.width * NumSamplesX(raster_mode) &&
+                         regs.zeta_size.height == rt0.height * NumSamplesY(raster_mode);
+        }
+        if (use_raster) {
+            zeta_msaa_mode = raster_mode;
+        }
+    }
+    const ImageInfo info(regs.zeta, regs.zeta_size, zeta_msaa_mode);
     return FindRenderTargetView(info, gpu_addr);
 }
 
 template <class P>
 ImageViewId TextureCache<P>::FindRenderTargetView(const ImageInfo& info, GPUVAddr gpu_addr) {
-    static constexpr u32 MaxRenderTargetSize = 32768;
+    // A garbage command stream can bind render targets no host can create (creating the image
+    // throws on the GPU thread). Leave such a target unbound, so its draws write nothing.
+    static constexpr u32 MaxRenderTargetSize = 16384;
     static constexpr s32 MaxRenderTargetLayers = 2048;
     if (info.size.width == 0 || info.size.height == 0 || info.size.width > MaxRenderTargetSize ||
-        info.size.height > MaxRenderTargetSize || info.resources.layers > MaxRenderTargetLayers) {
-        LOG_ERROR(HW_GPU, "Ignoring {}x{} render target with {} layers at {:#x}", info.size.width,
-                  info.size.height, info.resources.layers, gpu_addr);
+        info.size.height > MaxRenderTargetSize || info.size.depth > MaxRenderTargetLayers ||
+        info.resources.layers > MaxRenderTargetLayers) {
+        static bool reported{};
+        if (!reported) {
+            reported = true;
+            LOG_ERROR(HW_GPU, "Ignoring render target at {:#x}: {}x{}x{}, {} layers, format {}",
+                      gpu_addr, info.size.width, info.size.height, info.size.depth,
+                      info.resources.layers, static_cast<u32>(info.format));
+        }
         return ImageViewId{};
     }
     ImageId image_id{};

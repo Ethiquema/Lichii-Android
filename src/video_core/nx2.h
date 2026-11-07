@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -19,6 +20,13 @@ namespace Tegra {
 // Set once a Switch 2 (Ampere, NVN2) driver is talking to the GPU. Its command streams use
 // Ampere classes and the Turing+ macro ISA, which Eden's Maxwell engines don't implement.
 inline std::atomic<bool> g_nx2_ampere{false};
+
+/// Parses a switch that is on unless NAME=0. Callers cache the result and also check
+/// g_nx2_ampere, so Switch 1 programs never see it on.
+[[nodiscard]] inline bool Nx2EnvDefaultOn(const char* name) {
+    const char* value = std::getenv(name);
+    return value == nullptr || value[0] != '0';
+}
 
 // Device pages the GPU has written through the buffer cache (shader stores, copies), ever. Title 1
 // runs command lists the GPU writes each frame (20-byte entries its culling fills in); read

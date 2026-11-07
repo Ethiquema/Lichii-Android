@@ -1445,7 +1445,10 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
                         VideoCommon::QueryDma::Trace(memory, maxwell3d.Rasterizer(), method, address,
                                                      source, read_bytes);
                     }
-                    if (!VideoCommon::GpuSplit::Get().Active()) {
+                    // Query reports count too: conditional rendering DMA-reads an occlusion query's
+                    // report into a macro, and those results sit in the query cache until flushed
+                    // (read as 0 samples, the draws are skipped).
+                    if (owns_caches) {
                         memory.FlushRegion(source, read_bytes, VideoCommon::CacheType::QueryCache);
                     }
                     if (memory.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {

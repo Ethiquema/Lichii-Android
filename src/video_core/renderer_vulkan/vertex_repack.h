@@ -16,7 +16,7 @@ constexpr bool VertexRepackInputSupported(bool dynamic_input, bool experimental_
 }
 
 // Pipelines without dynamic vertex input repack when the device cannot fetch the 69-byte stride.
-// EGLANTINE_EXPERIMENTAL_STATIC_VERTEX_REPACK=1 forces the repack on, =0 forces it off.
+// EDEN_NX2_STATIC_VERTEX_REPACK=1 forces the repack on, =0 forces it off.
 inline bool StaticVertexRepackSelected(const char* override_value, u32 stride_alignment) {
     if (override_value && std::strcmp(override_value, "1") == 0) {
         return true;
@@ -28,7 +28,7 @@ inline bool StaticVertexRepackSelected(const char* override_value, u32 stride_al
 }
 
 inline bool StaticVertexRepackEnabled(u32 stride_alignment) {
-    return StaticVertexRepackSelected(std::getenv("EGLANTINE_EXPERIMENTAL_STATIC_VERTEX_REPACK"),
+    return StaticVertexRepackSelected(std::getenv("EDEN_NX2_STATIC_VERTEX_REPACK"),
                                       stride_alignment);
 }
 
@@ -69,7 +69,7 @@ inline std::optional<VertexRepackParameters> MakeVertexRepackParameters(u32 offs
 
 inline bool VertexRepackEnabled() {
     static const bool enabled = [] {
-        const char* value = std::getenv("EGLANTINE_TEST_VERTEX_REPACK");
+        const char* value = std::getenv("EDEN_NX2_TEST_VERTEX_REPACK");
         return !value || std::strcmp(value, "0") != 0;
     }();
     return enabled;

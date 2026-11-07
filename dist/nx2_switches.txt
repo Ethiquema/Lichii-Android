@@ -29,6 +29,10 @@ EDEN_NX2_FENCE_BATCH=1
 # Terrain/indirect drawing fix for Donkey Kong Bananza: enabled by default. Set to 0 only to leave to GPU.
 #EDEN_NX2_RESETFIX=0
 
+# Host occlusion queries: skipped by default on Switch 2 programs (a game crashed in
+# vkCmdBeginQuery on Adreno). Sample counts then read as 0. Set to 0 to record queries again.
+#EDEN_NX2_NO_OCCLUSION=0
+
 # Drop reactive-flushing read traps on Switch 2 programs (opt-in; can reduce FPS from 29 to 24 in MKW).
 #EDEN_NX2_NO_REACTIVE=1
 

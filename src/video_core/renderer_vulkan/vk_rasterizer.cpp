@@ -423,6 +423,12 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
                         regs.rt[0].Address(), regs.rt[0].width, regs.rt[0].height);
         }
     };
+    // A topology past Patches would index the pipeline state's lookup tables out of bounds.
+    if (const auto topology = maxwell3d->draw_manager.draw_state.topology;
+        static_cast<u32>(topology) > static_cast<u32>(Maxwell::PrimitiveTopology::Patches)) {
+        report_failure("invalid topology");
+        return;
+    }
     GraphicsPipeline* const pipeline{[&] {
         Profile::Scope scope{Profile::Zone::PipelineLookup};
         return pipeline_cache.CurrentGraphicsPipeline();
@@ -1576,6 +1582,9 @@ bool RasterizerVulkan::MustFlushRegion(DAddr addr, u64 size, VideoCommon::CacheT
         if (buffer_cache.IsRegionGpuModified(addr, size)) {
             return true;
         }
+    }
+    if (True(which & VideoCommon::CacheType::QueryCache) && query_cache.IsRegionGpuModified(addr, size)) {
+        return true;
     }
     if (!Settings::IsGPULevelHigh()) {
         return false;

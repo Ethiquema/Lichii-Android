@@ -756,10 +756,14 @@ void Java_org_yuzu_yuzu_1emu_NativeLibrary_surfaceChanged(JNIEnv* env, jobject i
 }
 
 void Java_org_yuzu_yuzu_1emu_NativeLibrary_surfaceDestroyed(JNIEnv* env, jobject instance) {
-    if (auto* native_window = EmulationSession::GetInstance().NativeWindow(); native_window) {
+    auto* const native_window = EmulationSession::GetInstance().NativeWindow();
+    EmulationSession::GetInstance().SetNativeWindow(nullptr);
+    // Let the renderer see the surface is gone before the window is released: the GPU threads
+    // keep presenting (and setting the frame rate) while emulation is paused or stopping.
+    EmulationSession::GetInstance().SurfaceChanged();
+    if (native_window) {
         ANativeWindow_release(native_window);
     }
-    EmulationSession::GetInstance().SetNativeWindow(nullptr);
 }
 
 void Java_org_yuzu_yuzu_1emu_NativeLibrary_setAppDirectory(JNIEnv* env, jobject instance,

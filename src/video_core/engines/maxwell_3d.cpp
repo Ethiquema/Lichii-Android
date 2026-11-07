@@ -20,6 +20,7 @@
 #include "video_core/dirty_flags.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/engines/maxwell_3d.h"
+#include "video_core/host1x/syncpoint_manager.h"
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
 #include "video_core/memory_manager.h"
@@ -916,6 +917,11 @@ void Maxwell3D::ProcessSyncPoint() {
     }
     const u32 sync_point = regs.sync_info.sync_point.Value();
     [[maybe_unused]] const u32 cache_flush = regs.sync_info.clean_l2.Value();
+    if (sync_point >= Tegra::Host1x::SyncpointManager::NUM_MAX_SYNCPOINTS) {
+        LOG_ERROR(HW_GPU, "Syncpoint increment of out-of-range id {} (raw {:#x}) dropped", sync_point,
+                  regs.reg_array[MAXWELL3D_REG_INDEX(sync_info)]);
+        return;
+    }
     rasterizer->SignalSyncPoint(sync_point);
 }
 
@@ -1372,10 +1378,14 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
     if (VideoCommon::Nx2Profile::Enabled()) {
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::DmaReadBytes, read_bytes);
     }
-    if (memory_manager.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {
+    // Query reports too (occlusion-based conditional rendering, see MacroEngine::ReadNativeMemory).
+    // The flush runs on the back when the split is on, and the query cache belongs to the back.
+    constexpr auto flush_caches =
+        VideoCommon::CacheType::BufferCache | VideoCommon::CacheType::QueryCache;
+    if (memory_manager.IsMemoryDirty(source, read_bytes, flush_caches)) {
         split.Run(
-            [memory = &memory_manager, source, read_bytes] {
-                memory->FlushRegion(source, read_bytes, VideoCommon::CacheType::BufferCache);
+            [memory = &memory_manager, source, read_bytes, flush_caches] {
+                memory->FlushRegion(source, read_bytes, flush_caches);
             },
             VideoCommon::DrainSite::MacroDmaFlush);
     }
