@@ -133,7 +133,6 @@ protected:
     std::mutex command_mutex;
     Host1x::Host1x& host1x;
     ChClassId current_class;
-    std::jthread thread;
 };
 
 } // namespace Tegra

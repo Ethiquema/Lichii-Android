@@ -9,7 +9,7 @@
 #include <QtConcurrent>
 #include <fstream>
 
-#include "common/logging/log.h"
+#include "common/logging.h"
 #include "core/game_overrides.h"
 #include "qt_common/config/uisettings.h"
 

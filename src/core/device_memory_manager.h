@@ -10,6 +10,9 @@
 #include <atomic>
 #include <bit>
 #include <deque>
+#ifdef __ANDROID__
+#include <android/hardware_buffer.h>
+#endif
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -325,6 +328,15 @@ private:
     const Common::HostMemory& host_memory;
     DeviceInterface* device_inter;
     std::unique_ptr<Common::ThreadWorker> cold_hint_worker;
+
+#ifdef __ANDROID__
+    /// AHardwareBuffer windows backing the emulated memory (unified memory backing),
+    /// handed over by Common::HostMemory at construction; the GPU imports these.
+    std::span<AHardwareBuffer* const> ahb_windows{};
+    size_t ahb_window_size{};
+    size_t ahb_base{};
+    bool backing_is_shared{};
+#endif
 
     struct TrackedEntry {
         VAddr cpu_backing_address;

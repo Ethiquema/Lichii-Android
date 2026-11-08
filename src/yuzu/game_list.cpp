@@ -14,7 +14,7 @@
 #include <QThreadPool>
 #include <QToolButton>
 #include "common/common_types.h"
-#include "common/logging/log.h"
+#include "common/logging.h"
 #include "core/core.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/registered_cache.h"

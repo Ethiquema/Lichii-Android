@@ -13,7 +13,7 @@
 #include <unordered_map>
 
 #include "common/fs/path_util.h"
-#include "common/logging/log.h"
+#include "common/logging.h"
 #include "common/settings.h"
 #include "video_core/renderer_base.h"
 

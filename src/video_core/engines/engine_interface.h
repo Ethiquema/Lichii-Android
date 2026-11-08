@@ -50,7 +50,6 @@ public:
     boost::container::small_vector<std::pair<u32, u32>, 64> method_sink{};
     bool current_dirty{};
     GPUVAddr current_dma_segment;
-    bool current_dirty{};
 protected:
     virtual void ConsumeSinkImpl(Core::System& system) {
         for (auto [method, value] : method_sink) {
