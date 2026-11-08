@@ -186,7 +186,7 @@ function(cpm_download url file)
         unset(args)
     endif()
 
-    foreach(i RANGE 5)
+    foreach(i RANGE 8)
         file(DOWNLOAD ${url} ${file}
             ${args}
             STATUS ret)
@@ -196,13 +196,13 @@ function(cpm_download url file)
             break()
         endif()
 
-        echo_error("Download failed. Trying again in 5 seconds")
-        sleep(5)
+        echo_error("Download failed (attempt ${i}). Trying again in 10 seconds")
+        sleep(10)
     endforeach()
 
     # TODO: use return code or something
     if (NOT code EQUAL 0)
-        fatal("Download for ${pkg_url} failed after 5 tries")
+        fatal("Download for ${url} failed after 9 tries")
     endif()
 endfunction()
 
@@ -715,11 +715,10 @@ function(AddJsonPackage)
             FORCE_BUNDLED_PACKAGE "${JSON_FORCE_BUNDLED_PACKAGE}"
             SOURCE_SUBDIR "${source_subdir}"
 
-            GIT_VERSION "${git_version}"
             GIT_HOST "${git_host}"
 
             ARTIFACT "${artifact}"
-            TAG "${tag}"
+
             ${EXTRA_ARGS})
     endif()
 
