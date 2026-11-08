@@ -656,7 +656,13 @@ function(AddJsonPackage)
 
     set(multiValueArgs OPTIONS)
 
-    set(optionArgs MODULE)
+    # DOWNLOAD_ONLY is honored so a bare "AddJsonPackage(NAME x DOWNLOAD_ONLY)"
+    # is not silently dropped: previously anything but MODULE landed in
+    # JSON_UNPARSED_ARGUMENTS and was never forwarded to AddPackage, which
+    # made CPM run FetchContent_MakeAvailable on packages that callers meant
+    # to only download (e.g. reshade: its deps/CMakeLists then re-defined
+    # this project's stb and glad targets and configure died on CMP0002).
+    set(optionArgs MODULE DOWNLOAD_ONLY)
 
     cmake_parse_arguments(JSON "${optionArgs}" "${oneValueArgs}" "${multiValueArgs}"
         "${ARGN}")
@@ -719,7 +725,8 @@ function(AddJsonPackage)
 
             ARTIFACT "${artifact}"
 
-            ${EXTRA_ARGS})
+            ${EXTRA_ARGS}
+            ${JSON_UNPARSED_ARGUMENTS})
     endif()
 
     # pass stuff to parent scope
@@ -771,7 +778,10 @@ function(AddPackage)
 
     set(multiValueArgs OPTIONS PATCHES)
 
-    set(optionArgs MODULE)
+    # DOWNLOAD_ONLY must be a real option here: the EXTRA_ARGS handling below
+    # and the FetchContent path in CPMAddPackage both expect it, and callers
+    # (AddJsonPackage) forward the bare keyword from their own parse.
+    set(optionArgs MODULE DOWNLOAD_ONLY)
 
     cmake_parse_arguments(PKG_ARGS "${optionArgs}" "${oneValueArgs}" "${multiValueArgs}"
         "${ARGN}")
