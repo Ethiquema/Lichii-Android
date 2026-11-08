@@ -18,7 +18,10 @@
 #pragma warning(disable : 4505)
 #endif
 #define g_ZSTD_threading_useless_symbol g_ZSTD_zbic_threading_useless_symbol
-#include "zstd.c"
+// bionic has no qsort_r; drop _GNU_SOURCE so the dictBuilder falls back to its
+// portable C90 sort instead of failing to compile.
+#undef _GNU_SOURCE
+#include "zstd.inc"
 #undef g_ZSTD_threading_useless_symbol
 #ifdef _MSC_VER
 #pragma warning(pop)

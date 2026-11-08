@@ -6,9 +6,13 @@
 
 #pragma once
 
+#ifdef __ANDROID__
+#include <android/hardware_buffer.h>
+#endif
 #include <atomic>
 #include <memory>
 #include <optional>
+#include <span>
 #include "common/common_funcs.h"
 #include "common/common_types.h"
 #include "common/virtual_buffer.h"
@@ -60,6 +64,25 @@ public:
     /// last full clear) is skipped: clearing it only made the host give every page real memory.
     void ClearBackingRegion(size_t physical_offset, size_t length, u32 fill_value);
 
+    /// Memory written once and read again rarely: its pages leave the working set (backing and,
+    /// when given, its view at virtual_offset), so the OS compresses or pages them out first when
+    /// it needs RAM. The contents stay; using the pages brings them back.
+    void HintCold(size_t physical_offset, size_t length,
+                  std::optional<size_t> virtual_offset) const;
+
+    /// Whether the backing store is shared with other processes (AHardwareBuffer windows).
+    bool IsBackingShared() const noexcept;
+
+#ifdef __ANDROID__
+    /// The AHardwareBuffer windows backing (part of) the emulated memory, when the unified
+    /// memory backing is in use; empty otherwise. The GPU imports these directly.
+    [[nodiscard]] std::span<AHardwareBuffer* const> GetBackingHardwareBuffers() const noexcept;
+    /// Size in bytes of every window handed out by GetBackingHardwareBuffers().
+    [[nodiscard]] size_t GetBackingHardwareBufferWindowSize() const noexcept;
+    /// Offset into the emulated memory the hardware buffer windows start at.
+    [[nodiscard]] size_t GetBackingHardwareBufferBase() const noexcept;
+#endif
+
     /// Pages the kernel hands out (cleared or not).
     void MarkUsed(size_t physical_offset, size_t length);
 
@@ -92,9 +115,6 @@ public:
     }
 
 private:
-    size_t backing_size{};
-    size_t virtual_size{};
-
 #if !(defined(__OPENORBIS__) || defined(__managarm__) || defined(__wasi__) || defined(__EMSCRIPTEN__))
     // Low level handler for the platform dependent memory routines
     class Impl;

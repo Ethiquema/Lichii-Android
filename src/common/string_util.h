@@ -36,6 +36,21 @@ bool SplitPath(const std::string& full_path, std::string* _pPath, std::string* _
 
 #endif
 
+/**
+ * Compares the string defined by the range [`begin`, `end`) to the null-terminated C-string
+ * `other` for equality.
+ */
+template <typename InIt>
+[[nodiscard]] inline bool ComparePartialString(InIt begin, InIt end, const char* other) noexcept {
+    for (; begin != end && *other != '\0'; ++begin, ++other) {
+        if (*begin != *other) {
+            return false;
+        }
+    }
+    // Only return true if both strings finished at the same point
+    return (begin == end) == (*other == '\0');
+}
+
 [[nodiscard]] std::u16string U16StringFromBuffer(const u16* input, std::size_t length);
 
 /// Creates a std::string from a fixed-size NUL-terminated char buffer. If the buffer isn't

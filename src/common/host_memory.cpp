@@ -61,6 +61,9 @@
 #include <random>
 
 #include "common/alignment.h"
+#include "common/dynamic_library.h"
+#include "common/memory_detect.h"
+#include "common/settings.h"
 #include "common/assert.h"
 #include "common/div_ceil.h"
 #include "common/free_region_manager.h"
@@ -75,6 +78,37 @@
 static int memfd_create(const char* name, unsigned int flags) {
     return syscall(__NR_memfd_create, name, flags);
 }
+#endif
+
+#ifdef __ANDROID__
+#include <android/hardware_buffer.h>
+
+// Android's native_handle_t (libcutils) is not exposed by the NDK, and
+// AHardwareBuffer_getNativeHandle is not in the NDK headers either; both are
+// reached through libandroid at run time. The layout below is the stable
+// native_handle wire format every Android version ships.
+struct NativeHandle {
+    int version;
+    int numFds;
+    int numInts;
+    int data[];
+};
+
+using PFN_AHardwareBuffer_getNativeHandle = const NativeHandle* (*)(const AHardwareBuffer*);
+
+namespace {
+// libandroid's AHardwareBuffer_getNativeHandle takes a plane index; the blob
+// windows this file allocates only have plane 0, which is what every call
+// site here wants.
+const NativeHandle* GetAhbNativeHandle(const AHardwareBuffer* buffer) {
+    using TwoArgFn = const NativeHandle* (*)(const AHardwareBuffer*, uint32_t);
+    static TwoArgFn fn{};
+    if (fn == nullptr) {
+        return nullptr;
+    }
+    return fn(buffer, 0);
+}
+} // namespace
 #endif
 
 namespace Common {
@@ -533,6 +567,7 @@ public:
     bool Init() {
         long page_size = sysconf(_SC_PAGESIZE);
         ASSERT_MSG(page_size == 0x1000, "page size {:#x} is incompatible with 4K paging", page_size);
+        host_page_size = static_cast<size_t>(page_size);
         // Backing memory initialization
 #if defined(__sun__) || defined(__HAIKU__) || defined(__NetBSD__) || defined(__DragonFly__)
         fd = shm_open_anon(O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
@@ -631,6 +666,20 @@ public:
     }
 
 #ifdef __ANDROID__
+
+    static PFN_AHardwareBuffer_getNativeHandle ResolveGetNativeHandle() {
+        using TwoArgFn = const NativeHandle* (*)(const AHardwareBuffer*, uint32_t);
+        static TwoArgFn fn{};
+        if (fn == nullptr) {
+            const Common::DynamicLibrary libandroid{"libandroid.so"};
+            if (!libandroid.IsOpen() ||
+                !libandroid.GetSymbol("AHardwareBuffer_getNativeHandle", &fn)) {
+                return nullptr;
+            }
+        }
+        return &GetAhbNativeHandle;
+    }
+
     static AHardwareBuffer_Desc MakeBlobDesc(size_t len) {
         return AHardwareBuffer_Desc{
             .width = static_cast<u32>(len),
@@ -835,183 +884,8 @@ public:
         return true;
     }
 
-#ifdef __ANDROID__
-    static AHardwareBuffer_Desc MakeBlobDesc(size_t len) {
-        return AHardwareBuffer_Desc{
-            .width = static_cast<u32>(len),
-            .height = 1,
-            .layers = 1,
-            .format = AHARDWAREBUFFER_FORMAT_BLOB,
-            .usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN |
-                     AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN |
-                     AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER,
-            .stride = 0,
-            .rfu0 = 0,
-            .rfu1 = 0,
-        };
-    }
+#endif // __ANDROID__
 
-    static bool ProbeAhbBacking(PFN_AHardwareBuffer_getNativeHandle get_native_handle) {
-        const AHardwareBuffer_Desc desc = MakeBlobDesc(PageAlignment * 2);
-        AHardwareBuffer* buffer{};
-        if (AHardwareBuffer_allocate(&desc, &buffer) != 0 || buffer == nullptr) {
-            return false;
-        }
-        const NativeHandle* const handle = get_native_handle(buffer);
-        if (handle == nullptr || handle->numFds < 1) {
-            AHardwareBuffer_release(buffer);
-            return false;
-        }
-        const int probe_fd = handle->data[0];
-        bool ok = true;
-        const auto try_map = [&](int prot, off_t offset) {
-            if (!ok) {
-                return;
-            }
-            void* const ptr = mmap(nullptr, PageAlignment, prot, MAP_SHARED, probe_fd, offset);
-            if (ptr == MAP_FAILED) {
-                ok = false;
-                return;
-            }
-            munmap(ptr, PageAlignment);
-        };
-        try_map(PROT_READ | PROT_WRITE, 0);
-        try_map(PROT_READ | PROT_WRITE, static_cast<off_t>(PageAlignment));
-#ifdef ARCHITECTURE_arm64
-        try_map(PROT_READ | PROT_EXEC, 0);
-#endif
-        AHardwareBuffer_release(buffer);
-        return ok;
-    }
-
-    size_t ComputeAhbBudget(size_t window_size) const {
-        const u64 total_physical = Common::GetMemInfo().TotalPhysicalMemory;
-        constexpr u64 BaselineFootprint = 6ULL << 30;
-        if (total_physical <= BaselineFootprint) {
-            return 0;
-        }
-        const u64 permissible_maps = Common::GetPermissibleMapCount();
-        if (permissible_maps == 0) {
-            return 0;
-        }
-        u64 budget = (total_physical - BaselineFootprint) / 2;
-        constexpr u64 MapSlotsPerWindow = 64;
-        const u64 affordable_windows = permissible_maps / MapSlotsPerWindow;
-        budget = (std::min)(budget, affordable_windows * window_size);
-        const u64 available = Common::GetAvailablePhysicalMemory();
-        if (available != 0) {
-            budget = (std::min)(budget, available / 2);
-        }
-        budget = (std::min)(budget, static_cast<u64>(backing_size));
-        budget = Common::AlignDown(budget, window_size);
-        constexpr u64 MinimumBudget = 256ULL << 20;
-        if (budget < MinimumBudget) {
-            return 0;
-        }
-        return static_cast<size_t>(budget);
-    }
-
-    bool InitAhbBacking() {
-        if (!Settings::values.use_unified_memory.GetValue()) {
-            return false;
-        }
-        static const PFN_AHardwareBuffer_getNativeHandle get_native_handle =
-            ResolveGetNativeHandle();
-        if (get_native_handle == nullptr) {
-            return false;
-        }
-        constexpr size_t window_size = 256ULL << 20;
-        const size_t budget = ComputeAhbBudget(window_size);
-        if (budget == 0) {
-            return false;
-        }
-        if (!ProbeAhbBacking(get_native_handle)) {
-            return false;
-        }
-        const size_t aligned_backing = Common::AlignDown(backing_size, window_size);
-        const size_t max_windows = (std::min)(budget, aligned_backing) / window_size;
-
-        std::vector<AHardwareBuffer*> buffers;
-        std::vector<int> buffer_fds;
-        const auto cleanup = [&] {
-            for (AHardwareBuffer* buffer : buffers) {
-                AHardwareBuffer_release(buffer);
-            }
-            buffers.clear();
-            buffer_fds.clear();
-        };
-        for (size_t i = 0; i < max_windows; ++i) {
-            const AHardwareBuffer_Desc desc = MakeBlobDesc(window_size);
-            AHardwareBuffer* buffer{};
-            if (AHardwareBuffer_allocate(&desc, &buffer) != 0 || buffer == nullptr) {
-                break;
-            }
-            const NativeHandle* const handle = get_native_handle(buffer);
-            if (handle == nullptr || handle->numFds < 1) {
-                AHardwareBuffer_release(buffer);
-                break;
-            }
-            const int buffer_fd = handle->data[0];
-            const off_t buffer_len = lseek(buffer_fd, 0, SEEK_END);
-            if (buffer_len < static_cast<off_t>(window_size)) {
-                AHardwareBuffer_release(buffer);
-                break;
-            }
-            buffers.push_back(buffer);
-            buffer_fds.push_back(buffer_fd);
-        }
-        const size_t num_windows = buffers.size();
-        if (num_windows == 0) {
-            return false;
-        }
-        const size_t region_size = num_windows * window_size;
-        const size_t region_base = Common::AlignDown(
-            (std::min)(preferred_offset, aligned_backing - region_size), window_size);
-        u8* const base = static_cast<u8*>(mmap(nullptr, backing_size, PROT_NONE,
-                                               MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0));
-        if (base == MAP_FAILED) {
-            cleanup();
-            return false;
-        }
-        const auto map_over_reservation = [&](size_t offset, size_t len, int map_fd,
-                                              off_t map_offset) {
-            if (len == 0) {
-                return true;
-            }
-            if (mmap(base + offset, len, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, map_fd,
-                     map_offset) == MAP_FAILED) {
-                munmap(base, backing_size);
-                cleanup();
-                return false;
-            }
-            return true;
-        };
-        if (!map_over_reservation(0, region_base, fd, 0)) {
-            return false;
-        }
-        for (size_t i = 0; i < num_windows; ++i) {
-            if (!map_over_reservation(region_base + i * window_size, window_size, buffer_fds[i],
-                                      0)) {
-                return false;
-            }
-        }
-        const size_t tail_offset = region_base + region_size;
-        if (!map_over_reservation(tail_offset, backing_size - tail_offset, fd,
-                                  static_cast<off_t>(tail_offset))) {
-            return false;
-        }
-        backing_base = base;
-        ahb_windows = std::move(buffers);
-        ahb_fds = std::move(buffer_fds);
-        ahb_window_size = window_size;
-        ahb_base = region_base;
-        ahb_bytes = region_size;
-        committed_backing_size.store(region_size, std::memory_order_relaxed);
-        for (const int window_fd : ahb_fds) {
-            SyncDmaBufCpuAccess(window_fd, DmaBufSyncStart);
-        }
-        return true;
-    }
 
     ~Impl() {
         Release();
@@ -1131,6 +1005,18 @@ public:
         return fd >= 0;
     }
 
+#ifdef __ANDROID__
+    std::span<AHardwareBuffer* const> GetAhbWindows() const noexcept {
+        return ahb_windows;
+    }
+    size_t GetAhbWindowSize() const noexcept {
+        return ahb_window_size;
+    }
+    size_t GetAhbBase() const noexcept {
+        return ahb_base;
+    }
+#endif
+
     const size_t backing_size; ///< Size of the backing memory in bytes
     const size_t virtual_size; ///< Size of the virtual address placeholder in bytes
 
@@ -1144,6 +1030,13 @@ private:
         if (page_states != nullptr) {
             munmap(page_states, page_states_size);
         }
+#ifdef __ANDROID__
+        for (AHardwareBuffer* buffer : ahb_windows) {
+            AHardwareBuffer_release(buffer);
+        }
+        ahb_windows.clear();
+        ahb_fds.clear();
+#endif
 
         if (virtual_map_base != MAP_FAILED) {
             int ret = munmap(virtual_map_base, virtual_size);
@@ -1275,6 +1168,18 @@ private:
         apply(run_begin, end, run);
     }
 
+    size_t host_page_size{PageAlignment};
+    size_t page_states_size{};
+    u32* page_states{};
+    std::mutex page_states_mutex;
+#ifdef __ANDROID__
+    std::vector<AHardwareBuffer*> ahb_windows;
+    std::vector<int> ahb_fds;
+    size_t ahb_window_size{};
+    size_t ahb_base{};
+    size_t ahb_bytes{};
+    size_t preferred_offset{};
+#endif
     int fd{-1}; // memfd file descriptor, -1 is the error value of memfd_create
     FreeRegionManager free_manager{};
 };
@@ -1360,9 +1265,60 @@ void HostMemory::Protect(size_t virtual_offset, size_t length, MemoryPermission 
 #endif
 }
 
+void HostMemory::HintCold(size_t physical_offset, size_t length,
+                          std::optional<size_t> virtual_offset) const {
+    if (length == 0 || backing_base == nullptr) {
+        return;
+    }
+    const auto hint = [length](u8* address) {
+#ifdef _WIN32
+        // Unlocking pages that are not locked takes them out of the working set.
+        VirtualUnlock(address, length);
+#elif defined(__linux__) && defined(MADV_PAGEOUT)
+        madvise(address, length, MADV_PAGEOUT);
+#else
+        static_cast<void>(address);
+#endif
+    };
+    hint(backing_base + physical_offset);
+    if (virtual_offset && virtual_base != nullptr && *virtual_offset + length <= virtual_size) {
+        hint(virtual_base + *virtual_offset);
+    }
+}
+
 void HostMemory::ClearBackingRegion(size_t physical_offset, size_t length, u32 fill_value) {
     std::memset(backing_base + physical_offset, fill_value, length);
 }
+
+bool HostMemory::IsBackingShared() const noexcept {
+    if (impl) {
+        return impl->IsBackingShared();
+    }
+    return false;
+}
+
+#ifdef __ANDROID__
+std::span<AHardwareBuffer* const> HostMemory::GetBackingHardwareBuffers() const noexcept {
+    if (impl) {
+        return impl->GetAhbWindows();
+    }
+    return {};
+}
+
+size_t HostMemory::GetBackingHardwareBufferWindowSize() const noexcept {
+    if (impl) {
+        return impl->GetAhbWindowSize();
+    }
+    return 0;
+}
+
+size_t HostMemory::GetBackingHardwareBufferBase() const noexcept {
+    if (impl) {
+        return impl->GetAhbBase();
+    }
+    return 0;
+}
+#endif
 
 void HostMemory::EnableDirectMappedAddress() {
 #if !(defined(__OPENORBIS__) || defined(__managarm__) || defined(__wasi__) || defined(__EMSCRIPTEN__))

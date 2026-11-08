@@ -12,7 +12,7 @@
 #include "common/android/multiplayer/multiplayer.h"
 #include <network/network.h>
 #include "common/settings.h"
-#include "common/logging/log.h"
+#include "common/logging.h"
 
 static struct {
     JavaVM *java_vm;
@@ -432,189 +432,20 @@ namespace Common::Android {
     jint InitFFmpegOnLoad(JavaVM *vm);
 
     jint JNI_OnLoad(JavaVM *vm, void *reserved) {
-        s_java_vm = vm;
-        InitFFmpegOnLoad(vm);
+        state.java_vm = vm;
 
         JNIEnv *env;
-        if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION) != JNI_OK)
+        if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION) != JNI_OK) {
             return JNI_ERR;
+        }
 
-        // Initialize Java classes
-        const jclass native_library_class = env->FindClass("org/yuzu/yuzu_emu/NativeLibrary");
-        s_native_library_class = reinterpret_cast<jclass>(env->NewGlobalRef(native_library_class));
-        s_disk_cache_progress_class = reinterpret_cast<jclass>(env->NewGlobalRef(
-                env->FindClass("org/yuzu/yuzu_emu/disk_shader_cache/DiskShaderCacheProgress")));
-        s_load_callback_stage_class = reinterpret_cast<jclass>(env->NewGlobalRef(env->FindClass(
-                "org/yuzu/yuzu_emu/disk_shader_cache/DiskShaderCacheProgress$LoadCallbackStage")));
-
-        const jclass game_dir_class = env->FindClass("org/yuzu/yuzu_emu/model/GameDir");
-        s_game_dir_class = reinterpret_cast<jclass>(env->NewGlobalRef(game_dir_class));
-        s_game_dir_constructor = env->GetMethodID(game_dir_class, "<init>",
-                                                  "(Ljava/lang/String;Z)V");
-        env->DeleteLocalRef(game_dir_class);
-
-        // Initialize methods
-        s_exit_emulation_activity =
-                env->GetStaticMethodID(s_native_library_class, "exitEmulationActivity", "(I)V");
-        s_disk_cache_load_progress =
-                env->GetStaticMethodID(s_disk_cache_progress_class, "loadProgress", "(III)V");
-        s_copy_to_storage = env->GetStaticMethodID(s_native_library_class, "copyFileToStorage",
-                                                   "(Ljava/lang/String;Ljava/lang/String;)Z");
-        s_file_exists = env->GetStaticMethodID(s_native_library_class, "exists",
-                                               "(Ljava/lang/String;)Z");
-        s_file_extension = env->GetStaticMethodID(s_native_library_class, "getFileExtension",
-                                               "(Ljava/lang/String;)Ljava/lang/String;");
-        s_on_emulation_started =
-                env->GetStaticMethodID(s_native_library_class, "onEmulationStarted", "()V");
-        s_on_emulation_stopped =
-                env->GetStaticMethodID(s_native_library_class, "onEmulationStopped", "(I)V");
-        s_on_program_changed =
-                env->GetStaticMethodID(s_native_library_class, "onProgramChanged", "(I)V");
-
-        const jclass game_class = env->FindClass("org/yuzu/yuzu_emu/model/Game");
-        s_game_class = reinterpret_cast<jclass>(env->NewGlobalRef(game_class));
-        s_game_constructor = env->GetMethodID(game_class, "<init>",
-                                              "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/"
-                                              "String;Ljava/lang/String;Ljava/lang/String;Z)V");
-        s_game_title_field = env->GetFieldID(game_class, "title", "Ljava/lang/String;");
-        s_game_path_field = env->GetFieldID(game_class, "path", "Ljava/lang/String;");
-        s_game_program_id_field = env->GetFieldID(game_class, "programId", "Ljava/lang/String;");
-        s_game_developer_field = env->GetFieldID(game_class, "developer", "Ljava/lang/String;");
-        s_game_version_field = env->GetFieldID(game_class, "version", "Ljava/lang/String;");
-        s_game_is_homebrew_field = env->GetFieldID(game_class, "isHomebrew", "Z");
-        env->DeleteLocalRef(game_class);
-
-        const jclass string_class = env->FindClass("java/lang/String");
-        s_string_class = reinterpret_cast<jclass>(env->NewGlobalRef(string_class));
-        env->DeleteLocalRef(string_class);
-
-        const jclass pair_class = env->FindClass("kotlin/Pair");
-        s_pair_class = reinterpret_cast<jclass>(env->NewGlobalRef(pair_class));
-        s_pair_constructor =
-                env->GetMethodID(pair_class, "<init>", "(Ljava/lang/Object;Ljava/lang/Object;)V");
-        s_pair_first_field = env->GetFieldID(pair_class, "first", "Ljava/lang/Object;");
-        s_pair_second_field = env->GetFieldID(pair_class, "second", "Ljava/lang/Object;");
-        env->DeleteLocalRef(pair_class);
-
-        const jclass overlay_control_data_class =
-                env->FindClass("org/yuzu/yuzu_emu/overlay/model/OverlayControlData");
-        s_overlay_control_data_class =
-                reinterpret_cast<jclass>(env->NewGlobalRef(overlay_control_data_class));
-        s_overlay_control_data_constructor =
-                env->GetMethodID(overlay_control_data_class, "<init>",
-                                 "(Ljava/lang/String;ZLkotlin/Pair;Lkotlin/Pair;Lkotlin/Pair;F)V");
-        s_overlay_control_data_id_field =
-                env->GetFieldID(overlay_control_data_class, "id", "Ljava/lang/String;");
-        s_overlay_control_data_enabled_field =
-                env->GetFieldID(overlay_control_data_class, "enabled", "Z");
-        s_overlay_control_data_landscape_position_field =
-                env->GetFieldID(overlay_control_data_class, "landscapePosition", "Lkotlin/Pair;");
-        s_overlay_control_data_portrait_position_field =
-                env->GetFieldID(overlay_control_data_class, "portraitPosition", "Lkotlin/Pair;");
-        s_overlay_control_data_foldable_position_field =
-                env->GetFieldID(overlay_control_data_class, "foldablePosition", "Lkotlin/Pair;");
-        s_overlay_control_data_individual_scale_field =
-                env->GetFieldID(overlay_control_data_class, "individualScale", "F");
-        env->DeleteLocalRef(overlay_control_data_class);
-
-        const jclass patch_class = env->FindClass("org/yuzu/yuzu_emu/model/Patch");
-        s_patch_class = reinterpret_cast<jclass>(env->NewGlobalRef(patch_class));
-        s_patch_constructor = env->GetMethodID(
-                patch_class, "<init>",
-                "(ZLjava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;JI)V");
-        s_patch_enabled_field = env->GetFieldID(patch_class, "enabled", "Z");
-        s_patch_name_field = env->GetFieldID(patch_class, "name", "Ljava/lang/String;");
-        s_patch_version_field = env->GetFieldID(patch_class, "version", "Ljava/lang/String;");
-        s_patch_type_field = env->GetFieldID(patch_class, "type", "I");
-        s_patch_program_id_field = env->GetFieldID(patch_class, "programId", "Ljava/lang/String;");
-        s_patch_title_id_field = env->GetFieldID(patch_class, "titleId", "Ljava/lang/String;");
-        env->DeleteLocalRef(patch_class);
+        Initialize(vm, env);
 
     // Prefer hardware decoding on Android by default, forcing this setting will
     // make the native side attempt GPU decoding first. If the platform lacks a usable
     // FFmpeg HW device, FFmpeg will fall back to CPU automatically.
     Settings::values.nvdec_emulation.SetValue(Settings::NvdecEmulation::Gpu);
     LOG_INFO(HW_GPU, "Android JNI_OnLoad: forced nvdec_emulation = GPU");
-
-
-        const jclass double_class = env->FindClass("java/lang/Double");
-        s_double_class = reinterpret_cast<jclass>(env->NewGlobalRef(double_class));
-        s_double_constructor = env->GetMethodID(double_class, "<init>", "(D)V");
-        s_double_value_field = env->GetFieldID(double_class, "value", "D");
-        env->DeleteLocalRef(double_class);
-
-        const jclass int_class = env->FindClass("java/lang/Integer");
-        s_integer_class = reinterpret_cast<jclass>(env->NewGlobalRef(int_class));
-        s_integer_constructor = env->GetMethodID(int_class, "<init>", "(I)V");
-        s_integer_value_field = env->GetFieldID(int_class, "value", "I");
-        env->DeleteLocalRef(int_class);
-
-        const jclass boolean_class = env->FindClass("java/lang/Boolean");
-        s_boolean_class = reinterpret_cast<jclass>(env->NewGlobalRef(boolean_class));
-        s_boolean_constructor = env->GetMethodID(boolean_class, "<init>", "(Z)V");
-        s_boolean_value_field = env->GetFieldID(boolean_class, "value", "Z");
-        env->DeleteLocalRef(boolean_class);
-
-        const jclass player_input_class =
-                env->FindClass("org/yuzu/yuzu_emu/features/input/model/PlayerInput");
-        s_player_input_class = reinterpret_cast<jclass>(env->NewGlobalRef(player_input_class));
-        s_player_input_constructor = env->GetMethodID(
-                player_input_class, "<init>",
-                "(Z[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;ZIJJJJLjava/lang/String;Z)V");
-        s_player_input_connected_field = env->GetFieldID(player_input_class, "connected", "Z");
-        s_player_input_buttons_field =
-                env->GetFieldID(player_input_class, "buttons", "[Ljava/lang/String;");
-        s_player_input_analogs_field =
-                env->GetFieldID(player_input_class, "analogs", "[Ljava/lang/String;");
-        s_player_input_motions_field =
-                env->GetFieldID(player_input_class, "motions", "[Ljava/lang/String;");
-        s_player_input_vibration_enabled_field =
-                env->GetFieldID(player_input_class, "vibrationEnabled", "Z");
-        s_player_input_vibration_strength_field =
-                env->GetFieldID(player_input_class, "vibrationStrength", "I");
-        s_player_input_body_color_left_field =
-                env->GetFieldID(player_input_class, "bodyColorLeft", "J");
-        s_player_input_body_color_right_field =
-                env->GetFieldID(player_input_class, "bodyColorRight", "J");
-        s_player_input_button_color_left_field =
-                env->GetFieldID(player_input_class, "buttonColorLeft", "J");
-        s_player_input_button_color_right_field =
-                env->GetFieldID(player_input_class, "buttonColorRight", "J");
-        s_player_input_profile_name_field =
-                env->GetFieldID(player_input_class, "profileName", "Ljava/lang/String;");
-        s_player_input_use_system_vibrator_field =
-                env->GetFieldID(player_input_class, "useSystemVibrator", "Z");
-        env->DeleteLocalRef(player_input_class);
-
-        const jclass yuzu_input_device_interface =
-                env->FindClass("org/yuzu/yuzu_emu/features/input/YuzuInputDevice");
-        s_yuzu_input_device_interface =
-                reinterpret_cast<jclass>(env->NewGlobalRef(yuzu_input_device_interface));
-        s_yuzu_input_device_get_name =
-                env->GetMethodID(yuzu_input_device_interface, "getName", "()Ljava/lang/String;");
-        s_yuzu_input_device_get_guid =
-                env->GetMethodID(yuzu_input_device_interface, "getGUID", "()Ljava/lang/String;");
-        s_yuzu_input_device_get_port = env->GetMethodID(yuzu_input_device_interface, "getPort",
-                                                        "()I");
-        s_yuzu_input_device_get_supports_vibration =
-                env->GetMethodID(yuzu_input_device_interface, "getSupportsVibration", "()Z");
-        s_yuzu_input_device_vibrate = env->GetMethodID(yuzu_input_device_interface, "vibrate",
-                                                       "(F)V");
-        s_yuzu_input_device_get_axes =
-                env->GetMethodID(yuzu_input_device_interface, "getAxes", "()[Ljava/lang/Integer;");
-        s_yuzu_input_device_has_keys =
-                env->GetMethodID(yuzu_input_device_interface, "hasKeys", "([I)[Z");
-        env->DeleteLocalRef(yuzu_input_device_interface);
-        s_add_netplay_message = env->GetStaticMethodID(s_native_library_class, "addNetPlayMessage",
-                                                       "(ILjava/lang/String;)V");
-        s_clear_chat = env->GetStaticMethodID(s_native_library_class, "clearChat", "()V");
-
-
-        // Initialize Android Storage
-        Common::FS::Android::RegisterCallbacks(env, s_native_library_class);
-
-        // Initialize applets
-        Common::Android::SoftwareKeyboard::InitJNI(env);
 
         return JNI_VERSION;
     }

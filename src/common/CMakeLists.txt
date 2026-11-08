@@ -114,7 +114,6 @@ add_library(
     settings_setting.h
     slot_vector.h
     socket_types.h
-    spin_lock.h
     stb.cpp
     stb.h
     steady_clock.cpp

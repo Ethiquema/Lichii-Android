@@ -692,6 +692,11 @@ struct Values {
     SwitchableSetting<bool> gpu_unswizzle_enabled{linkage, false, "gpu_unswizzle_enabled",
                                                   Category::RendererHacks};
 
+    /// Back the emulated memory with AHardwareBuffer windows so the guest and the GPU share one
+    /// copy of the data (Android only; falls back to memfd when the device rejects it).
+    SwitchableSetting<bool> use_unified_memory{linkage, false, "use_unified_memory",
+                                               Category::RendererHacks};
+
     SwitchableSetting<ExtendedDynamicState> dyna_state{linkage,
 #if defined(__ANDROID__)
                                            ExtendedDynamicState::Disabled,
@@ -1021,5 +1026,27 @@ void RestoreGlobalState(bool is_powered_on);
 
 bool IsConfiguringGlobal();
 void SetConfiguringGlobal(bool is_global);
+
+/// Hardware profiles: every profiled category (CPU / renderer) keeps one value per profile and
+/// swaps the two sets when the active profile changes. Switch 2 targets the nx2 hardware.
+enum class Profile {
+    Switch1,
+    Switch2,
+};
+
+/// Whether the setting's values follow the active profile.
+[[nodiscard]] bool IsProfiled(const BasicSetting& setting);
+
+/// The currently active hardware profile.
+[[nodiscard]] Profile ActiveProfile();
+
+/// Swaps the profiled settings over to `profile`.
+void SetActiveProfile(Profile profile);
+
+/// The global (non per-game) string of `setting` as seen from `profile`.
+[[nodiscard]] std::string GlobalString(Profile profile, const BasicSetting& setting);
+
+/// Sets the global (non per-game) string of `setting` as seen from `profile`.
+void SetGlobalString(Profile profile, BasicSetting& setting, const std::string& value);
 
 } // namespace Settings

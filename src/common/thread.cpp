@@ -369,7 +369,7 @@ void SetCurrentThreadPriority(ThreadPriority new_priority) {
 #endif
 }
 
-void SetCurrentThreadName(const char* name) noexcept {
+void SetCurrentThreadName(const char* name) {
 #ifdef _MSC_VER
     // Sets the debugger-visible name of the current thread.
     if (auto pf = (decltype(&SetThreadDescription))(void*)GetProcAddress(GetModuleHandle(TEXT("KernelBase.dll")), "SetThreadDescription"); pf)

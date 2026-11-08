@@ -19,6 +19,9 @@
 
 #include "common/memory_detect.h"
 
+#include <cstdio>
+#include <cstring>
+
 namespace Common {
 
 // Detects the RAM and Swapfile sizes
@@ -67,6 +70,49 @@ static MemoryInfo Detect() {
 const MemoryInfo& GetMemInfo() {
     static MemoryInfo mem_info = Detect();
     return mem_info;
+}
+
+// Reads the first unsigned integer out of a procfs file, 0 when unavailable.
+#ifdef __linux__
+static u64 ReadProcFsU64(const char* path) {
+    std::FILE* const file = std::fopen(path, "re");
+    if (file == nullptr) {
+        return 0;
+    }
+    u64 value{};
+    const int parsed = std::fscanf(file, "%lu", &value);
+    std::fclose(file);
+    return parsed == 1 ? value : 0;
+}
+#endif
+
+u64 GetAvailablePhysicalMemory() {
+#ifdef __linux__
+    // MemAvailable: an estimate of how much memory can be handed out without swapping.
+    std::FILE* const file = std::fopen("/proc/meminfo", "re");
+    if (file == nullptr) {
+        return 0;
+    }
+    u64 available_kib{};
+    char line[256]{};
+    while (std::fgets(line, sizeof(line), file) != nullptr) {
+        if (std::sscanf(line, "MemAvailable: %lu kB", &available_kib) == 1) {
+            break;
+        }
+    }
+    std::fclose(file);
+    return available_kib << 10;
+#else
+    return 0;
+#endif
+}
+
+u64 GetMaxMapCount() {
+#ifdef __linux__
+    return ReadProcFsU64("/proc/sys/vm/max_map_count");
+#else
+    return 0;
+#endif
 }
 
 } // namespace Common

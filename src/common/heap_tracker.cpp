@@ -236,25 +236,10 @@ void HeapTracker::SplitHeapMap(VAddr offset, size_t size) {
 }
 
 void HeapTracker::SplitHeapMapLocked(VAddr offset) {
-    if (auto it = this->GetNearestHeapMapLocked(offset); it != m_mappings.end() && it->first != offset) {
-        // Adjust left iterator
-        auto const orig_size = it->second.size;
-        auto const left_size = offset - it->first;
-        it->second.size = left_size;
-        // Insert the new right map.
-        auto const right = SeparateHeapMap{
-            .paddr = it->second.paddr + left_size,
-            .size = orig_size - left_size,
-            .tick = it->second.tick,
-            .perm = it->second.perm,
-            .is_resident = it->second.is_resident,
-        };
-        m_map_count++;
-        auto rit = m_mappings.insert_or_assign(it->first + left_size, right);
-        if (rit.first->second.is_resident) {
-            m_resident_map_count++;
-            m_resident_mappings.insert(*rit.first);
-        }
+    const auto it = this->GetNearestHeapMapLocked(offset);
+    if (it == m_mappings.end() || it->vaddr == offset) {
+        // Not contained or no split required.
+        return;
     }
 
     // Cache the original values.

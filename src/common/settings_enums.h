@@ -130,6 +130,7 @@ ENUM(TimeZone, Auto, Default, Cet, Cst6Cdt, Cuba, Eet, Egypt, Eire, Est, Est5Edt
     Roc, Rok, Singapore, Turkey, Uct, Universal, Utc, WSu, Wet, Zulu);
 ENUM(AnisotropyMode, Automatic, Default, X2, X4, X8, X16);
 ENUM(AstcDecodeMode, Cpu, Gpu, CpuAsynchronous);
+ENUM(AstcRecompression, Uncompressed, Bc1, Bc3);
 ENUM(VSyncMode, Immediate, Mailbox, Fifo, FifoRelaxed);
 ENUM(VramUsageMode, Conservative, Aggressive);
 ENUM(RendererBackend, OpenGL_GLSL, Vulkan, Null, OpenGL_GLASM, OpenGL_SPIRV);
@@ -144,7 +145,8 @@ ENUM(ConfirmStop, Ask_Always, Ask_Based_On_Game, Ask_Never);
 ENUM(FullscreenMode, Borderless, Exclusive);
 ENUM(NvdecEmulation, Off, Cpu, Gpu);
 ENUM(ResolutionSetup, Res1_4X, Res1_2X, Res3_4X, Res1X, Res5_4X, Res3_2X, Res2X, Res3X, Res4X, Res5X, Res6X, Res7X, Res8X);
-ENUM(ScalingFilter, NearestNeighbor, Bilinear, Bicubic, Gaussian, Lanczos, ScaleForce, Fsr, Area, ZeroTangent, BSpline, Mitchell, Spline1, Mmpx, Sgsr, SgsrEdge);
+ENUM(FramePacingMode, Target_Auto, Target_30, Target_60, Target_90, Target_120);
+ENUM(ScalingFilter, NearestNeighbor, Bilinear, Bicubic, Gaussian, Lanczos, ScaleForce, Fsr, Area, ZeroTangent, BSpline, Mitchell, Spline1, Mmpx, Sgsr, SgsrEdge, Fsr3);
 ENUM(AntiAliasing, None, Fxaa, Smaa, Ssaa);
 ENUM(AspectRatio, R16_9, R4_3, R21_9, R16_10, Stretch);
 ENUM(ConsoleMode, Handheld, Docked);
@@ -153,6 +155,9 @@ ENUM(SpirvOptimizeMode, Never, OnLoad, Always);
 ENUM(GpuClock, Normal, Boost, Overclock)
 ENUM(TemperatureUnits, Celsius, Fahrenheit)
 ENUM(ExtendedDynamicState, Disabled, EDS1, EDS2, EDS3);
+ENUM(GpuUnswizzleSize, VerySmall, Small, Normal, Large, VeryLarge)
+ENUM(GpuUnswizzle, VeryLow, Low, Normal, Medium, High)
+ENUM(GpuUnswizzleChunk, VeryLow, Low, Normal, Medium, High)
 ENUM(GpuLogLevel, Off, Errors, Standard, Verbose, All)
 ENUM(HomebrewNxlinkServerMode, Disabled, EdenLog, HostStdout, File)
 ENUM(GameListMode, TreeView, GridView, CarouselView);

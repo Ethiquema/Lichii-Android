@@ -18,4 +18,16 @@ struct MemoryInfo {
  */
 [[nodiscard]] const MemoryInfo& GetMemInfo();
 
+/**
+ * Gets the memory the host can still hand out before paging starts.
+ * @return Available physical memory in bytes, 0 when the host does not report it
+ */
+[[nodiscard]] u64 GetAvailablePhysicalMemory();
+
+/**
+ * Gets the host's limit on concurrent memory mappings.
+ * @return vm.max_map_count on Linux, 0 when unknown
+ */
+[[nodiscard]] u64 GetMaxMapCount();
+
 } // namespace Common

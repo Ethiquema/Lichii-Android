@@ -562,26 +562,19 @@ u64 IOFile::GetSize() const {
     if (file) {
         // Flush any unwritten buffered data into the file prior to retrieving the file mmap_size.
         std::fflush(file);
+    }
 #if __ANDROID__
-        u64 file_size = 0;
-        if (Android::IsContentUri(file_path)) {
-            file_size = Android::GetSize(file_path);
-        } else {
-            std::error_code ec;
-
-            file_size = fs::file_size(file_path, ec);
-
-            if (ec) {
-                LOG_ERROR(Common_Filesystem, "Failed to retrieve the file mmap_size of path={}, ec_message={}",
-                    PathToUTF8String(file_path), ec.message());
-                return 0;
-            }
-        }
-#else
+    u64 file_size = 0;
+    if (Android::IsContentUri(file_path)) {
+        file_size = Android::GetSize(file_path);
+    } else {
         std::error_code ec;
+
         file_size = fs::file_size(file_path, ec);
+
         if (ec) {
-            LOG_ERROR(Common_Filesystem, "Failed to retrieve the file size of path={}, ec_message={}", PathToUTF8String(file_path), ec.message());
+            LOG_ERROR(Common_Filesystem, "Failed to retrieve the file mmap_size of path={}, ec_message={}",
+                PathToUTF8String(file_path), ec.message());
             return 0;
         }
     }
