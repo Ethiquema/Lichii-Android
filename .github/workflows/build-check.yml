@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   linux-gcc:
-    name: Linux GCC 13 production build and tests
+    name: Linux GCC 14 production build and tests
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -33,7 +33,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            autoconf gcc-13 g++-13 git glslang-tools libglu1-mesa-dev \
+            autoconf gcc-14 g++-14 git glslang-tools libglu1-mesa-dev \
             libpulse-dev libtool libudev-dev libxkbcommon-x11-0 \
             mesa-common-dev nasm ninja-build qt6-base-private-dev \
             qt6-charts-dev qt6-tools-dev libavfilter-dev libavcodec-dev \
@@ -62,16 +62,16 @@ jobs:
           path: |
             .cache/cpm
             .ccache
-          key: gcc13-qt683-${{ runner.os }}-${{ hashFiles('cpmfile.json') }}-${{ github.sha }}
+          key: gcc14-qt683-${{ runner.os }}-${{ hashFiles('cpmfile.json') }}-${{ github.sha }}
           restore-keys: |
-            gcc13-qt683-${{ runner.os }}-${{ hashFiles('cpmfile.json') }}-
+            gcc14-qt683-${{ runner.os }}-${{ hashFiles('cpmfile.json') }}-
 
       - name: Configure production and tests
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=gcc-13 \
-            -DCMAKE_CXX_COMPILER=g++-13 \
+            -DCMAKE_C_COMPILER=gcc-14 \
+            -DCMAKE_CXX_COMPILER=g++-14 \
             -DENABLE_WERROR=ON \
             -DBUILD_TESTING=ON \
             -DYUZU_TESTS=ON \

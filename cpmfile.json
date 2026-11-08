@@ -79,6 +79,14 @@
         "repo": "crueter-ci/FFmpeg",
         "version": "9.0.1-1788303113-bf1b838f2a"
     },
+
+    "ffmpeg-ci-av1": {
+        "ci": true,
+        "name": "ffmpeg",
+        "package": "FFmpeg",
+        "repo": "Takoroka/ffmpeg-av1",
+        "version": "9.0.2-av1-1"
+    },
     "fmt": {
         "hash": "f0da82c545b01692e9fd30fdfb613dbb8dd9716983dcd0ff19ac2a8d36f74beb5540ef38072fdecc1e34191b3682a8542ecbf3a61ef287dbba0a2679d4e023f2",
         "min_version": "8",
@@ -332,6 +340,15 @@
         "repo": "GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator",
         "version": "v3.3.0"
     },
+    "dxbc": {
+        "hash": "4d8c580d6e7a4e1a3438ec60fa323c5af002a3ea2f6dc4f049832ee6cbae34177623c373ab3d3f720be3149ce3cffb5b91da5892c1bdfe22c1e86bb9dde071ca",
+        "patches": [
+            "0001-dxbc-standalone.patch"
+        ],
+        "repo": "doitsujin/dxvk",
+        "source_subdir": "src",
+        "version": "v2.7.1"
+    },
     "vulkan-utility-libraries": {
         "hash": "114f6b237a6dcba923ccc576befb5dea3f1c9b3a30de7dc741f234a831d1c2d52d8a224afb37dd57dffca67ac0df461eaaab6a5ab5e503b393f91c166680c3e1",
         "package": "VulkanUtilityLibraries",
@@ -343,10 +360,7 @@
         "hash": "8812ae84cbe49e6a3418ade9c458d3be6d74a3dffd319d4502007b564d580998056e8190414368ec11b27bc83993c7a0dad713c31bcc3d9553b51243efee3753",
         "numeric_version": "1.4.341.0",
         "repo": "KhronosGroup/Vulkan-ValidationLayers",
-        "tag": "vulkan-sdk-%VERSION%",
-        "git_version": "1.4.350.0",
-        "artifact": "android-binaries-%VERSION%.zip",
-        "hash": "5cbed0369d4c325c8ea9ab5a1d78d98ec721bdfae4d772dac23803f31aa909be6e132fca3b64d507e6b9835f9be9d0848407adbf74365fd3f37ae99add502d21"
+        "version": "vulkan-sdk-%NUMERIC_VERSION%"
     },
     "xbyak": {
         "hash": "e0aa0a603dd3ac1a39d82213df1e73c042831aec2d6b2fe382c899651eaae4ed7e8aeb6be9c41ea0097087c9d091961ab18f313cd6a9e10d621715ffd49bfe36",
